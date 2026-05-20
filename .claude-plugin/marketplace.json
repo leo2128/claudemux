@@ -8,6 +8,11 @@
       "name": "claudemux",
       "source": "./plugins/claudemux",
       "description": "Multi-repo Claude Code orchestrator. Run one dispatcher session in the parent of your repos; spawn, message, and wait on tmux teammates."
+    },
+    {
+      "name": "feishu-channel",
+      "source": "./plugins/feishu-channel",
+      "description": "Feishu (飞书) channel for Claude Code. Receive Feishu messages in a running session and reply back over a long-lived WebSocket connection — no public webhook needed."
     }
   ]
 }

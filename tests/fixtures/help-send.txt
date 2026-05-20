@@ -18,7 +18,7 @@ tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]
         /agents, permission prompts. /compact and /clear do NOT
         need it — the Stop hook now covers them via PostCompact /
         SessionEnd.
-      --timeout N overrides the 600s default wait.
+      --timeout N overrides the 1800s default wait.
       Empty stdout never silently means success: a turn with no text
       (tool-only, /compact, /clear) prints the sentinel line "(no
       text reply this turn — tool-only, /compact, /clear, or fresh

@@ -1,4 +1,4 @@
-tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]
+tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
       Block until the teammate's next Stop hook (or pane-quiet
       fallback), then print the reply to stdout — same output
@@ -14,7 +14,7 @@ tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]
         provides the freshness guarantee).
       --pane-quiet falls back to pane-quiet detection (same use
         case as on 'tm send').
-      --timeout N is the flag form of the positional [timeout=600];
+      --timeout N is the flag form of the positional [timeout=1800];
         both forms are accepted, and if both are passed, whichever
         is parsed last wins.
       Stop-hook path also echoes ctx to stderr (see 'tm send');

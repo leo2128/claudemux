@@ -1,11 +1,12 @@
-tm compact <repo> [timeout=600] [--timeout N]
+tm compact <repo> [timeout=1800] [--timeout N]
 
       Send /compact and verify PostCompact fired. Prints "compacted"
       on stdout when the Stop-hook idle marker is touched. Doesn't
       read ctx — run 'tm ctx <repo>' separately if you want the new
       size.
-      Default timeout is 600s because large contexts (~300k+)
-      routinely take 3-4 minutes to compact.
+      Default timeout is 1800s — large contexts can run many
+      minutes, and the cap only fires when compaction never
+      finishes.
       Two non-success modes, both exit 1:
         - Claude Code refuses with "Not enough messages to compact"
           (transcript too short). That error fires no hook, so the

@@ -427,7 +427,7 @@ _send_keys() {
 # or until <timeout> seconds elapse. No output on success — that's the
 # caller's job. Returns 0 on hit, 1 on timeout.
 _wait_idle_signal() {
-    local repo="$1" timeout="${2:-600}" fresh="${3:-0}"
+    local repo="$1" timeout="${2:-1800}" fresh="${3:-0}"
     require_session "$repo" >/dev/null
     local sid; sid=$(resolve_sid_or_die "$repo")
     (( fresh )) && clear_idle "$sid"
@@ -445,7 +445,7 @@ _wait_idle_signal() {
 # paths where no hook will fire — TUI-only commands like /help, /effort,
 # /agents, and permission prompts. Returns 0 on hit, 1 on timeout.
 _wait_pane_quiet() {
-    local repo="$1" timeout="${2:-600}"
+    local repo="$1" timeout="${2:-1800}"
     require_session "$repo" >/dev/null
 
     local send_at=0 sa
@@ -664,7 +664,7 @@ cmd_spawn() {
     # Caveat: if claude failed to boot inside the tmux session, the
     # session exists but is just a dead shell; require_session passes
     # for that, keys get typed into nothing, and the subsequent wait
-    # phase blocks until --timeout (default 600s) expires waiting for a
+    # phase blocks until --timeout (default 1800s) expires waiting for a
     # Stop hook that will never fire. The warning below is the
     # dispatcher's signal that this risk is now live.
     local i ready_after_ms=""
@@ -678,7 +678,7 @@ cmd_spawn() {
     if [[ -n "$ready_after_ms" ]]; then
         echo "ready: $repo (tmux=$name, SessionStart fired after ~${ready_after_ms} ms)" >&2
     else
-        echo "WARN: $repo (tmux=$name) did not signal ready within 18s (no SessionStart hook fire — the plugin's on-session-start.sh may not be loaded, or claude failed to boot). Continuing, but if the REPL is actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / 'tm compact' will block until its --timeout expires (default 600s). 'tm status $repo' shows the live pane if you need to verify." >&2
+        echo "WARN: $repo (tmux=$name) did not signal ready within 18s (no SessionStart hook fire — the plugin's on-session-start.sh may not be loaded, or claude failed to boot). Continuing, but if the REPL is actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / 'tm compact' will block until its --timeout expires (default 1800s). 'tm status $repo' shows the live pane if you need to verify." >&2
     fi
 
     # --prompt: atomic bootstrap. Wait 3s for the REPL to fully settle
@@ -714,7 +714,7 @@ cmd_send() {
     # `tm send <repo> --prompt "..." | jq`.
     #
     # See `tm send --help` for the full flag contract.
-    local no_wait=0 pane_quiet=0 timeout=600 repo="" prompt="" has_prompt=0
+    local no_wait=0 pane_quiet=0 timeout=1800 repo="" prompt="" has_prompt=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --no-wait)    no_wait=1; shift ;;
@@ -793,8 +793,8 @@ cmd_wait() {
     #   --pane-quiet     fall back to pane-quiet detection. Same use case
     #                    as on cmd_send: TUI-only commands that fire no
     #                    hook (/help, /effort, /agents, permission prompt).
-    #   --timeout N      override the 600s default wait cap.
-    local repo="" timeout=600 fresh=0 pane_quiet=0
+    #   --timeout N      override the 1800s default wait cap.
+    local repo="" timeout=1800 fresh=0 pane_quiet=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --fresh)      fresh=1; shift ;;
@@ -810,7 +810,7 @@ cmd_wait() {
                 ;;
         esac
     done
-    [[ -n "$repo" ]] || die "usage: tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]"
+    [[ -n "$repo" ]] || die "usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]"
 
     local waiter_rc=0
     if (( pane_quiet )); then
@@ -1079,14 +1079,14 @@ cmd_compact() {
     #      the verb would hang to full timeout for a fundamentally
     #      already-finished operation.
     #   2. PostCompact never fires within timeout — compaction is genuinely
-    #      hung or the hook is misconfigured. Default 600s because large
-    #      contexts (~300k+) routinely take 3-4 minutes; the old 120s
-    #      gave up well before compaction finished on 1M-window teammates.
+    #      hung or the hook is misconfigured. Default 1800s: large contexts
+    #      can run many minutes, and the cap only matters when compaction
+    #      never finishes — an early give-up just misreports a live verb.
     # Both `tm compact <repo> 300` and `tm compact <repo> --timeout 300`
     # are accepted; if both forms are passed, the one parsed last wins
     # (same rule as cmd_wait). Don't try to encode a precedence between
     # the two forms — they're equivalent inputs.
-    local repo="" timeout=600
+    local repo="" timeout=1800
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --timeout)   timeout="${2:-}"; shift 2 ;;
@@ -1100,7 +1100,7 @@ cmd_compact() {
                 ;;
         esac
     done
-    [[ -n "$repo" ]] || die "usage: tm compact <repo> [timeout=600] [--timeout N]"
+    [[ -n "$repo" ]] || die "usage: tm compact <repo> [timeout=1800] [--timeout N]"
 
     require_session "$repo" >/dev/null
     local sid; sid=$(resolve_sid_or_die "$repo")
@@ -1845,7 +1845,7 @@ tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]
         /agents, permission prompts. /compact and /clear do NOT
         need it — the Stop hook now covers them via PostCompact /
         SessionEnd.
-      --timeout N overrides the 600s default wait.
+      --timeout N overrides the 1800s default wait.
       Empty stdout never silently means success: a turn with no text
       (tool-only, /compact, /clear) prints the sentinel line "(no
       text reply this turn — tool-only, /compact, /clear, or fresh
@@ -1862,7 +1862,7 @@ EOF
 
 help_wait() {
     cat <<'EOF'
-tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]
+tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
       Block until the teammate's next Stop hook (or pane-quiet
       fallback), then print the reply to stdout — same output
@@ -1878,7 +1878,7 @@ tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]
         provides the freshness guarantee).
       --pane-quiet falls back to pane-quiet detection (same use
         case as on 'tm send').
-      --timeout N is the flag form of the positional [timeout=600];
+      --timeout N is the flag form of the positional [timeout=1800];
         both forms are accepted, and if both are passed, whichever
         is parsed last wins.
       Stop-hook path also echoes ctx to stderr (see 'tm send');
@@ -1888,14 +1888,15 @@ EOF
 
 help_compact() {
     cat <<'EOF'
-tm compact <repo> [timeout=600] [--timeout N]
+tm compact <repo> [timeout=1800] [--timeout N]
 
       Send /compact and verify PostCompact fired. Prints "compacted"
       on stdout when the Stop-hook idle marker is touched. Doesn't
       read ctx — run 'tm ctx <repo>' separately if you want the new
       size.
-      Default timeout is 600s because large contexts (~300k+)
-      routinely take 3-4 minutes to compact.
+      Default timeout is 1800s — large contexts can run many
+      minutes, and the cap only fires when compaction never
+      finishes.
       Two non-success modes, both exit 1:
         - Claude Code refuses with "Not enough messages to compact"
           (transcript too short). That error fires no hook, so the

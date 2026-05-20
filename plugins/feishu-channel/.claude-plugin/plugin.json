@@ -1,0 +1,16 @@
+{
+  "name": "feishu-channel",
+  "description": "Feishu (飞书) channel for Claude Code — bridge Feishu messages into a running Claude Code session over a long-lived WebSocket connection, with built-in access control.",
+  "version": "0.1.0",
+  "author": {
+    "name": "YourWildDad"
+  },
+  "keywords": [
+    "feishu",
+    "lark",
+    "messaging",
+    "channel",
+    "mcp"
+  ],
+  "license": "MIT"
+}

@@ -117,8 +117,21 @@ function gateGroup(input: GateInput, access: Access, changed: boolean): GateResu
   if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(input.senderId)) {
     return { action: 'drop', access, changed, reason: 'sender not allowed in this group' }
   }
-  if (policy.requireMention && !isBotMentioned(input.mentions, input.botOpenId)) {
-    return { action: 'drop', access, changed, reason: 'bot not mentioned' }
+  if (policy.requireMention) {
+    // An unknown bot open_id cannot match any mention, so a mention-gated
+    // group would drop every message. Report that as its own reason rather
+    // than the misleading "bot not mentioned".
+    if (input.botOpenId === undefined) {
+      return {
+        action: 'drop',
+        access,
+        changed,
+        reason: 'group requires an @-mention but the bot open_id is unknown',
+      }
+    }
+    if (!isBotMentioned(input.mentions, input.botOpenId)) {
+      return { action: 'drop', access, changed, reason: 'bot not mentioned' }
+    }
   }
   return { action: 'deliver', access, changed }
 }

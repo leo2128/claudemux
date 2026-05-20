@@ -32,6 +32,7 @@ function makeCtx(transport: FakeTransport, logErrors: string[] = []): HandlerCon
     logError: (message) => {
       logErrors.push(message)
     },
+    logDebug: () => {},
   }
 }
 

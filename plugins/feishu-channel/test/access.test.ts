@@ -119,8 +119,18 @@ describe('gate — group messages', () => {
 
   test('requires a mention when the group policy asks for one', () => {
     const a = access({ groups: { oc_chat: { requireMention: true, allowFrom: [] } } })
+    const r = gate(input({ chatType: 'group', access: a, botOpenId: 'ou_bot' }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('bot not mentioned')
+  })
+
+  test('a mention-gated group with an unknown bot id drops with a distinct reason', () => {
+    const a = access({ groups: { oc_chat: { requireMention: true, allowFrom: [] } } })
     const r = gate(input({ chatType: 'group', access: a }))
     expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toContain('open_id is unknown')
   })
 
   test('delivers a group message when the bot is mentioned', () => {

@@ -64,6 +64,11 @@ export interface ChannelCoreDeps {
   generateCode?: () => string
   /** Reports a recoverable error; defaults to logging to stderr. */
   logError?: (message: string, err?: unknown) => void
+  /**
+   * Reports a low-severity diagnostic; defaults to logging to stderr only
+   * when `FEISHU_CHANNEL_DEBUG` is set, so routine drops do not spam logs.
+   */
+  logDebug?: (message: string) => void
 }
 
 /** The channel's testable core: the inbound dispatcher and the outbound tools. */
@@ -141,6 +146,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   const now = deps.now ?? Date.now
   const generateCode = deps.generateCode ?? generatePairingCode
   const logError = deps.logError ?? defaultLogError
+  const logDebug = deps.logDebug ?? defaultLogDebug
 
   const ctx: HandlerContext = {
     transport: deps.transport,
@@ -148,6 +154,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     now,
     generateCode,
     logError,
+    logDebug,
   }
 
   // Every Feishu event type the channel reacts to is a registered handler.
@@ -248,6 +255,18 @@ function defaultLogError(message: string, err?: unknown): void {
     console.error(`[feishu-channel] ${message}`)
   } else {
     console.error(`[feishu-channel] ${message}`, err)
+  }
+}
+
+/**
+ * Default diagnostic logger. Access-control drops are the answer to "why did
+ * my message not arrive", so they are worth logging — but a busy mention-gated
+ * group drops constantly, so the line is emitted only when `FEISHU_CHANNEL_DEBUG`
+ * is set rather than on by default.
+ */
+function defaultLogDebug(message: string): void {
+  if (process.env.FEISHU_CHANNEL_DEBUG) {
+    console.error(`[feishu-channel] ${message}`)
   }
 }
 

@@ -137,7 +137,7 @@ afterEach(() => {
 /** Build a HandlerContext wired to the temp access file and the given fakes. */
 function makeCtx(
   transport: FakeTransport,
-  opts: { logErrors?: string[]; generateCode?: () => string } = {},
+  opts: { logErrors?: string[]; debugLogs?: string[]; generateCode?: () => string } = {},
 ): HandlerContext {
   return {
     transport,
@@ -146,6 +146,9 @@ function makeCtx(
     generateCode: opts.generateCode ?? (() => 'abc123'),
     logError: (message) => {
       opts.logErrors?.push(message)
+    },
+    logDebug: (message) => {
+      opts.debugLogs?.push(message)
     },
   }
 }
@@ -264,5 +267,37 @@ describe('createImMessageHandler — resilience', () => {
     await handler.handle(rawEvent(), makeCtx(new FakeTransport(), { logErrors }))
 
     expect(logErrors.some((m) => m.includes('access.json'))).toBe(true)
+  })
+})
+
+describe('createImMessageHandler — drop diagnostics', () => {
+  test('a dropped message is logged with its reason and sender identity', async () => {
+    writeAccess({ dmPolicy: 'disabled' })
+    const debugLogs: string[] = []
+    const handler = createImMessageHandler()
+
+    await handler.handle(rawEvent(), makeCtx(new FakeTransport(), { debugLogs }))
+
+    expect(debugLogs).toHaveLength(1)
+    expect(debugLogs[0]).toContain('ou_sender')
+    expect(debugLogs[0]).toContain('direct messages disabled')
+  })
+})
+
+describe('createImMessageHandler — pairing send failure', () => {
+  test('a failed pairing send is logged and the pending entry is not persisted', async () => {
+    writeAccess({ dmPolicy: 'pairing' })
+    const transport = new FakeTransport()
+    transport.failOn = 'sendText'
+    const logErrors: string[] = []
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(rawEvent(), makeCtx(transport, { logErrors }))
+
+    expect(delivery).toBeNull()
+    expect(logErrors.some((m) => m.includes('pairing code'))).toBe(true)
+    // The send failed, so nothing is persisted — the sender's next message
+    // starts a fresh pairing rather than finding a code they never received.
+    expect(loadAccess(accessFile).access.pending).toEqual({})
   })
 })

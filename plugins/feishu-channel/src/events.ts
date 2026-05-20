@@ -42,6 +42,8 @@ export interface HandlerContext {
   generateCode: () => string
   /** Reports a recoverable error. */
   logError: (message: string, err?: unknown) => void
+  /** Reports a low-severity diagnostic, e.g. why a message was dropped. */
+  logDebug: (message: string) => void
 }
 
 /**

@@ -71,21 +71,38 @@ export function createImMessageHandler(): EventHandler {
         mentions: event.mentions,
         botOpenId: ctx.transport.botOpenId,
       })
-      if (decision.changed) {
-        saveAccess(ctx.accessFile, decision.access)
+      const persist = (): void => {
+        if (decision.changed) saveAccess(ctx.accessFile, decision.access)
       }
 
       switch (decision.action) {
         case 'deliver':
+          persist()
           return { content: parsed.text, meta: buildMeta(event) }
-        case 'pair':
-          await ctx.transport.sendText(
-            event.chatId,
-            pairingPrompt(decision.code, decision.isResend),
+        case 'drop':
+          persist()
+          ctx.logDebug(
+            `dropped a message from ${event.senderId} in chat ${event.chatId}: ` +
+              decision.reason,
           )
           return null
-        case 'drop':
+        case 'pair': {
+          // Send the pairing code before recording the pending entry. A
+          // transient send failure then leaves no pending entry the sender
+          // never received a code for — their next message simply starts a
+          // fresh pairing instead of finding a code they never saw.
+          try {
+            await ctx.transport.sendText(
+              event.chatId,
+              pairingPrompt(decision.code, decision.isResend),
+            )
+          } catch (err) {
+            ctx.logError('failed to send a pairing code', err)
+            return null
+          }
+          persist()
           return null
+        }
       }
     },
   }

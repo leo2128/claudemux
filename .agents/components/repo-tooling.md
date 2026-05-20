@@ -62,15 +62,21 @@ To stop machine-default identities at the root, set once per machine:
 
 ## CI
 
-`ci.yml` runs on every push to `main` and every pull request, on an
-`ubuntu-latest` + `macos-latest` matrix (`fail-fast: false`). Steps: commit
-author check → install `tmux`/`bats`/`shellcheck` → `shellcheck` on `tm`,
-the hooks, the scripts, and `bin/bump-version` → `bats tests/pure/` → `bats
-tests/help/`. The matrix is what makes the cross-platform invariant
-enforceable rather than aspirational.
+`ci.yml` runs on every push to `main` and every pull request. It has two
+jobs:
 
-CI currently covers the **claudemux** plugin only. The `feishu-channel`
-plugin's `bun test` suite is not yet wired in — see
+- **`check`** — the claudemux plugin, on an `ubuntu-latest` +
+  `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
+  install `tmux`/`bats`/`shellcheck` → `shellcheck` on `tm`, the hooks, the
+  scripts, and `bin/bump-version` → `bats tests/pure/` → `bats tests/help/`.
+  The matrix is what makes the cross-platform invariant enforceable rather
+  than aspirational.
+- **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`
+  only. It installs Bun and runs the plugin's `bun test` suite and
+  type-check. That suite is OS-agnostic TypeScript, so one OS is enough; it
+  is a separate job so the Bun toolchain stays off the bats lane.
+
+The `feishu-channel` job covers a plugin that is still on a branch — see
 [components/feishu-channel.md](/.agents/components/feishu-channel.md).
 
 ## See also

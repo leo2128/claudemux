@@ -14,6 +14,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0003](/.agents/decisions/0003-tm-quality-hardening.md) | `tm` was hardened with CI, bats tests, lint, and shared path/encoding helpers | Accepted |
 | [0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md) | Three cross-process / cross-platform invariants were promoted into `CLAUDE.md` | Accepted |
 | [0005](/.agents/decisions/0005-feishu-channel-plugin.md) | A Feishu channel ships as a separate TypeScript+Bun plugin from this repo | In progress |
+| [0006](/.agents/decisions/0006-feishu-channel-event-registry.md) | The Feishu channel handles events through an extensible registry of per-event handlers | In progress |
 
 ## When to add a record
 

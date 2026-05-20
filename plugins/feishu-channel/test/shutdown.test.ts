@@ -210,3 +210,82 @@ describe('shutdown — watching a closable', () => {
     expect(exitCodes).toEqual([0])
   })
 })
+
+describe('shutdown — force-exit watchdog', () => {
+  test('a cleanup task that hangs is force-exited by the watchdog', () => {
+    const exitCodes: number[] = []
+    const errors: string[] = []
+    let watchdogFn: (() => void) | undefined
+    const coordinator = new ShutdownCoordinator(
+      {
+        exit: (code) => {
+          exitCodes.push(code)
+        },
+        logError: (message) => {
+          errors.push(message)
+        },
+        setTimer: (fn) => {
+          watchdogFn = fn
+          return 1
+        },
+        clearTimer: () => {},
+      },
+      { forceExitMs: 50 },
+    )
+    // A task that never settles — without the watchdog, shutdown would never
+    // reach the exit and the process would hang open.
+    coordinator.register('hangs', () => new Promise<void>(() => {}))
+
+    void coordinator.shutdown(0)
+    // The watchdog is scheduled synchronously before the first awaited task,
+    // so by now its callback is captured. Fire it as the timer would.
+    expect(watchdogFn).toBeDefined()
+    watchdogFn?.()
+
+    expect(exitCodes).toEqual([0])
+    expect(errors.some((m) => m.includes('forcing exit'))).toBe(true)
+  })
+
+  test('a normal shutdown clears the watchdog and exits exactly once', async () => {
+    const exitCodes: number[] = []
+    let cleared = false
+    const coordinator = new ShutdownCoordinator({
+      exit: (code) => {
+        exitCodes.push(code)
+      },
+      setTimer: (fn) => fn,
+      clearTimer: () => {
+        cleared = true
+      },
+    })
+    coordinator.register('quick', () => {})
+
+    await coordinator.shutdown(0)
+
+    expect(exitCodes).toEqual([0])
+    expect(cleared).toBe(true)
+  })
+
+  test('the watchdog firing after a normal exit does not exit twice', async () => {
+    const exitCodes: number[] = []
+    let watchdogFn: (() => void) | undefined
+    const coordinator = new ShutdownCoordinator({
+      exit: (code) => {
+        exitCodes.push(code)
+      },
+      logError: () => {},
+      setTimer: (fn) => {
+        watchdogFn = fn
+        return 1
+      },
+      clearTimer: () => {},
+    })
+    coordinator.register('quick', () => {})
+
+    await coordinator.shutdown(0)
+    // A late timer callback must not drive a second exit.
+    watchdogFn?.()
+
+    expect(exitCodes).toEqual([0])
+  })
+})

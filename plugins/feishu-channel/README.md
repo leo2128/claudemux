@@ -23,6 +23,11 @@ Add the claudemux marketplace, then install the plugin:
 
 ## Configure your Feishu app
 
+The steps below are manual. With the plugin installed in a Claude Code
+session you can instead ask Claude to do it — `feishu-channel` ships a
+`configure` skill that walks through setup and an `access` skill for managing
+who may reach the session.
+
 Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
 (open.larksuite.com for Lark):
 
@@ -31,12 +36,23 @@ Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
 3. Under **Event Subscription** (事件订阅), choose the **long-connection** mode.
    This plugin connects outbound over a WebSocket — you do not configure a
    request URL.
-4. Subscribe to the **receive message** event, `im.message.receive_v1`.
+4. Subscribe to the events the channel handles:
+   - `im.message.receive_v1` — inbound chat messages.
+   - `drive.notice.comment_add_v1` — new comments and replies on Feishu
+     documents. See the note below before relying on this one.
 5. Grant the permission scopes the bot needs: reading incoming messages,
-   sending messages as the bot, and — for the `react` tool — adding message
-   reactions. The app's permission console lists each scope.
+   sending messages as the bot, adding message reactions (for the `react`
+   tool), and — for document comments — reading document comments and
+   document metadata. The app's permission console lists each scope.
 6. **Publish a release** of the app so the bot and its permissions take effect.
 7. From the app's credentials page, copy the **App ID** and **App Secret**.
+
+> **Note on the document-comment event.** The `drive.notice.comment_add_v1`
+> identifier is corroborated by independent third-party Feishu integrations,
+> but is not confirmed against Feishu's own published event list (which is
+> not machine-readable). Confirm the event appears in your app console's
+> event picker before relying on it. If it is unavailable, the channel still
+> works for chat messages — only document-comment delivery is affected.
 
 Store the credentials in the channel's env file at
 `~/.claude/channels/feishu/.env`:
@@ -70,12 +86,21 @@ The plugin ships an MCP server (over stdio) that declares the `claude/channel`
 capability.
 
 **Inbound.** The server opens a WebSocket to the Feishu Open Platform
-(`lark.WSClient`) and receives `im.message.receive_v1` events. Each message is
-parsed, run through access control, and — if approved — delivered into the
-Claude Code session as a `notifications/claude/channel` notification. Claude
-sees it as a `<channel source="feishu">` block whose attributes carry the
-routing context: `chat_id`, `message_id`, `chat_type` (`p2p` or `group`), and
-`sender_id`.
+(`lark.WSClient`) and receives the events the bot is subscribed to. Each event
+type is handled by its own registered handler, which decodes the payload and —
+for chat messages — runs access control. An approved event is delivered into
+the Claude Code session as a `notifications/claude/channel` notification, which
+Claude sees as a `<channel source="feishu">` block. The block's `kind`
+attribute says which kind of event it is:
+
+- `kind="message"` — a chat message. Carries `chat_id`, `message_id`,
+  `chat_type` (`p2p` or `group`), and `sender_id`.
+- `kind="doc_comment"` — a new comment or reply on a Feishu document. Carries
+  `file_token`, `file_type`, `comment_id`, an optional `reply_id`, and
+  `notice_type` (`add_comment` or `add_reply`).
+
+New event types are added by registering one more handler — the channel is not
+hardcoded to a fixed set of events.
 
 **Outbound.** The server exposes three MCP tools:
 
@@ -113,10 +138,12 @@ bun run typecheck
 ```
 
 Core logic lives in `src/` as small, dependency-free modules so it can be unit
-tested without a live Feishu connection or a running MCP server. Tests are in
-`test/` and use `bun:test`; input-heavy functions are covered with
-property-based tests via `fast-check`. The same suite runs in CI under the
-`feishu-channel` job.
+tested without a live Feishu connection or a running MCP server. Each Feishu
+event type is a self-contained handler under `src/handlers/`, registered with
+the event registry in `src/server.ts` — adding support for a new event is a
+new handler module plus one registration line. Tests are in `test/` and use
+`bun:test`; input-heavy functions are covered with property-based tests via
+`fast-check`. The same suite runs in CI under the `feishu-channel` job.
 
 ## License
 

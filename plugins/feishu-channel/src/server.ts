@@ -24,6 +24,7 @@ import { EventRegistry } from './events'
 import type { ChannelDelivery, HandlerContext } from './events'
 import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu'
 import { createFeishuTransport } from './feishu'
+import { createDocCommentHandler } from './handlers/doc-comment'
 import { createImMessageHandler } from './handlers/im-message'
 import { generatePairingCode } from './pairing'
 import { accessFile, envFile, stateDir } from './paths'
@@ -143,7 +144,9 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
 
   // Every Feishu event type the channel reacts to is a registered handler.
   // A new event type is added by registering one more handler here.
-  const registry = new EventRegistry().register(createImMessageHandler())
+  const registry = new EventRegistry()
+    .register(createImMessageHandler())
+    .register(createDocCommentHandler())
 
   const routes: InboundRoutes = {}
   for (const eventType of registry.eventTypes()) {
@@ -233,15 +236,26 @@ function defaultLogError(message: string, err?: unknown): void {
 
 /** Guidance injected into Claude's system prompt for this channel. */
 const CHANNEL_INSTRUCTIONS = [
-  'This MCP server is a Feishu (Lark) channel. Inbound Feishu messages arrive as',
-  '<channel source="feishu"> blocks whose attributes carry the routing context:',
+  'This MCP server is a Feishu (Lark) channel. Inbound Feishu events arrive as',
+  '<channel source="feishu"> blocks; the `kind` attribute says which kind of event it is.',
+  '',
+  'kind="message" — a chat message. Attributes:',
   '- chat_id: the conversation the message came from; pass it to the `reply` tool to answer.',
   '- message_id: the specific message; pass it to `react` or `edit_message`.',
   '- chat_type: "p2p" for a direct message, "group" for a group chat.',
   '- sender_id: the Feishu open_id of the sender.',
-  'To answer a Feishu user, call `reply` with the chat_id from the message you are answering.',
+  'Answer a Feishu user by calling `reply` with the chat_id from the message you are answering.',
   'Use `react` to acknowledge a message with an emoji, and `edit_message` to revise a message',
-  'you previously sent. Only act on messages that arrived through this channel.',
+  'you previously sent.',
+  '',
+  'kind="doc_comment" — a comment on a Feishu document. Attributes:',
+  '- file_token, file_type: the document the comment is on.',
+  '- comment_id, and reply_id when the event is a reply within a thread.',
+  '- notice_type: "add_comment" or "add_reply".',
+  'A doc comment has no chat to answer into — treat it as a signal to act on, not a',
+  'message to reply to with `reply`.',
+  '',
+  'Only act on events that arrived through this channel.',
 ].join('\n')
 
 /** Construct the MCP server with the channel capability declared. */

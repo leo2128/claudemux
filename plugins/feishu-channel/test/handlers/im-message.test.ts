@@ -1,0 +1,268 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { loadAccess, saveAccess } from '../../src/access-store'
+import type { HandlerContext } from '../../src/events'
+import {
+  IM_MESSAGE_EVENT_TYPE,
+  createImMessageHandler,
+  normalizeInboundEvent,
+} from '../../src/handlers/im-message'
+import type { Access } from '../../src/types'
+import { FakeTransport } from '../support/fake-transport'
+
+const NOW = 1_700_000_000_000
+
+/** A raw `im.message.receive_v1` event body, with overridable message fields. */
+function rawEvent(
+  messageOverrides: Record<string, unknown> = {},
+  senderId: Record<string, unknown> = { open_id: 'ou_sender', union_id: 'on_s', user_id: 'u_s' },
+): Record<string, unknown> {
+  return {
+    sender: { sender_id: senderId, sender_type: 'user' },
+    message: {
+      message_id: 'om_msg',
+      chat_id: 'oc_chat',
+      chat_type: 'p2p',
+      message_type: 'text',
+      content: '{"text":"hello there"}',
+      create_time: '1700000000000',
+      mentions: [],
+      ...messageOverrides,
+    },
+  }
+}
+
+describe('normalizeInboundEvent — happy path', () => {
+  test('reshapes a complete text event into all fields', () => {
+    expect(normalizeInboundEvent(rawEvent())).toEqual({
+      messageId: 'om_msg',
+      chatId: 'oc_chat',
+      chatType: 'p2p',
+      senderId: 'ou_sender',
+      messageType: 'text',
+      content: '{"text":"hello there"}',
+      mentions: [],
+      createTime: '1700000000000',
+    })
+  })
+
+  test('unwraps a full {event: ...} envelope', () => {
+    const event = normalizeInboundEvent({ schema: '2.0', header: {}, event: rawEvent() })
+    expect(event?.messageId).toBe('om_msg')
+    expect(event?.senderId).toBe('ou_sender')
+  })
+
+  test('a missing message_type defaults to "unknown"', () => {
+    expect(normalizeInboundEvent(rawEvent({ message_type: undefined }))?.messageType).toBe(
+      'unknown',
+    )
+  })
+
+  test('a missing create_time becomes an empty string', () => {
+    expect(normalizeInboundEvent(rawEvent({ create_time: undefined }))?.createTime).toBe('')
+  })
+})
+
+describe('normalizeInboundEvent — rejects incomplete events', () => {
+  test('returns null when the sender open_id is missing', () => {
+    expect(normalizeInboundEvent(rawEvent({}, { union_id: 'on_s' }))).toBeNull()
+  })
+
+  test('returns null when chat_id is missing', () => {
+    expect(normalizeInboundEvent(rawEvent({ chat_id: undefined }))).toBeNull()
+  })
+
+  test('returns null when message_id is missing', () => {
+    expect(normalizeInboundEvent(rawEvent({ message_id: undefined }))).toBeNull()
+  })
+
+  test('returns null for non-object input', () => {
+    expect(normalizeInboundEvent(null)).toBeNull()
+    expect(normalizeInboundEvent(undefined)).toBeNull()
+    expect(normalizeInboundEvent('a string')).toBeNull()
+    expect(normalizeInboundEvent(42)).toBeNull()
+  })
+
+  test('returns null for an empty object', () => {
+    expect(normalizeInboundEvent({})).toBeNull()
+  })
+})
+
+describe('normalizeInboundEvent — mentions', () => {
+  test('normalizes a mention with key, id, and name', () => {
+    const event = normalizeInboundEvent(
+      rawEvent({
+        mentions: [
+          { key: '@_user_1', id: { open_id: 'ou_bot', union_id: 'on_bot' }, name: 'Bot' },
+        ],
+      }),
+    )
+    expect(event?.mentions).toEqual([
+      { key: '@_user_1', id: { open_id: 'ou_bot', union_id: 'on_bot' }, name: 'Bot' },
+    ])
+  })
+
+  test('drops a mention with no key', () => {
+    const event = normalizeInboundEvent(
+      rawEvent({ mentions: [{ id: { open_id: 'ou_x' } }, { key: '@_user_1' }] }),
+    )
+    expect(event?.mentions).toEqual([{ key: '@_user_1' }])
+  })
+
+  test('a non-array mentions field yields an empty array', () => {
+    expect(normalizeInboundEvent(rawEvent({ mentions: 'nope' }))?.mentions).toEqual([])
+  })
+
+  test('non-object mention items are skipped', () => {
+    const event = normalizeInboundEvent(
+      rawEvent({ mentions: ['raw', null, { key: '@_user_1' }] }),
+    )
+    expect(event?.mentions).toEqual([{ key: '@_user_1' }])
+  })
+})
+
+let dir: string
+let accessFile: string
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'feishu-im-handler-'))
+  accessFile = join(dir, 'access.json')
+})
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true })
+})
+
+/** Build a HandlerContext wired to the temp access file and the given fakes. */
+function makeCtx(
+  transport: FakeTransport,
+  opts: { logErrors?: string[]; generateCode?: () => string } = {},
+): HandlerContext {
+  return {
+    transport,
+    accessFile,
+    now: () => NOW,
+    generateCode: opts.generateCode ?? (() => 'abc123'),
+    logError: (message) => {
+      opts.logErrors?.push(message)
+    },
+  }
+}
+
+function writeAccess(overrides: Partial<Access>): void {
+  saveAccess(accessFile, {
+    dmPolicy: 'pairing',
+    allowFrom: [],
+    groups: {},
+    pending: {},
+    ...overrides,
+  })
+}
+
+describe('createImMessageHandler — identity', () => {
+  test('subscribes to im.message.receive_v1', () => {
+    expect(createImMessageHandler().eventType).toBe(IM_MESSAGE_EVENT_TYPE)
+  })
+})
+
+describe('createImMessageHandler — delivery', () => {
+  test('delivers an allowlisted DM and tags it with routing meta', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(rawEvent(), makeCtx(new FakeTransport()))
+
+    expect(delivery?.content).toBe('hello there')
+    expect(delivery?.meta).toEqual({
+      kind: 'message',
+      chat_id: 'oc_chat',
+      message_id: 'om_msg',
+      chat_type: 'p2p',
+      sender_id: 'ou_sender',
+    })
+  })
+
+  test('delivers a group message when the bot is mentioned', async () => {
+    writeAccess({ groups: { oc_group: { requireMention: true, allowFrom: [] } } })
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({
+        chat_id: 'oc_group',
+        chat_type: 'group',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      }),
+      makeCtx(new FakeTransport('ou_bot')),
+    )
+
+    expect(delivery?.meta.chat_type).toBe('group')
+    expect(delivery?.meta.kind).toBe('message')
+  })
+})
+
+describe('createImMessageHandler — pairing', () => {
+  test('a new DM sender is sent a pairing code, not delivered to Claude', async () => {
+    writeAccess({ dmPolicy: 'pairing' })
+    const transport = new FakeTransport()
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(rawEvent(), makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(1)
+    expect(transport.sent[0]?.chatId).toBe('oc_chat')
+    expect(transport.sent[0]?.text).toContain('abc123')
+  })
+
+  test('the pending pairing is persisted to access.json', async () => {
+    writeAccess({ dmPolicy: 'pairing' })
+    const handler = createImMessageHandler()
+
+    await handler.handle(rawEvent(), makeCtx(new FakeTransport()))
+
+    expect(loadAccess(accessFile).access.pending['abc123']?.senderId).toBe('ou_sender')
+  })
+})
+
+describe('createImMessageHandler — drops', () => {
+  test('a disabled DM policy delivers nothing and sends nothing', async () => {
+    writeAccess({ dmPolicy: 'disabled' })
+    const transport = new FakeTransport()
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(rawEvent(), makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(0)
+  })
+
+  test('a message from an unconfigured group is dropped', async () => {
+    writeAccess({})
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({ chat_id: 'oc_unknown', chat_type: 'group' }),
+      makeCtx(new FakeTransport('ou_bot')),
+    )
+
+    expect(delivery).toBeNull()
+  })
+
+  test('an unparseable raw payload is dropped, not thrown', async () => {
+    const handler = createImMessageHandler()
+    expect(await handler.handle('not an event', makeCtx(new FakeTransport()))).toBeNull()
+  })
+})
+
+describe('createImMessageHandler — resilience', () => {
+  test('a corrupt access.json is reported and the event still processes', async () => {
+    await Bun.write(accessFile, '{ not json')
+    const logErrors: string[] = []
+    const handler = createImMessageHandler()
+
+    await handler.handle(rawEvent(), makeCtx(new FakeTransport(), { logErrors }))
+
+    expect(logErrors.some((m) => m.includes('access.json'))).toBe(true)
+  })
+})

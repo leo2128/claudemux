@@ -2,8 +2,10 @@
  * The Feishu channel MCP server.
  *
  * This module assembles the channel: it declares the `claude/channel`
- * capability, exposes the outbound tools, and runs the inbound pipeline
- * (parse → access gate → notify / pair / drop).
+ * capability, exposes the outbound tools, and runs the inbound pipeline —
+ * which is now a thin dispatcher over an `EventRegistry`. Each Feishu event
+ * type is a registered handler (see `./events` and `./handlers/`); the core
+ * only resolves a handler by event_type, runs it, and delivers its result.
  *
  * The channel logic lives in `createChannelCore`, which depends only on a
  * `FeishuTransport` and a notifier callback — so the inbound and outbound
@@ -18,11 +20,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 
-import { gate } from './access'
-import { loadAccess, saveAccess } from './access-store'
-import { parseInbound } from './content'
-import type { FeishuCredentials, FeishuInboundEvent, FeishuTransport } from './feishu'
+import { EventRegistry } from './events'
+import type { ChannelDelivery, HandlerContext } from './events'
+import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu'
 import { createFeishuTransport } from './feishu'
+import { createImMessageHandler } from './handlers/im-message'
 import { generatePairingCode } from './pairing'
 import { accessFile, envFile, stateDir } from './paths'
 import { ShutdownCoordinator } from './shutdown'
@@ -55,12 +57,14 @@ export interface ChannelCoreDeps {
   logError?: (message: string, err?: unknown) => void
 }
 
-/** The channel's testable core: the inbound pipeline and the outbound tools. */
+/** The channel's testable core: the inbound dispatcher and the outbound tools. */
 export interface ChannelCore {
   /** The MCP tool definitions this channel exposes. */
   readonly tools: Tool[]
-  /** Run one inbound Feishu event through parse → gate → notify / pair / drop. */
-  handleInbound(event: FeishuInboundEvent): Promise<void>
+  /** Inbound route table — event_type → callback, handed to `transport.start`. */
+  readonly routes: InboundRoutes
+  /** Dispatch one raw Feishu event of `eventType` through its handler. */
+  handleEvent(eventType: string, raw: unknown): Promise<void>
   /** Execute one outbound MCP tool call. */
   handleTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>
 }
@@ -119,57 +123,50 @@ const CHANNEL_TOOLS: Tool[] = [
 ]
 
 /**
- * Build the channel core. The returned object processes inbound events and
- * outbound tool calls; it never touches MCP stdio directly, so a test can
- * drive both paths with a fake transport and a capturing notifier.
+ * Build the channel core. The returned object dispatches inbound events
+ * through the event registry and runs outbound tool calls; it never touches
+ * MCP stdio directly, so a test can drive both paths with a fake transport
+ * and a capturing notifier.
  */
 export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   const now = deps.now ?? Date.now
   const generateCode = deps.generateCode ?? generatePairingCode
   const logError = deps.logError ?? defaultLogError
 
-  async function handleInbound(event: FeishuInboundEvent): Promise<void> {
+  const ctx: HandlerContext = {
+    transport: deps.transport,
+    accessFile: deps.accessFile,
+    now,
+    generateCode,
+    logError,
+  }
+
+  // Every Feishu event type the channel reacts to is a registered handler.
+  // A new event type is added by registering one more handler here.
+  const registry = new EventRegistry().register(createImMessageHandler())
+
+  const routes: InboundRoutes = {}
+  for (const eventType of registry.eventTypes()) {
+    routes[eventType] = (raw: unknown) => handleEvent(eventType, raw)
+  }
+
+  async function handleEvent(eventType: string, raw: unknown): Promise<void> {
+    const handler = registry.get(eventType)
+    if (!handler) return
+
+    let delivery: ChannelDelivery | null
     try {
-      const parsed = parseInbound({
-        message_type: event.messageType,
-        content: event.content,
-        mentions: event.mentions,
-      })
-
-      const loaded = loadAccess(deps.accessFile)
-      if (loaded.corrupt) {
-        logError('access.json was unreadable; started from defaults')
-      }
-
-      const decision = gate({
-        senderId: event.senderId,
-        chatId: event.chatId,
-        chatType: event.chatType,
-        access: loaded.access,
-        now: now(),
-        newCode: generateCode(),
-        mentions: event.mentions,
-        botOpenId: deps.transport.botOpenId,
-      })
-      if (decision.changed) {
-        saveAccess(deps.accessFile, decision.access)
-      }
-
-      switch (decision.action) {
-        case 'deliver':
-          await deps.notify(parsed.text, buildMeta(event))
-          return
-        case 'pair':
-          await deps.transport.sendText(
-            event.chatId,
-            pairingPrompt(decision.code, decision.isResend),
-          )
-          return
-        case 'drop':
-          return
-      }
+      delivery = await handler.handle(raw, ctx)
     } catch (err) {
-      logError('failed to handle inbound message', err)
+      logError(`failed to handle a ${eventType} event`, err)
+      return
+    }
+    if (!delivery) return
+
+    try {
+      await deps.notify(delivery.content, delivery.meta)
+    } catch (err) {
+      logError(`failed to deliver a ${eventType} notification`, err)
     }
   }
 
@@ -207,30 +204,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     }
   }
 
-  return { tools: CHANNEL_TOOLS, handleInbound, handleTool }
-}
-
-/** Build the `<channel>` tag attributes for a delivered event. */
-function buildMeta(event: FeishuInboundEvent): Record<string, string> {
-  // Keys must be alphanumeric-plus-underscore — a hyphen would be dropped.
-  return {
-    chat_id: event.chatId,
-    message_id: event.messageId,
-    chat_type: event.chatType,
-    sender_id: event.senderId,
-  }
-}
-
-/** The message sent back to an un-paired sender, carrying their pairing code. */
-function pairingPrompt(code: string, isResend: boolean): string {
-  const lead = isResend
-    ? 'You already have a pending pairing request for this Claude Code channel.'
-    : 'This Claude Code channel must pair with you before it will deliver your messages.'
-  return [
-    lead,
-    `Pairing code: ${code}`,
-    'Share this code with the operator running Claude Code so they can approve you.',
-  ].join('\n')
+  return { tools: CHANNEL_TOOLS, routes, handleEvent, handleTool }
 }
 
 /** Read a required non-empty string argument, throwing a clear error otherwise. */
@@ -349,7 +323,7 @@ async function main(): Promise<void> {
   shutdown.watch(server)
 
   await server.connect(new StdioServerTransport())
-  await transport.start((event) => core.handleInbound(event))
+  await transport.start(core.routes)
 }
 
 if (import.meta.main) {

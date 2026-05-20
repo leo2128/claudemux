@@ -3,37 +3,17 @@
  *
  * Everything that talks to Feishu — the inbound long-lived WebSocket and the
  * outbound message API — sits behind the `FeishuTransport` interface. The
- * channel server depends only on that interface, so its inbound and outbound
- * wiring can be exercised against an injected fake with no live connection.
+ * channel server depends only on that interface, so its wiring can be
+ * exercised against an injected fake with no live connection.
  *
- * `createFeishuTransport` is the real implementation, wrapping the official
- * `@larksuiteoapi/node-sdk`. `normalizeInboundEvent` is a pure function that
- * reshapes a raw `im.message.receive_v1` payload into the event the rest of
- * the channel consumes — it is the unit-tested part of this module.
+ * The transport is event-type agnostic. `start` is handed a route table
+ * mapping each Feishu event_type to a callback and registers every entry
+ * with the SDK's event dispatcher; decoding a specific event's payload is the
+ * job of that event's handler, not this module. Adding a new event type to
+ * the channel therefore never touches this file.
  */
 
 import * as lark from '@larksuiteoapi/node-sdk'
-import type { Mention } from './types'
-
-/** A normalized inbound Feishu message, as the channel server consumes it. */
-export interface FeishuInboundEvent {
-  /** message_id (`om_...`) — used to react to or edit this message. */
-  messageId: string
-  /** chat_id (`oc_...`) — the conversation the message arrived in. */
-  chatId: string
-  /** Feishu chat_type — `p2p` for a direct message, `group` for a group. */
-  chatType: string
-  /** open_id of the sender — the identity access control gates on. */
-  senderId: string
-  /** Feishu message_type — `text`, `post`, `image`, `file`, ... */
-  messageType: string
-  /** JSON-encoded content string, exactly as Feishu delivered it. */
-  content: string
-  /** @-mentions carried by the message; always an array, never undefined. */
-  mentions: Mention[]
-  /** Feishu create_time (epoch millis as a string), or `''` if absent. */
-  createTime: string
-}
 
 /** Outcome of an outbound send. */
 export interface FeishuSendResult {
@@ -41,8 +21,13 @@ export interface FeishuSendResult {
   messageId?: string
 }
 
-/** Invoked for every inbound message the connection delivers. */
-export type InboundHandler = (event: FeishuInboundEvent) => void | Promise<void>
+/**
+ * Inbound event routes: Feishu event_type → callback. The server builds this
+ * from the event registry; the transport registers every entry with the
+ * SDK's event dispatcher. The callback receives the raw event payload exactly
+ * as the SDK delivered it.
+ */
+export type InboundRoutes = Record<string, (raw: unknown) => void | Promise<void>>
 
 /**
  * The platform boundary the channel server depends on. The real implementation
@@ -55,8 +40,8 @@ export interface FeishuTransport {
    * `start` has resolved it (and stays `undefined` if resolution failed).
    */
   readonly botOpenId: string | undefined
-  /** Open the long-lived connection and route inbound messages to `handler`. */
-  start(handler: InboundHandler): Promise<void>
+  /** Open the long-lived connection and dispatch inbound events via `routes`. */
+  start(routes: InboundRoutes): Promise<void>
   /**
    * Send a text message into a chat. Routed by `chat_id`, never by a
    * message_id, so a forged reply target cannot redirect the message into an
@@ -78,80 +63,13 @@ export interface FeishuCredentials {
 }
 
 /**
- * Reshape a raw `im.message.receive_v1` payload into a `FeishuInboundEvent`.
- *
- * Returns `null` when an essential field (sender open_id, chat_id, message_id)
- * is missing, since such an event can neither be gated nor answered. Pure: no
- * I/O, no clock, never throws. Tolerates either the event body alone (what the
- * SDK's `EventDispatcher` delivers) or a full `{ event: ... }` envelope.
- */
-export function normalizeInboundEvent(raw: unknown): FeishuInboundEvent | null {
-  if (!isRecord(raw)) return null
-  const event = isRecord(raw.event) ? raw.event : raw
-
-  const sender = isRecord(event.sender) ? event.sender : {}
-  const senderId = isRecord(sender.sender_id) ? sender.sender_id : {}
-  const message = isRecord(event.message) ? event.message : {}
-
-  const openId = asString(senderId.open_id)
-  const messageId = asString(message.message_id)
-  const chatId = asString(message.chat_id)
-  if (!openId || !messageId || !chatId) return null
-
-  return {
-    messageId,
-    chatId,
-    chatType: asString(message.chat_type),
-    senderId: openId,
-    messageType: asString(message.message_type) || 'unknown',
-    content: asString(message.content),
-    mentions: normalizeMentions(message.mentions),
-    createTime: asString(message.create_time),
-  }
-}
-
-/** Reshape a raw `mentions` array into well-formed `Mention` objects. */
-function normalizeMentions(raw: unknown): Mention[] {
-  if (!Array.isArray(raw)) return []
-  const out: Mention[] = []
-  for (const item of raw) {
-    if (!isRecord(item)) continue
-    const key = asString(item.key)
-    if (!key) continue
-    const mention: Mention = { key }
-    if (isRecord(item.id)) {
-      const id: NonNullable<Mention['id']> = {}
-      const openId = asString(item.id.open_id)
-      const unionId = asString(item.id.union_id)
-      const userId = asString(item.id.user_id)
-      if (openId) id.open_id = openId
-      if (unionId) id.union_id = unionId
-      if (userId) id.user_id = userId
-      mention.id = id
-    }
-    const name = asString(item.name)
-    if (name) mention.name = name
-    out.push(mention)
-  }
-  return out
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === 'object'
-}
-
-function asString(v: unknown): string {
-  return typeof v === 'string' ? v : ''
-}
-
-/**
  * The real Feishu transport, wrapping the official SDK.
  *
  * Inbound: a `WSClient` opens a long-lived WebSocket and an `EventDispatcher`
- * routes `im.message.receive_v1` events through `normalizeInboundEvent` to the
- * supplied handler. Outbound: a `Client` calls the `im` message API; it manages
- * the `tenant_access_token` internally. This implementation is not unit-tested
- * — it needs a live Feishu app — so the testable logic stays in pure helpers.
+ * routes every subscribed event_type to its callback. Outbound: a `Client`
+ * calls the `im` message API; it manages the `tenant_access_token` internally.
+ * This implementation is not unit-tested — it needs a live Feishu app — so the
+ * testable logic stays in the pure event handlers.
  */
 export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport {
   const client = new lark.Client({ appId: creds.appId, appSecret: creds.appSecret })
@@ -163,14 +81,9 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
       return resolvedBotOpenId
     },
 
-    async start(handler: InboundHandler): Promise<void> {
+    async start(routes: InboundRoutes): Promise<void> {
       resolvedBotOpenId = await resolveBotOpenId(client)
-      const dispatcher = new lark.EventDispatcher({}).register({
-        'im.message.receive_v1': async (data: unknown): Promise<void> => {
-          const event = normalizeInboundEvent(data)
-          if (event) await handler(event)
-        },
-      })
+      const dispatcher = new lark.EventDispatcher({}).register(routes)
       wsClient = new lark.WSClient({ appId: creds.appId, appSecret: creds.appSecret })
       await wsClient.start({ eventDispatcher: dispatcher })
     },

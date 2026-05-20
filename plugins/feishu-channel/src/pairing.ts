@@ -10,14 +10,7 @@ export const PAIRING_CODE_BYTES = 3
 /** Resulting code length in characters (two hex digits per byte). */
 export const PAIRING_CODE_LENGTH = PAIRING_CODE_BYTES * 2
 
-const PAIRING_CODE_RE = /^[0-9a-f]{6}$/
-
 /** Generate a fresh, cryptographically-random pairing code. */
 export function generatePairingCode(): string {
   return randomBytes(PAIRING_CODE_BYTES).toString('hex')
-}
-
-/** True when `code` has exactly the shape `generatePairingCode` produces. */
-export function isPairingCode(code: string): boolean {
-  return PAIRING_CODE_RE.test(code)
 }

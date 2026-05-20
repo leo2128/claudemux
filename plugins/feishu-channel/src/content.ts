@@ -3,8 +3,8 @@
  *
  * Feishu delivers `message.content` as a JSON-encoded string whose shape
  * depends on `message_type`. This module turns that into the plain text the
- * channel forwards to Claude, plus references to any attachment the server
- * still needs to download.
+ * channel forwards to Claude. Attachment message types (image, file) are
+ * summarized as a short text marker — the channel forwards text, not binaries.
  */
 
 import type { Mention } from './types'
@@ -20,16 +20,12 @@ export interface InboundMessage {
 export interface ParsedInbound {
   /** Human-readable text to forward to Claude. */
   text: string
-  /** Present for image messages — the Feishu image_key to download. */
-  imageKey?: string
-  /** Present for file messages — the sender-supplied file name (unsanitized). */
-  fileName?: string
 }
 
 /**
- * Parse one inbound Feishu message into forwardable text plus optional
- * attachment references. Never throws — malformed content falls back to a
- * best-effort string so a weird message still reaches Claude.
+ * Parse one inbound Feishu message into forwardable text. Never throws —
+ * malformed content falls back to a best-effort string so a weird message
+ * still reaches Claude.
  */
 export function parseInbound(message: InboundMessage): ParsedInbound {
   const type = message.message_type ?? 'unknown'
@@ -50,13 +46,10 @@ export function parseInbound(message: InboundMessage): ParsedInbound {
     case 'post':
       return { text: extractPostText(content) }
     case 'image':
-      return {
-        text: '(image)',
-        imageKey: typeof content.image_key === 'string' ? content.image_key : undefined,
-      }
+      return { text: '(image)' }
     case 'file': {
-      const fileName = typeof content.file_name === 'string' ? content.file_name : undefined
-      return { text: `(file: ${fileName ?? 'unknown'})`, fileName }
+      const fileName = typeof content.file_name === 'string' ? content.file_name : 'unknown'
+      return { text: `(file: ${fileName})` }
     }
     default:
       return { text: `(${type} message)` }

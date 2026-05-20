@@ -27,18 +27,20 @@ describe('parseInbound — text', () => {
 })
 
 describe('parseInbound — attachments', () => {
-  test('image messages carry the image_key', () => {
+  test('an image message becomes a short text marker', () => {
     expect(parseInbound(message('image', { image_key: 'img_v2_abc' }))).toEqual({
       text: '(image)',
-      imageKey: 'img_v2_abc',
     })
   })
 
-  test('file messages carry the sender-supplied file name', () => {
+  test('a file message names the file in its text', () => {
     expect(parseInbound(message('file', { file_name: 'report.pdf', file_key: 'k' }))).toEqual({
       text: '(file: report.pdf)',
-      fileName: 'report.pdf',
     })
+  })
+
+  test('a file message with no name falls back to "unknown"', () => {
+    expect(parseInbound(message('file', { file_key: 'k' })).text).toBe('(file: unknown)')
   })
 
   test('an unknown message type is summarized', () => {
@@ -70,6 +72,16 @@ describe('extractPostText', () => {
   test('falls back to en_us when zh_cn is absent', () => {
     const post = { en_us: { title: 'Hi', content: [[{ tag: 'text', text: 'world' }]] } }
     expect(extractPostText(post)).toBe('Hi\nworld')
+  })
+
+  test('falls back to ja_jp when zh_cn and en_us are absent', () => {
+    const post = { ja_jp: { title: 'やあ', content: [[{ tag: 'text', text: '世界' }]] } }
+    expect(extractPostText(post)).toBe('やあ\n世界')
+  })
+
+  test('reads a post that has no locale wrapper at all', () => {
+    const post = { title: 'Bare', content: [[{ tag: 'text', text: 'body' }]] }
+    expect(extractPostText(post)).toBe('Bare\nbody')
   })
 
   test('a link with no text renders its href', () => {

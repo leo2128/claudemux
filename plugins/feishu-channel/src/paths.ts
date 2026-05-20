@@ -23,22 +23,7 @@ export function accessFile(base: string = stateDir()): string {
   return join(base, 'access.json')
 }
 
-/** Directory the access skill drops per-sender approval markers into. */
-export function approvedDir(base: string = stateDir()): string {
-  return join(base, 'approved')
-}
-
-/** Approval marker file for a single sender. */
-export function approvedMarker(senderId: string, base: string = stateDir()): string {
-  return join(approvedDir(base), senderId)
-}
-
 /** .env — Feishu app credentials (FEISHU_APP_ID / FEISHU_APP_SECRET). */
 export function envFile(base: string = stateDir()): string {
   return join(base, '.env')
-}
-
-/** inbox — downloaded inbound attachments; the one subtree reply may send from. */
-export function inboxDir(base: string = stateDir()): string {
-  return join(base, 'inbox')
 }

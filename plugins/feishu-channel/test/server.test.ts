@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
-import { createChannelCore, FEISHU_TEXT_LIMIT } from '../src/server'
+import { createChannelCore, FEISHU_TEXT_LIMIT, loadCredentials, readEnvFile } from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
 
@@ -237,5 +237,75 @@ describe('handleTool — unknown tool', () => {
     const core = makeCore(new FakeTransport(), [])
     const result = await core.handleTool('teleport', {})
     expect(result.isError).toBe(true)
+  })
+})
+
+/** Restore an environment variable to a captured prior value. */
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key]
+  else process.env[key] = value
+}
+
+describe('readEnvFile', () => {
+  test('a missing file yields an empty map', () => {
+    expect(readEnvFile(join(dir, 'nope.env'))).toEqual({})
+  })
+
+  test('parses keys, strips surrounding quotes, and ignores noise lines', () => {
+    const file = join(dir, '.env')
+    writeFileSync(
+      file,
+      [
+        '# a comment',
+        '',
+        'FEISHU_APP_ID=cli_plain',
+        'FEISHU_APP_SECRET="quoted secret"',
+        "OTHER='single quoted'",
+        'this line is not a key=value assignment',
+        '  SPACED  =  trimmed  ',
+      ].join('\n'),
+    )
+    expect(readEnvFile(file)).toEqual({
+      FEISHU_APP_ID: 'cli_plain',
+      FEISHU_APP_SECRET: 'quoted secret',
+      OTHER: 'single quoted',
+      SPACED: 'trimmed',
+    })
+  })
+})
+
+describe('loadCredentials', () => {
+  test('returns both credentials read from the env file', () => {
+    const file = join(dir, '.env')
+    writeFileSync(file, 'FEISHU_APP_ID=cli_x\nFEISHU_APP_SECRET=secret_y\n')
+    expect(loadCredentials(file)).toEqual({ appId: 'cli_x', appSecret: 'secret_y' })
+  })
+
+  test('throws a clear error when a credential is missing', () => {
+    const savedSecret = process.env.FEISHU_APP_SECRET
+    delete process.env.FEISHU_APP_SECRET
+    const file = join(dir, '.env')
+    writeFileSync(file, 'FEISHU_APP_ID=cli_x\n')
+    try {
+      expect(() => loadCredentials(file)).toThrow('Feishu credentials missing')
+    } finally {
+      restoreEnv('FEISHU_APP_SECRET', savedSecret)
+    }
+  })
+
+  test('falls back to the process environment when the file is absent', () => {
+    const savedId = process.env.FEISHU_APP_ID
+    const savedSecret = process.env.FEISHU_APP_SECRET
+    process.env.FEISHU_APP_ID = 'cli_env'
+    process.env.FEISHU_APP_SECRET = 'secret_env'
+    try {
+      expect(loadCredentials(join(dir, 'absent.env'))).toEqual({
+        appId: 'cli_env',
+        appSecret: 'secret_env',
+      })
+    } finally {
+      restoreEnv('FEISHU_APP_ID', savedId)
+      restoreEnv('FEISHU_APP_SECRET', savedSecret)
+    }
   })
 })

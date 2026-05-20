@@ -234,6 +234,18 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   return { tools: CHANNEL_TOOLS, routes, handleEvent, handleTool }
 }
 
+/**
+ * Build the JSON-RPC notification that carries one inbound event to the Claude
+ * session. Exported so the assembly — the method name and the `content` /
+ * `meta` param shape — is covered without a live MCP connection.
+ */
+export function channelNotification(
+  content: string,
+  meta: Record<string, string>,
+): { method: string; params: { content: string; meta: Record<string, string> } } {
+  return { method: CHANNEL_NOTIFICATION_METHOD, params: { content, meta } }
+}
+
 /** Read a required non-empty string argument, throwing a clear error otherwise. */
 function requireString(args: Record<string, unknown>, key: string): string {
   const value = args[key]
@@ -310,7 +322,7 @@ function createMcpServer(): Server {
  * process environment. Throws a clear error when either value is missing,
  * since the channel cannot connect without them.
  */
-function loadCredentials(file: string): FeishuCredentials {
+export function loadCredentials(file: string): FeishuCredentials {
   const fromFile = readEnvFile(file)
   const appId = fromFile.FEISHU_APP_ID ?? process.env.FEISHU_APP_ID
   const appSecret = fromFile.FEISHU_APP_SECRET ?? process.env.FEISHU_APP_SECRET
@@ -323,7 +335,7 @@ function loadCredentials(file: string): FeishuCredentials {
 }
 
 /** Parse a minimal `KEY=value` env file; a missing file yields an empty map. */
-function readEnvFile(file: string): Record<string, string> {
+export function readEnvFile(file: string): Record<string, string> {
   let text: string
   try {
     text = readFileSync(file, 'utf8')
@@ -356,10 +368,7 @@ async function main(): Promise<void> {
     transport,
     accessFile: accessFile(base),
     notify: (content, meta) => {
-      void server.notification({
-        method: CHANNEL_NOTIFICATION_METHOD,
-        params: { content, meta },
-      })
+      void server.notification(channelNotification(content, meta))
     },
   })
 

@@ -106,7 +106,7 @@ hardcoded to a fixed set of events.
 
 | Tool | Purpose |
 |---|---|
-| `reply` | Send a text message into a chat (`chat_id` + `text`). |
+| `reply` | Send a text message into a chat (`chat_id` + `text`). A long reply is split into several Feishu messages automatically. |
 | `react` | Add an emoji reaction to a message (`message_id` + `emoji`). |
 | `edit_message` | Replace the text of a message the channel sent (`message_id` + `text`). |
 
@@ -127,6 +127,10 @@ to the session:
 The policy lives in `~/.claude/channels/feishu/access.json`. A corrupt or
 missing file is reported and the channel falls back to safe defaults rather
 than failing open.
+
+To diagnose why a message was not delivered, launch Claude Code with
+`FEISHU_CHANNEL_DEBUG=1` in the environment — the channel then logs every
+gated-out message to stderr with the reason it was dropped.
 
 ## Development
 

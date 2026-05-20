@@ -53,6 +53,16 @@ receive a fresh code.
   group delivered. Leave that group's `allowFrom` empty to allow any group
   member, or list open_ids to restrict who triggers the bot there.
 
+## Diagnose a message that did not arrive
+
+When a sender reports a message never reached the session, the channel can
+say why. Have the human relaunch Claude Code with `FEISHU_CHANNEL_DEBUG=1`
+set in the environment — the channel then logs every gated-out message to
+stderr with its reason: `direct messages disabled`, `sender not on
+allowlist`, `bot not mentioned`, `group not configured`, and so on. Match the
+reason against the policy above to choose the fix — for example, `sender not
+on allowlist` means the sender's open_id must be added to `allowFrom`.
+
 ## Why access is keyed on open_id
 
 Access is gated on the Feishu `open_id` — the stable per-app user identifier

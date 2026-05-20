@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
-import { createChannelCore } from '../src/server'
+import { createChannelCore, FEISHU_TEXT_LIMIT } from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
 
@@ -174,6 +174,36 @@ describe('handleTool — reply', () => {
 
     expect(result.isError).toBe(true)
     expect(JSON.stringify(result.content)).toContain('feishu send failed')
+  })
+})
+
+describe('handleTool — reply chunking', () => {
+  test('a reply within the limit is sent as a single message', async () => {
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'short enough' })
+
+    expect(transport.sent).toHaveLength(1)
+    expect(transport.sent[0]?.text).toBe('short enough')
+  })
+
+  test('a reply over the limit is split into messages that each fit', async () => {
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+    const long = 'x'.repeat(FEISHU_TEXT_LIMIT * 2 + 100)
+
+    const result = await core.handleTool('reply', { chat_id: 'oc_chat', text: long })
+
+    expect(result.isError).toBeUndefined()
+    expect(transport.sent.length).toBeGreaterThan(1)
+    for (const message of transport.sent) {
+      expect(message.text.length).toBeLessThanOrEqual(FEISHU_TEXT_LIMIT)
+    }
+    // Whitespace-free input has no boundary to trim, so the parts rejoin
+    // exactly — no content is dropped on the way out.
+    expect(transport.sent.map((m) => m.text).join('')).toBe(long)
+    expect(JSON.stringify(result.content)).toContain('messages')
   })
 })
 

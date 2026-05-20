@@ -20,6 +20,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 
+import { chunk } from './chunk'
 import { EventRegistry } from './events'
 import type { ChannelDelivery, HandlerContext } from './events'
 import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu'
@@ -35,6 +36,13 @@ const SERVER_VERSION = '0.1.0'
 
 /** The JSON-RPC method that carries an inbound event to the Claude session. */
 const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel'
+
+/**
+ * Characters per outbound text message. A conservative bound that stays well
+ * under Feishu's text-message size limit; a longer reply is split into parts
+ * so Feishu does not reject the whole send.
+ */
+export const FEISHU_TEXT_LIMIT = 4000
 
 /** Pushes one inbound event to the Claude session. */
 export type ChannelNotifier = (
@@ -182,10 +190,19 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
         case 'reply': {
           const chatId = requireString(args, 'chat_id')
           const text = requireString(args, 'text')
-          const result = await deps.transport.sendText(chatId, text)
-          return toolText(
-            `Sent to ${chatId}${result.messageId ? ` as ${result.messageId}` : ''}.`,
-          )
+          // Feishu rejects an over-long text message, so a long reply is
+          // split into parts that each fit, broken on a natural boundary.
+          const parts = chunk(text, FEISHU_TEXT_LIMIT, 'newline')
+          const ids: string[] = []
+          for (const part of parts) {
+            const result = await deps.transport.sendText(chatId, part)
+            if (result.messageId) ids.push(result.messageId)
+          }
+          const summary =
+            parts.length === 1
+              ? `Sent to ${chatId}${ids[0] ? ` as ${ids[0]}` : ''}.`
+              : `Sent to ${chatId} in ${parts.length} messages.`
+          return toolText(summary)
         }
         case 'react': {
           const messageId = requireString(args, 'message_id')

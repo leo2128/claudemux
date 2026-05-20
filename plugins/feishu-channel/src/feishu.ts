@@ -113,28 +113,64 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
     async close(): Promise<void> {
       try {
         wsClient?.close()
-      } catch {
-        // A close on an already-closed socket is not an error worth surfacing.
+      } catch (err) {
+        // A close on an already-closed socket is expected; anything else
+        // (e.g. the SDK's close surface changed) is worth a diagnostic line.
+        console.error('[feishu-channel] error while closing the Feishu WebSocket:', err)
       }
       wsClient = undefined
     },
   }
 }
 
+/** How many times to try resolving the bot's open_id before giving up. */
+const BOT_INFO_ATTEMPTS = 3
+
 /**
  * Resolve the bot's own open_id, needed for group mention-gating. The SDK does
  * not expose a bot-info method, so this calls the raw endpoint through the
- * client (which still attaches the token). Best-effort: a failure leaves the
- * open_id unknown rather than blocking startup.
+ * client (which still attaches the token).
+ *
+ * Best-effort: a failure leaves the open_id unknown rather than blocking
+ * startup — but it is not silent. An unknown open_id makes `isBotMentioned`
+ * never match, so every mention-gated group would drop every message; each
+ * failure is logged with that consequence spelled out, and a transient error
+ * is retried a few times before the channel gives up.
  */
 async function resolveBotOpenId(client: lark.Client): Promise<string | undefined> {
-  try {
-    const res = await client.request<{ bot?: { open_id?: string } }>({
-      method: 'GET',
-      url: '/open-apis/bot/v3/info',
-    })
-    return res.bot?.open_id
-  } catch {
-    return undefined
+  for (let attempt = 1; attempt <= BOT_INFO_ATTEMPTS; attempt++) {
+    try {
+      const res = await client.request<{ bot?: { open_id?: string } }>({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      })
+      const openId = res.bot?.open_id
+      if (openId) return openId
+      // A well-formed response that simply lacks the field will not improve
+      // on retry — stop here rather than spend the remaining attempts.
+      console.error(
+        '[feishu-channel] bot info response carried no open_id — groups that ' +
+          'require an @-mention will drop every message until the channel restarts',
+      )
+      return undefined
+    } catch (err) {
+      if (attempt < BOT_INFO_ATTEMPTS) {
+        await delay(attempt * 500)
+        continue
+      }
+      console.error(
+        `[feishu-channel] could not resolve the bot open_id after ${BOT_INFO_ATTEMPTS} ` +
+          'attempts — groups that require an @-mention will drop every message ' +
+          'until the channel restarts:',
+        err,
+      )
+      return undefined
+    }
   }
+  return undefined
+}
+
+/** Resolve after `ms` milliseconds — the backoff between bot-info attempts. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

@@ -289,3 +289,47 @@ describe('shutdown — force-exit watchdog', () => {
     expect(exitCodes).toEqual([0])
   })
 })
+
+describe('shutdown — parent-death watchdog', () => {
+  test('a poll while still parented does not shut down', () => {
+    const { coordinator } = harness()
+    let poll: (() => void) | undefined
+    coordinator.watchParent({
+      getParentPid: () => 4242,
+      schedule: (fn) => {
+        poll = fn
+      },
+    })
+    poll?.()
+    poll?.()
+    expect(coordinator.started).toBe(false)
+  })
+
+  test('a poll once orphaned (parent PID 1) triggers the shutdown', async () => {
+    const { coordinator, exitCodes } = harness()
+    let parentPid = 4242
+    let poll: (() => void) | undefined
+    let cleaned = false
+    coordinator.register('cleanup', () => {
+      cleaned = true
+    })
+    coordinator.watchParent({
+      getParentPid: () => parentPid,
+      schedule: (fn) => {
+        poll = fn
+      },
+    })
+
+    poll?.()
+    expect(coordinator.started).toBe(false)
+
+    // The real parent has exited — the OS re-parented this process to init.
+    parentPid = 1
+    poll?.()
+    expect(coordinator.started).toBe(true)
+
+    await coordinator.shutdown()
+    expect(cleaned).toBe(true)
+    expect(exitCodes).toEqual([0])
+  })
+})

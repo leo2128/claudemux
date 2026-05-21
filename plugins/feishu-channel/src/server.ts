@@ -27,8 +27,9 @@ import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu
 import { createFeishuTransport } from './feishu'
 import { createDocCommentHandler } from './handlers/doc-comment'
 import { createImMessageHandler } from './handlers/im-message'
+import { asString, isRecord } from './json'
 import { generatePairingCode } from './pairing'
-import { accessFile, envFile, stateDir } from './paths'
+import { accessFile, envFile, lockFile, stateDir } from './paths'
 import { ShutdownCoordinator } from './shutdown'
 
 /** Version advertised to Claude Code in the MCP `initialize` handshake. */
@@ -69,6 +70,13 @@ export interface ChannelCoreDeps {
    * when `FEISHU_CHANNEL_DEBUG` is set, so routine drops do not spam logs.
    */
   logDebug?: (message: string) => void
+  /**
+   * Reports an inbound-pipeline milestone — event received, delivered, or not
+   * delivered. Defaults to a timestamped stderr line and is always on: these
+   * lines trace where an inbound message went, and they are proportional to
+   * real traffic rather than to a noisy drop loop.
+   */
+  logInfo?: (message: string) => void
 }
 
 /** The channel's testable core: the inbound dispatcher and the outbound tools. */
@@ -147,6 +155,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   const generateCode = deps.generateCode ?? generatePairingCode
   const logError = deps.logError ?? defaultLogError
   const logDebug = deps.logDebug ?? defaultLogDebug
+  const logInfo = deps.logInfo ?? defaultLogInfo
 
   const ctx: HandlerContext = {
     transport: deps.transport,
@@ -165,12 +174,19 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
 
   const routes: InboundRoutes = {}
   for (const eventType of registry.eventTypes()) {
-    routes[eventType] = (raw: unknown) => handleEvent(eventType, raw)
+    routes[eventType] = (raw: unknown) => {
+      logInfo(`inbound ${eventType} received (message ${inboundMessageId(raw)})`)
+      return handleEvent(eventType, raw)
+    }
   }
 
   async function handleEvent(eventType: string, raw: unknown): Promise<void> {
+    const messageId = inboundMessageId(raw)
     const handler = registry.get(eventType)
-    if (!handler) return
+    if (!handler) {
+      logInfo(`${eventType} ignored — no registered handler`)
+      return
+    }
 
     let delivery: ChannelDelivery | null
     try {
@@ -179,8 +195,15 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
       logError(`failed to handle a ${eventType} event`, err)
       return
     }
-    if (!delivery) return
+    if (!delivery) {
+      // A null delivery is an access-gate drop, a pairing prompt, or an event
+      // with no forwardable content. The specific reason, when there is one,
+      // is logged by the handler through `logDebug`.
+      logInfo(`${eventType} not delivered — gated out, paired, or empty (message ${messageId})`)
+      return
+    }
 
+    logInfo(`${eventType} gated through — delivering (message ${messageId})`)
     try {
       await deps.notify(delivery.content, delivery.meta)
     } catch (err) {
@@ -262,12 +285,22 @@ function toolText(text: string, isError = false): CallToolResult {
     : { content: [{ type: 'text', text }] }
 }
 
+/** Prefix for every channel log line: the fixed tag and an ISO-8601 timestamp. */
+function logPrefix(): string {
+  return `[feishu-channel] ${new Date().toISOString()}`
+}
+
 function defaultLogError(message: string, err?: unknown): void {
   if (err === undefined) {
-    console.error(`[feishu-channel] ${message}`)
+    console.error(`${logPrefix()} ${message}`)
   } else {
-    console.error(`[feishu-channel] ${message}`, err)
+    console.error(`${logPrefix()} ${message}`, err)
   }
+}
+
+/** Default inbound-pipeline logger — a timestamped stderr line, always on. */
+function defaultLogInfo(message: string): void {
+  console.error(`${logPrefix()} ${message}`)
 }
 
 /**
@@ -278,8 +311,20 @@ function defaultLogError(message: string, err?: unknown): void {
  */
 function defaultLogDebug(message: string): void {
   if (process.env.FEISHU_CHANNEL_DEBUG) {
-    console.error(`[feishu-channel] ${message}`)
+    console.error(`${logPrefix()} ${message}`)
   }
+}
+
+/**
+ * Best-effort message_id of a raw inbound event, used to correlate log lines.
+ * Tolerates either an `{ event: ... }` envelope or the event body alone, and
+ * returns a placeholder for an event type that carries no message_id.
+ */
+function inboundMessageId(raw: unknown): string {
+  if (!isRecord(raw)) return '(unknown)'
+  const event = isRecord(raw.event) ? raw.event : raw
+  const message = isRecord(event.message) ? event.message : {}
+  return asString(message.message_id) || '(no message_id)'
 }
 
 /** Guidance injected into Claude's system prompt for this channel. */
@@ -361,14 +406,28 @@ async function main(): Promise<void> {
 
   const base = stateDir()
   const credentials = loadCredentials(envFile(base))
-  const transport = createFeishuTransport(credentials)
+  const transport = createFeishuTransport(credentials, lockFile(base))
   const server = createMcpServer()
 
   const core = createChannelCore({
     transport,
     accessFile: accessFile(base),
     notify: (content, meta) => {
-      void server.notification(channelNotification(content, meta))
+      // `server.notification` is fire-and-forget; wrap it so a synchronous
+      // throw or an async rejection surfaces on the log instead of vanishing,
+      // and trace each notification by message_id.
+      const messageId = meta.message_id ?? '(no message_id)'
+      defaultLogInfo(`notifying the Claude session of message ${messageId}`)
+      try {
+        server
+          .notification(channelNotification(content, meta))
+          .then(() => defaultLogInfo(`notification delivered for message ${messageId}`))
+          .catch((err) =>
+            defaultLogError(`notification send failed for message ${messageId}`, err),
+          )
+      } catch (err) {
+        defaultLogError(`notification send threw for message ${messageId}`, err)
+      }
     },
   })
 
@@ -380,6 +439,9 @@ async function main(): Promise<void> {
   shutdown.register('feishu-transport', () => transport.close())
   shutdown.register('mcp-server', () => server.close())
   shutdown.watch(server)
+  // Backstop for a parent that goes away without closing the MCP stdio
+  // connection: a server orphaned to init keeps a Feishu connection slot.
+  shutdown.watchParent()
 
   await server.connect(new StdioServerTransport())
   await transport.start(core.routes)

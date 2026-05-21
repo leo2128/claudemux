@@ -37,11 +37,26 @@ export interface ShutdownDeps {
   clearTimer: (handle: unknown) => void
 }
 
+/** External effects the parent-death watchdog needs, injectable for tests. */
+export interface ParentWatchDeps {
+  /** This process's current parent PID. */
+  getParentPid: () => number
+  /** Schedule a repeating poll. The handle is not retained — once the parent
+   *  is gone the process exits, so the poll never needs cancelling. */
+  schedule: (fn: () => void, ms: number) => void
+}
+
 /** Signals that should drive a graceful shutdown. */
 const SHUTDOWN_SIGNALS: readonly string[] = ['SIGTERM', 'SIGINT']
 
 /** Default cap on how long graceful cleanup may run before a forced exit. */
 const DEFAULT_FORCE_EXIT_MS = 10_000
+
+/** How often the parent-death watchdog samples this process's parent PID. */
+const PARENT_POLL_MS = 10_000
+
+/** PID a process is re-parented to once its real parent exits — `init`/`launchd`. */
+const ORPHAN_PARENT_PID = 1
 
 function defaultLogError(message: string, err?: unknown): void {
   if (err === undefined) console.error(message)
@@ -101,6 +116,31 @@ export class ShutdownCoordinator {
       previous?.()
       void this.shutdown(0)
     }
+  }
+
+  /**
+   * Trigger a shutdown once this process is orphaned. When a process's parent
+   * exits, the OS re-parents it to PID 1 (`init` / `launchd`); the watchdog
+   * polls for that and shuts down when it happens.
+   *
+   * This is the backstop for the case the stdio-close path misses: a Claude
+   * Code parent that goes away without the MCP server's stdin reaching EOF
+   * (an indirect process tree, a hard kill). Without it the server keeps
+   * running orphaned, holding its Feishu connection slot — exactly the leak
+   * the single-instance lock then has to work around.
+   */
+  watchParent(deps: Partial<ParentWatchDeps> = {}): void {
+    const getParentPid = deps.getParentPid ?? (() => process.ppid)
+    const schedule =
+      deps.schedule ??
+      ((fn, ms) => {
+        const handle = setInterval(fn, ms)
+        // The poll must not by itself keep the event loop alive.
+        ;(handle as { unref?: () => void }).unref?.()
+      })
+    schedule(() => {
+      if (getParentPid() === ORPHAN_PARENT_PID) void this.shutdown(0)
+    }, PARENT_POLL_MS)
   }
 
   /** True once a shutdown has been triggered — lets callers skip duplicated work. */

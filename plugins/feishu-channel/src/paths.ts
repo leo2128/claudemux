@@ -27,3 +27,8 @@ export function accessFile(base: string = stateDir()): string {
 export function envFile(base: string = stateDir()): string {
   return join(base, '.env')
 }
+
+/** connection.lock — the single-instance lock for the inbound WebSocket. */
+export function lockFile(base: string = stateDir()): string {
+  return join(base, 'connection.lock')
+}

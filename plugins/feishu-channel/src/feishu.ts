@@ -11,6 +11,10 @@
  * with the SDK's event dispatcher; decoding a specific event's payload is the
  * job of that event's handler, not this module. Adding a new event type to
  * the channel therefore never touches this file.
+ *
+ * Only one server process per machine opens the inbound WebSocket. `start`
+ * acquires a single-instance lock (see `./instance-lock`); a process that
+ * loses the lock stands by and polls, so a crashed holder is taken over.
  */
 
 import * as lark from '@larksuiteoapi/node-sdk'
@@ -21,6 +25,7 @@ import {
   reconnectingLogLine,
   startupTimeoutLogLine,
 } from './connection'
+import { acquireInstanceLock, releaseInstanceLock } from './instance-lock'
 
 /** Cap on a single WebSocket handshake before it is aborted into a retry. */
 const WS_HANDSHAKE_TIMEOUT_MS = 15_000
@@ -32,6 +37,31 @@ const WS_HANDSHAKE_TIMEOUT_MS = 15_000
  * loop, so the channel cuts the attempt off.
  */
 const WS_STARTUP_GRACE_MS = 30_000
+
+/**
+ * How often a stood-by process retries the single-instance lock. Sets the
+ * worst-case gap between a holder crashing and a sibling taking over the
+ * inbound connection.
+ */
+const STANDBY_POLL_MS = 30_000
+
+/**
+ * A Lark-SDK logger that writes every line to stderr.
+ *
+ * The MCP stdio transport reserves stdout for the JSON-RPC stream. The SDK's
+ * default logger writes to stdout, which corrupts that stream: the client
+ * rejects the non-JSON lines, and a log line emitted while a notification is
+ * being written can break the notification's frame and drop a real inbound
+ * message. Routing the SDK's logger to stderr keeps stdout exclusively
+ * JSON-RPC, while the SDK's diagnostics stay visible in the server's log.
+ */
+const sdkLogger = {
+  error: (...msg: unknown[]) => console.error('[feishu-sdk]', ...msg),
+  warn: (...msg: unknown[]) => console.error('[feishu-sdk]', ...msg),
+  info: (...msg: unknown[]) => console.error('[feishu-sdk]', ...msg),
+  debug: (...msg: unknown[]) => console.error('[feishu-sdk]', ...msg),
+  trace: (...msg: unknown[]) => console.error('[feishu-sdk]', ...msg),
+}
 
 /** Outcome of an outbound send. */
 export interface FeishuSendResult {
@@ -58,7 +88,11 @@ export interface FeishuTransport {
    * `start` has resolved it (and stays `undefined` if resolution failed).
    */
   readonly botOpenId: string | undefined
-  /** Open the long-lived connection and dispatch inbound events via `routes`. */
+  /**
+   * Take part in the single-instance election. The process that wins the lock
+   * opens the long-lived connection and dispatches inbound events via
+   * `routes`; a process that loses stands by and polls to take over.
+   */
   start(routes: InboundRoutes): Promise<void>
   /**
    * Send a text message into a chat. Routed by `chat_id`, never by a
@@ -89,10 +123,77 @@ export interface FeishuCredentials {
  * This implementation is not unit-tested — it needs a live Feishu app — so the
  * testable logic stays in the pure event handlers.
  */
-export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport {
-  const client = new lark.Client({ appId: creds.appId, appSecret: creds.appSecret })
+export function createFeishuTransport(
+  creds: FeishuCredentials,
+  lockPath: string,
+): FeishuTransport {
+  const client = new lark.Client({
+    appId: creds.appId,
+    appSecret: creds.appSecret,
+    logger: sdkLogger,
+  })
   let wsClient: lark.WSClient | undefined
   let resolvedBotOpenId: string | undefined
+  /** Poll handle while standing by for the lock; `undefined` once primary. */
+  let standbyTimer: ReturnType<typeof setInterval> | undefined
+  /** True once this process holds the single-instance lock. */
+  let holdsLock = false
+
+  /**
+   * Open the inbound WebSocket and dispatch events through `routes`. Called
+   * only by the process holding the single-instance lock — at startup if it
+   * won the lock outright, or later from the standby poll once a previous
+   * holder released or crashed.
+   */
+  async function openInbound(routes: InboundRoutes): Promise<void> {
+    resolvedBotOpenId = await resolveBotOpenId(client)
+    const dispatcher = new lark.EventDispatcher({ logger: sdkLogger }).register(routes)
+
+    // Resolves the first time the connection reaches `ready`; the startup
+    // watchdog below races against it.
+    let markReady: () => void = () => {}
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve
+    })
+
+    const ws = new lark.WSClient({
+      appId: creds.appId,
+      appSecret: creds.appSecret,
+      // Route the SDK's own logging to stderr — see `sdkLogger`.
+      logger: sdkLogger,
+      // Bound a stuck WebSocket handshake so it fails into a retry rather
+      // than holding a stuck DNS / NAT path open indefinitely.
+      handshakeTimeoutMs: WS_HANDSHAKE_TIMEOUT_MS,
+      // autoReconnect stays on: an established connection that drops should
+      // self-heal. The callbacks make every step of that loop visible, so a
+      // failing connection is observable instead of a silent retry loop.
+      autoReconnect: true,
+      onReady: () => {
+        logConnection('Feishu WebSocket connection is ready')
+        markReady()
+      },
+      onReconnecting: () => logConnection(reconnectingLogLine()),
+      onReconnected: () => logConnection(reconnectedLogLine()),
+      onError: (err) => logConnection(connectionErrorLogLine(err)),
+    })
+    wsClient = ws
+
+    void ws.start({ eventDispatcher: dispatcher }).catch((err: unknown) => {
+      logConnection(connectionErrorLogLine(err))
+    })
+
+    // The SDK retries pullConnectConfig with no delay until it first
+    // succeeds — it has no server-provided reconnect interval yet — so a
+    // Feishu that is unreachable at startup spins a tight retry loop.
+    // Give the initial connection a grace window; if it is still not up,
+    // stop it so the loop does not run unbounded and unobserved.
+    const cameUp = await raceConnectionReady(ready)
+    if (!cameUp) {
+      const gaveUp = ws.getConnectionStatus().state === 'failed'
+      logConnection(startupTimeoutLogLine(WS_STARTUP_GRACE_MS, gaveUp))
+      ws.close()
+    }
+  }
 
   return {
     get botOpenId(): string | undefined {
@@ -100,48 +201,31 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
     },
 
     async start(routes: InboundRoutes): Promise<void> {
-      resolvedBotOpenId = await resolveBotOpenId(client)
-      const dispatcher = new lark.EventDispatcher({}).register(routes)
-
-      // Resolves the first time the connection reaches `ready`; the startup
-      // watchdog below races against it.
-      let markReady: () => void = () => {}
-      const ready = new Promise<void>((resolve) => {
-        markReady = resolve
-      })
-
-      const ws = new lark.WSClient({
-        appId: creds.appId,
-        appSecret: creds.appSecret,
-        // Bound a stuck WebSocket handshake so it fails into a retry rather
-        // than holding a stuck DNS / NAT path open indefinitely.
-        handshakeTimeoutMs: WS_HANDSHAKE_TIMEOUT_MS,
-        // autoReconnect stays on: an established connection that drops should
-        // self-heal. The callbacks make every step of that loop visible, so a
-        // failing connection is observable instead of a silent retry loop.
-        autoReconnect: true,
-        onReady: () => markReady(),
-        onReconnecting: () => logConnection(reconnectingLogLine()),
-        onReconnected: () => logConnection(reconnectedLogLine()),
-        onError: (err) => logConnection(connectionErrorLogLine(err)),
-      })
-      wsClient = ws
-
-      void ws.start({ eventDispatcher: dispatcher }).catch((err: unknown) => {
-        logConnection(connectionErrorLogLine(err))
-      })
-
-      // The SDK retries pullConnectConfig with no delay until it first
-      // succeeds — it has no server-provided reconnect interval yet — so a
-      // Feishu that is unreachable at startup spins a tight retry loop.
-      // Give the initial connection a grace window; if it is still not up,
-      // stop it so the loop does not run unbounded and unobserved.
-      const cameUp = await raceConnectionReady(ready)
-      if (!cameUp) {
-        const gaveUp = ws.getConnectionStatus().state === 'failed'
-        logConnection(startupTimeoutLogLine(WS_STARTUP_GRACE_MS, gaveUp))
-        ws.close()
+      // Exactly one process per machine opens the inbound WebSocket. The lock
+      // holder connects; every other instance stands by and polls, so a
+      // crashed holder is taken over rather than leaving the channel dark.
+      if (acquireInstanceLock(lockPath).acquired) {
+        holdsLock = true
+        logConnection('single-instance lock acquired — opening the inbound connection')
+        await openInbound(routes)
+        return
       }
+
+      logConnection(
+        'another channel instance holds the inbound connection — standing by as secondary',
+      )
+      standbyTimer = setInterval(() => {
+        if (!acquireInstanceLock(lockPath).acquired) return
+        holdsLock = true
+        if (standbyTimer) {
+          clearInterval(standbyTimer)
+          standbyTimer = undefined
+        }
+        logConnection('single-instance lock taken over — opening the inbound connection')
+        void openInbound(routes)
+      }, STANDBY_POLL_MS)
+      // The poll must not by itself keep the process alive.
+      ;(standbyTimer as { unref?: () => void }).unref?.()
     },
 
     async sendText(chatId: string, text: string): Promise<FeishuSendResult> {
@@ -167,6 +251,10 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
     },
 
     async close(): Promise<void> {
+      if (standbyTimer) {
+        clearInterval(standbyTimer)
+        standbyTimer = undefined
+      }
       try {
         wsClient?.close()
       } catch (err) {
@@ -175,6 +263,14 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
         console.error('[feishu-channel] error while closing the Feishu WebSocket:', err)
       }
       wsClient = undefined
+      // Release the single-instance lock so a standing-by sibling can take
+      // over. `releaseInstanceLock` removes the file only when this process
+      // is the recorded holder, so a secondary calling `close()` cannot
+      // disturb the real holder's lock.
+      if (holdsLock) {
+        releaseInstanceLock(lockPath)
+        holdsLock = false
+      }
     },
   }
 }
@@ -231,9 +327,9 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** Write a connection-lifecycle line to the channel's stderr log. */
+/** Write a timestamped connection-lifecycle line to the channel's stderr log. */
 function logConnection(line: string): void {
-  console.error(`[feishu-channel] ${line}`)
+  console.error(`[feishu-channel] ${new Date().toISOString()} ${line}`)
 }
 
 /**

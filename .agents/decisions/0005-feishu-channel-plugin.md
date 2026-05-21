@@ -1,6 +1,6 @@
 # 0005 — Feishu channel as a separate TypeScript+Bun plugin
 
-- **Status:** In progress (branch `feishu-channel-plugin`, not yet merged to `main`)
+- **Status:** Accepted
 - **Date:** 2026-05
 - **Affects:** repo layout, `marketplace.json`, the new `plugins/feishu-channel/`
 
@@ -46,16 +46,15 @@ Build the Feishu channel as a **separate plugin in the same repository**.
 - The repo now hosts two plugins and a second language/runtime. Bun is
   required for `feishu-channel` development and is not a claudemux
   dependency.
-- CI (`ci.yml`) covers only the claudemux plugin — shellcheck + bats. The
-  `feishu-channel` `bun test` suite is **not yet wired into CI**; run it
-  manually until CI is extended.
-- This plugin is mid-build on branch `feishu-channel-plugin`. Until that
-  branch merges, `plugins/feishu-channel/` does not exist on `main`, and
+- CI (`ci.yml`) runs the `feishu-channel` `bun test` suite and type-check in
+  a dedicated `feishu-channel` job, separate from the claudemux shellcheck +
+  bats job.
+- `plugins/feishu-channel/` is the repo's second plugin on `main`, with its
+  own `version` and CI job;
   [components/feishu-channel.md](/.agents/components/feishu-channel.md)
-  describes intent that must be re-verified against the merged code.
+  documents the merged plugin.
 
 ## References
 
-- Branch `feishu-channel-plugin`, commits `31cc87e` (scaffold) through
-  `7c4b3d1` (inbound content parsing).
+- Merged to `main` from the `feishu-channel-plugin` branch (PR #10).
 - [components/feishu-channel.md](/.agents/components/feishu-channel.md).

@@ -1,6 +1,6 @@
 # 0006 — Feishu channel: event registry and core design choices
 
-- **Status:** In progress (branch `feishu-channel-plugin`, not yet merged to `main`)
+- **Status:** Accepted
 - **Date:** 2026-05-21
 - **Affects:** `plugins/feishu-channel/`
 
@@ -70,14 +70,12 @@ the event in their app console before relying on it.
 - The plugin ships two skills — `configure` and `access` — and its `bun
   test` suite runs in CI under the `feishu-channel` job (see
   [components/repo-tooling.md](/.agents/components/repo-tooling.md)).
-- This plugin is still mid-build on branch `feishu-channel-plugin`. Until it
-  merges, [components/feishu-channel.md](/.agents/components/feishu-channel.md)
-  describes intent that must be re-verified against the merged code.
 
 ## References
 
-- Branch `feishu-channel-plugin`: the event registry (`src/events.ts`), the
-  `im.message.receive_v1` and `drive.notice.comment_add_v1` handlers under
-  `src/handlers/`, and the `configure` / `access` skills.
+- Merged to `main` from the `feishu-channel-plugin` branch (PR #10): the
+  event registry (`src/events.ts`), the `im.message.receive_v1` and
+  `drive.notice.comment_add_v1` handlers under `src/handlers/`, and the
+  `configure` / `access` skills.
 - [components/feishu-channel.md](/.agents/components/feishu-channel.md),
   [decisions/0005-feishu-channel-plugin.md](/.agents/decisions/0005-feishu-channel-plugin.md).

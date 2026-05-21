@@ -1,14 +1,6 @@
-# Component: the `feishu-channel` plugin (WIP)
+# Component: the `feishu-channel` plugin
 
-> **Status: in progress.** This plugin is being built on branch
-> `feishu-channel-plugin` and is **not yet merged to `main`**. Until it
-> merges, `plugins/feishu-channel/` does not exist on `main`. This doc
-> records the design as built on the branch; re-verify it against the live
-> plugin once the branch lands. Rationale is in
-> [decision 0005](/.agents/decisions/0005-feishu-channel-plugin.md) and
-> [decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md).
-
-`feishu-channel` is a second plugin shipped from this repo: a Claude Code
+`feishu-channel` is the repo's **second plugin**: a Claude Code
 **channel** for Feishu (飞书). It bridges Feishu events into a running Claude
 Code session and replies back, over a long-lived WebSocket — so no public
 webhook URL is needed.
@@ -54,7 +46,7 @@ Feishu event type is one `EventHandler` (`src/events.ts`) that declares its
 `event_type` and maps a raw payload to a channel delivery. Adding a new event
 type is **one handler module under `src/handlers/` plus one registration
 line** in `createChannelCore` — the core pipeline and the transport do not
-change. Two handlers exist on the branch:
+change. Two handlers exist:
 
 - `im.message.receive_v1` — inbound chat messages (`src/handlers/im-message.ts`).
 - `drive.notice.comment_add_v1` — document comments and replies
@@ -63,7 +55,7 @@ change. Two handlers exist on the branch:
 See [decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md)
 for the rationale.
 
-## Layout (on the `feishu-channel-plugin` branch)
+## Layout
 
 | Path | Holds |
 |---|---|

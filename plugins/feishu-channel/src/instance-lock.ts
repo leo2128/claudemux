@@ -19,6 +19,9 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { probeProcess } from './holder-probe'
+import type { ProcessProbe } from './holder-probe'
+
 /** Injectable environment for the lock — real values in production, fakes in tests. */
 export interface InstanceLockDeps {
   /** The PID this process claims the lock with. */
@@ -131,4 +134,156 @@ function removeIfPresent(path: string): void {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
   }
+}
+
+/**
+ * The extra capabilities `acquireInstanceLockWithEviction` needs on top of a
+ * plain acquire: this server's own version directory, a way to inspect the
+ * lock holder, a way to signal it, and a wait between a signal and the
+ * liveness re-check. Every effect is injectable so the eviction decision is
+ * testable without real processes.
+ */
+export interface EvictionDeps extends InstanceLockDeps {
+  /**
+   * This server's own version directory — the cwd it was launched in. A
+   * holder running from a different directory is a different plugin version.
+   */
+  selfDir: string
+  /** Inspect a live PID; `undefined` when it cannot be inspected. */
+  probe: (pid: number) => ProcessProbe | undefined
+  /** Send `signal` to `pid`; a failure (already gone, not permitted) is swallowed. */
+  signal: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
+  /** Resolve after `ms` — the gap between a termination signal and the re-check. */
+  sleep: (ms: number) => Promise<void>
+}
+
+/** Outcome of `acquireInstanceLockWithEviction`: an `AcquireResult` plus whether a holder was evicted. */
+export interface EvictionResult extends AcquireResult {
+  /** True when an older channel server was terminated to take the lock. */
+  evicted: boolean
+}
+
+/** The production eviction deps — real PID, liveness probe, process inspection, and signalling. */
+export function defaultEvictionDeps(): EvictionDeps {
+  return {
+    ...defaultLockDeps(),
+    selfDir: process.cwd(),
+    probe: probeProcess,
+    signal: (pid, sig) => {
+      try {
+        process.kill(pid, sig)
+      } catch {
+        // The holder is already gone, or this user may not signal it — either
+        // way there is nothing more to do, and the post-signal liveness check
+        // decides whether the lock can be reclaimed.
+      }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }
+}
+
+/** Grace period after SIGTERM before escalating to SIGKILL. */
+const EVICT_SIGTERM_GRACE_MS = 5_000
+/** Grace period after SIGKILL before the wait gives up. */
+const EVICT_SIGKILL_GRACE_MS = 2_000
+/** How often the post-signal wait re-checks whether the holder has exited. */
+const EVICT_POLL_MS = 200
+
+/**
+ * Decide whether the lock holder is a channel server this process should
+ * evict. It is — and only is — when the holder is positively identified as a
+ * feishu-channel `server.ts` process whose version directory differs from
+ * this server's own. A probe that could not read the holder, a holder that is
+ * not a channel server, and a holder of the *same* version (a legitimate
+ * same-build peer) are all left running. Any uncertainty resolves to "do not
+ * evict", so an unrelated process can never be killed.
+ */
+export function holderIsEvictable(
+  probe: ProcessProbe | undefined,
+  selfDir: string,
+): boolean {
+  if (!probe) return false
+  const holderDir = channelServerVersionDir(probe)
+  if (holderDir === undefined) return false
+  return trimSlash(holderDir) !== trimSlash(selfDir)
+}
+
+/**
+ * The version directory of a feishu-channel channel server, or `undefined`
+ * when the probe is not such a server. A channel server runs the `server.ts`
+ * entry point with its cwd set to a plugin-cache version directory —
+ * `.../feishu-channel/<version>`. Both facts must hold: the pair is specific
+ * enough that no unrelated process matches it.
+ */
+function channelServerVersionDir(probe: ProcessProbe): string | undefined {
+  if (!probe.command.includes('server.ts')) return undefined
+  return /(?:^|\/)feishu-channel\/[^/]+$/.test(probe.cwd) ? probe.cwd : undefined
+}
+
+/** Drop a single trailing slash so two directory paths compare cleanly. */
+function trimSlash(path: string): string {
+  return path.endsWith('/') ? path.slice(0, -1) : path
+}
+
+/**
+ * Acquire the single-instance lock, evicting an older channel server that
+ * holds it.
+ *
+ * A plain acquire is tried first. When it loses to a live holder, the holder
+ * is inspected: if it is a feishu-channel channel server of a *different*
+ * version (see `holderIsEvictable`), it is terminated — SIGTERM first so it
+ * closes its Feishu connection and releases the lockfile itself, escalating
+ * to SIGKILL only if it overruns the grace window — and the lock is then
+ * reclaimed. A holder that cannot be confirmed as a different-version channel
+ * server is left untouched, and this call reports the lock as not acquired,
+ * exactly as a plain acquire would.
+ *
+ * This is the startup path. The standby poll deliberately keeps using the
+ * plain `acquireInstanceLock`: eviction belongs to the moment a new server
+ * launches, and repeating it on every poll could let two servers of different
+ * versions evict each other in a loop.
+ */
+export async function acquireInstanceLockWithEviction(
+  path: string,
+  deps: EvictionDeps = defaultEvictionDeps(),
+): Promise<EvictionResult> {
+  const first = acquireInstanceLock(path, deps)
+  if (first.acquired) return { ...first, evicted: false }
+
+  const holderPid = first.holderPid
+  if (holderPid === undefined || holderPid === deps.pid) {
+    return { ...first, evicted: false }
+  }
+
+  if (!holderIsEvictable(deps.probe(holderPid), deps.selfDir)) {
+    return { ...first, evicted: false }
+  }
+
+  deps.signal(holderPid, 'SIGTERM')
+  if (!(await waitForExit(holderPid, deps, EVICT_SIGTERM_GRACE_MS))) {
+    deps.signal(holderPid, 'SIGKILL')
+    await waitForExit(holderPid, deps, EVICT_SIGKILL_GRACE_MS)
+  }
+
+  // The holder either released the lockfile on its way out or was killed
+  // leaving a stale pidfile; either way its PID is now dead, so the reclaim
+  // path inside `acquireInstanceLock` takes the lock.
+  const second = acquireInstanceLock(path, deps)
+  return { ...second, evicted: true }
+}
+
+/**
+ * Poll the holder's liveness until it has exited or `budgetMs` elapses.
+ * Resolves `true` once the holder is gone, `false` if it outlives the budget.
+ */
+async function waitForExit(
+  pid: number,
+  deps: EvictionDeps,
+  budgetMs: number,
+): Promise<boolean> {
+  for (let waited = 0; waited < budgetMs; waited += EVICT_POLL_MS) {
+    if (!deps.isProcessAlive(pid)) return true
+    await deps.sleep(EVICT_POLL_MS)
+  }
+  return !deps.isProcessAlive(pid)
 }

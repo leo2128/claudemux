@@ -25,7 +25,11 @@ import {
   reconnectingLogLine,
   startupTimeoutLogLine,
 } from './connection'
-import { acquireInstanceLock, releaseInstanceLock } from './instance-lock'
+import {
+  acquireInstanceLock,
+  acquireInstanceLockWithEviction,
+  releaseInstanceLock,
+} from './instance-lock'
 
 /** Cap on a single WebSocket handshake before it is aborted into a retry. */
 const WS_HANDSHAKE_TIMEOUT_MS = 15_000
@@ -296,12 +300,20 @@ export function createFeishuTransport(
     },
 
     async start(routes: InboundRoutes): Promise<void> {
-      // Exactly one process per machine opens the inbound WebSocket. The lock
-      // holder connects; every other instance stands by and polls, so a
-      // crashed holder is taken over rather than leaving the channel dark.
-      if (acquireInstanceLock(lockPath).acquired) {
+      // Exactly one process per machine opens the inbound WebSocket. A freshly
+      // started server takes the lock when it is free, and evicts an older
+      // channel server still holding it from a previous plugin version — so a
+      // plugin upgrade takes effect at once instead of waiting out the old
+      // server. Every other instance stands by and polls, so a crashed holder
+      // is taken over rather than leaving the channel dark.
+      const acquired = await acquireInstanceLockWithEviction(lockPath)
+      if (acquired.acquired) {
         holdsLock = true
-        logConnection('single-instance lock acquired — opening the inbound connection')
+        logConnection(
+          acquired.evicted
+            ? 'evicted an older channel server and took over the inbound connection'
+            : 'single-instance lock acquired — opening the inbound connection',
+        )
         await openInbound(routes)
         return
       }

@@ -44,12 +44,14 @@ Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
 6. **Publish a release** of the app so the bot and its permissions take effect.
 7. From the app's credentials page, copy the **App ID** and **App Secret**.
 
-> **Note on the document-comment event.** The `drive.notice.comment_add_v1`
-> identifier is corroborated by independent third-party Feishu integrations,
-> but is not confirmed against Feishu's own published event list (which is
-> not machine-readable). Confirm the event appears in your app console's
-> event picker before relying on it. If it is unavailable, the channel still
-> works for chat messages — only document-comment delivery is affected.
+> **Note on the document-comment event.** A `drive.notice.comment_add_v1`
+> payload carries only the comment's identifiers — not its text, nor the
+> document's title. The channel fetches both from Feishu to render a usable
+> notification, so the bot needs the document-comment and document-metadata
+> **read** scopes (step 5 above). Without them, a comment is still delivered,
+> but its text and title are left as a placeholder. If your app cannot
+> subscribe to this event at all, the channel still works for chat messages —
+> only document-comment delivery is affected.
 
 ### 2. Save the credentials
 
@@ -125,8 +127,11 @@ attribute says which kind of event it is:
 - `kind="message"` — a chat message. Carries `chat_id`, `message_id`,
   `chat_type` (`p2p` or `group`), and `sender_id`.
 - `kind="doc_comment"` — a new comment or reply on a Feishu document. Carries
-  `file_token`, `file_type`, `comment_id`, an optional `reply_id`, and
-  `notice_type` (`add_comment` or `add_reply`).
+  `file_token`, `file_type`, `comment_id`, an optional `reply_id`,
+  `notice_type` (`add_comment` or `add_reply`), `commenter_id`, `mentioned_bot`,
+  and `doc_url` when the document link could be resolved. The block body
+  carries the comment text and the document title — both fetched from Feishu,
+  since a comment event payload itself carries only the comment's identifiers.
 
 New event types are added by registering one more handler — the channel is not
 hardcoded to a fixed set of events.

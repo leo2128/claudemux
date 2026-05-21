@@ -2,190 +2,210 @@
  * The `drive.notice.comment_add_v1` handler — new comments and replies on
  * Feishu documents.
  *
- * Payload caveat. Feishu's event-list page is JavaScript-rendered and could
- * not be read directly, so this event_type and its field names are *not*
- * verified against Feishu's own reference docs — they are corroborated by
- * two independent third-party integrations. The decode below is therefore
- * deliberately tolerant: it tries several plausible key paths for every
- * field and never throws on a missing or differently-shaped one. Before
- * enabling this event, confirm in the Feishu app console (Events &
- * Callbacks) that `drive.notice.comment_add_v1` is listed and subscribable;
- * if the live payload differs from the shape assumed here, the handler logs
- * an unrecognized-payload note rather than crashing.
+ * The event payload identifies a comment (file token, comment id, the
+ * commenter's open_id) but carries neither the comment text nor the document
+ * title. So the handler works in two steps:
+ *
+ *  1. Decode the payload with the Feishu SDK's own `normalizeComment`. The
+ *     SDK is the authoritative decoder for this event — it tolerates both the
+ *     flat and the `notice_meta`-nested payload variants Feishu sends, which
+ *     a hand-written path table is bound to drift from.
+ *  2. Enrich it: fetch the comment's text and the document's title/URL
+ *     through the transport, so the delivered `<channel>` block is something
+ *     Claude can actually act on. Enrichment is best-effort — a fetch failure
+ *     degrades the notification, it never drops a recognizable event.
+ *
+ * Whether the event is a new comment or a reply is read from the presence of
+ * a `reply_id`, which is the discriminator the SDK itself uses.
  */
 
+import * as lark from '@larksuiteoapi/node-sdk'
+
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
+import type { FeishuDocComment, FeishuDocCommentReply, FeishuDocMeta } from '../feishu'
 import { asString, isRecord } from '../json'
 
 /** The Feishu event_type this handler subscribes to. */
 export const DOC_COMMENT_EVENT_TYPE = 'drive.notice.comment_add_v1'
 
-/** A normalized document-comment event. Every field is best-effort. */
+/** A normalized document-comment event — the identifying fields the payload carries. */
 export interface FeishuCommentEvent {
-  /** `add_comment` (new comment) or `add_reply` (reply in a thread); `''` if absent. */
-  noticeType: string
   /** Token of the document the comment is on. */
   fileToken: string
   /** Document type — `doc` / `docx` / `sheet` / `bitable` / ... */
   fileType: string
-  /** Document title, when the payload carried one. */
-  title: string
-  /** open_id of the commenter, when resolvable. */
-  commenterId: string
   /** Comment id. */
   commentId: string
-  /** Reply id — present only for an `add_reply`. */
+  /** Reply id — set only when the event is a reply within a thread, `''` otherwise. */
   replyId: string
-  /** Best-effort plain text of the comment. */
-  text: string
+  /** open_id of the commenter. */
+  commenterId: string
+  /** True when the comment @-mentions the bot. */
+  mentionedBot: boolean
 }
 
 /**
  * Build the `drive.notice.comment_add_v1` event handler: decode the comment
- * payload, drop the bot's own comments and unreadable payloads, and map the
- * rest to a channel delivery.
+ * payload, drop the bot's own comments and undecodable payloads, fetch the
+ * comment text and document title, and map the rest to a channel delivery.
  */
 export function createDocCommentHandler(): EventHandler {
   return {
     eventType: DOC_COMMENT_EVENT_TYPE,
     async handle(raw: unknown, ctx: HandlerContext): Promise<ChannelDelivery | null> {
       const event = normalizeCommentEvent(raw)
-      if (!event) return null
-
-      // A payload with no recognizable field is a shape mismatch, not a
-      // valid comment — drop it, but log so the operator sees the assumed
-      // payload shape no longer holds.
-      if (!event.fileToken && !event.commentId && !event.text) {
+      if (!event) {
+        // The SDK decoder could not resolve a file token, comment id, and
+        // commenter — the payload shape no longer matches what the SDK
+        // expects. Log it so the operator sees the assumption broke.
         ctx.logError(
-          `${DOC_COMMENT_EVENT_TYPE}: event payload had no recognizable fields — ` +
-            'the comment-event shape may differ from this handler’s assumptions',
+          `${DOC_COMMENT_EVENT_TYPE}: could not decode the comment event — ` +
+            'the payload carried no resolvable file token, comment id, or commenter',
         )
         return null
       }
 
-      // Skip the bot's own comments so a future comment-reply tool cannot
-      // feed the channel its own output. Fail open: an unresolved commenter
-      // is delivered rather than dropped.
-      if (
-        event.commenterId &&
-        ctx.transport.botOpenId &&
-        event.commenterId === ctx.transport.botOpenId
-      ) {
+      // Skip the bot's own comments so a comment the bot itself posts cannot
+      // feed the channel its own output.
+      if (ctx.transport.botOpenId && event.commenterId === ctx.transport.botOpenId) {
+        ctx.logDebug(`dropped the bot's own comment on ${event.fileToken}`)
         return null
       }
 
-      return { content: describeComment(event), meta: buildMeta(event) }
+      // The payload has neither the comment text nor the document title.
+      // Fetch both — independently, and best-effort: a failure degrades the
+      // notification rather than dropping the event.
+      const [comment, docMeta] = await Promise.all([
+        ctx.transport.fetchDocComment(event.fileToken, event.fileType, event.commentId),
+        ctx.transport.fetchDocMeta(event.fileToken, event.fileType),
+      ])
+      if (!comment) {
+        ctx.logDebug(
+          `delivering comment ${event.commentId} on ${event.fileToken} without its text — ` +
+            'the text could not be fetched',
+        )
+      }
+
+      return {
+        content: describeComment(event, comment, docMeta),
+        meta: buildMeta(event, docMeta),
+      }
     },
   }
 }
 
 /**
  * Reshape a raw `drive.notice.comment_add_v1` payload into a
- * `FeishuCommentEvent`. Returns `null` only for a non-object input; any
- * object yields an event whose fields are filled best-effort. Pure: no I/O,
- * never throws. Tolerates either the event body alone or a full
- * `{ event: ... }` envelope.
+ * `FeishuCommentEvent`, using the Feishu SDK's `normalizeComment` as the
+ * decoder. Returns `null` for a non-object input or a payload the SDK cannot
+ * resolve a file token, file type, comment id, and commenter from. Pure: no
+ * I/O, never throws. Tolerates either the event body alone (what the SDK's
+ * `EventDispatcher` delivers) or a full `{ event: ... }` envelope.
  */
 export function normalizeCommentEvent(raw: unknown): FeishuCommentEvent | null {
   if (!isRecord(raw)) return null
   const event = isRecord(raw.event) ? raw.event : raw
 
+  let decoded: lark.CommentEvent | null
+  try {
+    decoded = lark.normalizeComment(event as lark.RawCommentEvent)
+  } catch {
+    // `normalizeComment` is pure but not contractually total — guard it so a
+    // surprising input shape is a dropped event, not a thrown one.
+    return null
+  }
+  if (!decoded) return null
+
   return {
-    noticeType: deepString(event, [['notice_type'], ['comment', 'notice_type']]),
-    fileToken: deepString(event, [
-      ['file_token'],
-      ['token'],
-      ['file', 'token'],
-      ['file', 'file_token'],
-    ]),
-    fileType: deepString(event, [['file_type'], ['file', 'type'], ['file', 'file_type']]),
-    title: deepString(event, [['title'], ['file_name'], ['file', 'title'], ['file', 'name']]),
-    commenterId: deepString(event, [
-      ['operator_id', 'open_id'],
-      ['operator', 'open_id'],
-      ['user_id', 'open_id'],
-      ['commenter', 'open_id'],
-      ['operator_id'],
-      ['user_id'],
-    ]),
-    commentId: deepString(event, [['comment_id'], ['comment', 'comment_id'], ['comment', 'id']]),
-    replyId: deepString(event, [
-      ['reply_id'],
-      ['comment', 'reply_id'],
-      ['reply', 'reply_id'],
-      ['reply', 'id'],
-    ]),
-    text: extractCommentText(event),
+    fileToken: decoded.fileToken,
+    fileType: decoded.fileType,
+    commentId: decoded.commentId,
+    replyId: decoded.replyId ?? '',
+    commenterId: decoded.operator.openId,
+    mentionedBot: decoded.mentionedBot,
   }
 }
 
 /** A human-readable summary of the comment, for the `<channel>` block body. */
-function describeComment(event: FeishuCommentEvent): string {
-  const who = event.commenterId || 'someone'
-  const where = event.title ? `“${event.title}”` : `document ${event.fileToken || '(unknown)'}`
-  const verb =
-    event.noticeType === 'add_reply'
-      ? 'replied in a comment thread on'
-      : 'commented on'
-  const body = event.text || '(no text content)'
-  return `Feishu doc comment — ${who} ${verb} ${where}:\n\n${body}`
-}
+function describeComment(
+  event: FeishuCommentEvent,
+  comment: FeishuDocComment | null,
+  docMeta: FeishuDocMeta | null,
+): string {
+  const verb = event.replyId ? 'replied in a comment thread on' : 'commented on'
+  const lines = [`Feishu doc comment — ${event.commenterId} ${verb} ${describeDoc(event, docMeta)}:`, '']
 
-/** Build the `<channel>` tag attributes for a delivered comment. */
-function buildMeta(event: FeishuCommentEvent): Record<string, string> {
-  // Keys must be alphanumeric-plus-underscore — a hyphen would be dropped.
-  // Empty fields are omitted rather than emitted as blank attributes.
-  const meta: Record<string, string> = { kind: 'doc_comment' }
-  if (event.noticeType) meta.notice_type = event.noticeType
-  if (event.fileToken) meta.file_token = event.fileToken
-  if (event.fileType) meta.file_type = event.fileType
-  if (event.commentId) meta.comment_id = event.commentId
-  if (event.replyId) meta.reply_id = event.replyId
-  if (event.commenterId) meta.commenter_id = event.commenterId
-  return meta
-}
-
-/** Walk `path` into `obj`, returning the value found or `undefined`. */
-function deepValue(obj: Record<string, unknown>, path: string[]): unknown {
-  let cur: unknown = obj
-  for (const key of path) {
-    if (!isRecord(cur)) return undefined
-    cur = cur[key]
+  // A local-selection comment is anchored to a quote; show what it points at.
+  if (comment && !comment.isWhole && comment.quote) {
+    lines.push(`On the selected text: “${comment.quote}”`, '')
   }
-  return cur
+
+  lines.push(commentBody(event, comment))
+  return lines.join('\n')
 }
 
-/** First non-empty string reachable by one of `paths`, or `''`. */
-function deepString(obj: Record<string, unknown>, paths: string[][]): string {
-  for (const path of paths) {
-    const value = deepValue(obj, path)
-    if (typeof value === 'string' && value.length > 0) return value
+/** Name the document a human would recognize: title and link, or the raw token. */
+function describeDoc(event: FeishuCommentEvent, docMeta: FeishuDocMeta | null): string {
+  if (docMeta?.title && docMeta.url) return `“${docMeta.title}” (${docMeta.url})`
+  if (docMeta?.title) return `“${docMeta.title}”`
+  return `document ${event.fileToken} (${event.fileType})`
+}
+
+/** The text of the comment or reply the event is about, or a clear placeholder. */
+function commentBody(event: FeishuCommentEvent, comment: FeishuDocComment | null): string {
+  if (!comment) {
+    return '(comment text unavailable — the channel could not fetch it; read it on the document)'
   }
-  return ''
+  const reply = pickReply(event, comment.replies)
+  if (!reply) return '(the comment carried no readable text)'
+  const text = renderElements(reply.elements).trim()
+  return text || '(the comment carried no readable text)'
 }
 
 /**
- * Best-effort plain text of a comment. The text may arrive as a plain string
- * or as Feishu's rich-content `elements[]` array; both are handled, and an
- * unrecognized shape yields `''`.
+ * Pick the reply the event is about: the matching reply for an `add_reply`,
+ * or the thread's first reply — which is how Feishu models a comment's own
+ * text — for a new comment.
  */
-function extractCommentText(event: Record<string, unknown>): string {
-  const plain = deepString(event, [
-    ['content'],
-    ['text'],
-    ['comment', 'content'],
-    ['comment', 'text'],
-  ])
-  if (plain) return plain
-
-  for (const path of [['content', 'elements'], ['comment', 'content', 'elements'], ['elements']]) {
-    const elements = deepValue(event, path)
-    if (Array.isArray(elements)) {
-      const rendered = elements.map(renderElement).join('').trim()
-      if (rendered) return rendered
-    }
+function pickReply(
+  event: FeishuCommentEvent,
+  replies: FeishuDocCommentReply[],
+): FeishuDocCommentReply | undefined {
+  if (replies.length === 0) return undefined
+  if (event.replyId) {
+    const exact = replies.find((reply) => reply.replyId === event.replyId)
+    if (exact) return exact
+    // A long thread can page the new reply off the fetched page; the most
+    // recent reply is the best remaining guess.
+    return replies[replies.length - 1]
   }
-  return ''
+  return replies[0]
+}
+
+/** Build the `<channel>` tag attributes for a delivered comment. */
+function buildMeta(
+  event: FeishuCommentEvent,
+  docMeta: FeishuDocMeta | null,
+): Record<string, string> {
+  // Keys must be alphanumeric-plus-underscore — a hyphen would be dropped.
+  // Empty fields are omitted rather than emitted as blank attributes.
+  const meta: Record<string, string> = {
+    kind: 'doc_comment',
+    notice_type: event.replyId ? 'add_reply' : 'add_comment',
+    file_token: event.fileToken,
+    file_type: event.fileType,
+    comment_id: event.commentId,
+    commenter_id: event.commenterId,
+    mentioned_bot: event.mentionedBot ? 'true' : 'false',
+  }
+  if (event.replyId) meta.reply_id = event.replyId
+  if (docMeta?.url) meta.doc_url = docMeta.url
+  return meta
+}
+
+/** Render a Feishu rich-content `elements[]` array to plain text. */
+function renderElements(elements: unknown[]): string {
+  return elements.map(renderElement).join('')
 }
 
 /** Render one Feishu rich-content element (`text_run` / `docs_link` / `person`). */

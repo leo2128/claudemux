@@ -5,7 +5,7 @@
     "": {
       "name": "claude-channel-feishu",
       "dependencies": {
-        "@larksuiteoapi/node-sdk": "^1.24.0",
+        "@larksuiteoapi/node-sdk": "^1.64.0",
         "@modelcontextprotocol/sdk": "^1.0.0",
       },
       "devDependencies": {

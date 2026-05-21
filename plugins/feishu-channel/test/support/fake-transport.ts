@@ -4,15 +4,28 @@
  * wiring is exercised without a live Feishu connection.
  */
 
-import type { FeishuSendResult, FeishuTransport } from '../../src/feishu'
+import type {
+  FeishuDocComment,
+  FeishuDocMeta,
+  FeishuSendResult,
+  FeishuTransport,
+} from '../../src/feishu'
 
 export class FakeTransport implements FeishuTransport {
   botOpenId: string | undefined
   readonly sent: { chatId: string; text: string }[] = []
   readonly reactions: { messageId: string; emoji: string }[] = []
   readonly edits: { messageId: string; text: string }[] = []
+  /** Records every `fetchDocComment` call. */
+  readonly commentFetches: { fileToken: string; fileType: string; commentId: string }[] = []
+  /** Records every `fetchDocMeta` call. */
+  readonly metaFetches: { fileToken: string; fileType: string }[] = []
   /** When set, the named method throws — used to test outbound failure paths. */
   failOn: 'sendText' | 'addReaction' | 'editText' | undefined
+  /** Canned `fetchDocComment` result; `null` simulates a failed enrichment. */
+  docComment: FeishuDocComment | null = null
+  /** Canned `fetchDocMeta` result; `null` simulates a failed enrichment. */
+  docMeta: FeishuDocMeta | null = null
 
   constructor(botOpenId?: string) {
     this.botOpenId = botOpenId
@@ -34,6 +47,20 @@ export class FakeTransport implements FeishuTransport {
   async editText(messageId: string, text: string): Promise<void> {
     if (this.failOn === 'editText') throw new Error('feishu edit failed')
     this.edits.push({ messageId, text })
+  }
+
+  async fetchDocComment(
+    fileToken: string,
+    fileType: string,
+    commentId: string,
+  ): Promise<FeishuDocComment | null> {
+    this.commentFetches.push({ fileToken, fileType, commentId })
+    return this.docComment
+  }
+
+  async fetchDocMeta(fileToken: string, fileType: string): Promise<FeishuDocMeta | null> {
+    this.metaFetches.push({ fileToken, fileType })
+    return this.docMeta
   }
 
   async close(): Promise<void> {}

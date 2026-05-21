@@ -91,10 +91,14 @@ so it unit-tests without a running server or connection.
   Bun lives at `~/.bun/bin` and is not on `PATH` — invoke it by absolute path.
 - The plugin has its **own** `version` in its own `plugin.json`; the
   claudemux version-bump rule and its pre-commit hook do not apply to it.
-- `drive.notice.comment_add_v1` and its payload shape are corroborated by
-  third-party integrations, **not** confirmed against Feishu's own docs. The
-  handler decodes defensively and never throws; still, confirm the event in
-  the Feishu app console before relying on it.
+- `drive.notice.comment_add_v1` is decoded through the Feishu SDK's own
+  `normalizeComment` — the authoritative payload reference — and the handler
+  fetches the comment text and document title from Feishu, because a comment
+  event payload carries only the comment's identifiers. See
+  [decision 0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md).
+  The bot needs the document-comment and document-metadata read scopes;
+  lacking them, a comment is still delivered, but with its text and title as
+  a placeholder.
 - The channel connects to Feishu **directly**, not through the session's HTTP
   proxy. `.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case)
   in the MCP server's environment, so a proxy set for the Claude Code session

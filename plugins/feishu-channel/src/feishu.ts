@@ -69,6 +69,72 @@ export interface FeishuSendResult {
   messageId?: string
 }
 
+/** One reply within a fetched document-comment thread. */
+export interface FeishuDocCommentReply {
+  /** reply_id of this reply; `''` when Feishu omitted it. */
+  replyId: string
+  /** open_id of the reply's author. */
+  authorId: string
+  /** Raw Feishu rich-content elements of the reply body, rendered by the handler. */
+  elements: unknown[]
+}
+
+/**
+ * A document comment and its reply thread, fetched to enrich a comment event.
+ *
+ * The `drive.notice.comment_add_v1` payload carries only the comment's ids, so
+ * the comment text is fetched separately — this is the fetched result.
+ */
+export interface FeishuDocComment {
+  /** False for a comment anchored to a text selection; `quote` then holds it. */
+  isWhole: boolean
+  /** The selected text a local-selection comment is anchored to; `''` otherwise. */
+  quote: string
+  /** The comment's replies, oldest first. */
+  replies: FeishuDocCommentReply[]
+}
+
+/** A document's human-readable identity, fetched to render a comment event. */
+export interface FeishuDocMeta {
+  /** Document title. */
+  title: string
+  /** Browser URL of the document. */
+  url: string
+}
+
+/** Document types the drive file-comment API serves; others have no comment API. */
+const COMMENT_FILE_TYPES = ['doc', 'docx', 'sheet', 'file'] as const
+type CommentFileType = (typeof COMMENT_FILE_TYPES)[number]
+
+/** Narrow an event's file_type to one the file-comment API accepts, or `undefined`. */
+function asCommentFileType(fileType: string): CommentFileType | undefined {
+  return (COMMENT_FILE_TYPES as readonly string[]).includes(fileType)
+    ? (fileType as CommentFileType)
+    : undefined
+}
+
+/** Document types the drive metadata API serves. */
+const META_DOC_TYPES = [
+  'doc',
+  'docx',
+  'sheet',
+  'bitable',
+  'mindnote',
+  'file',
+  'wiki',
+  'folder',
+  'synced_block',
+  'slides',
+] as const
+type MetaDocType = (typeof META_DOC_TYPES)[number]
+
+/** Narrow an event's file_type to one the metadata API accepts, or `undefined`. */
+function asMetaDocType(fileType: string): MetaDocType | undefined {
+  return (META_DOC_TYPES as readonly string[]).includes(fileType)
+    ? (fileType as MetaDocType)
+    : undefined
+}
+
 /**
  * Inbound event routes: Feishu event_type → callback. The server builds this
  * from the event registry; the transport registers every entry with the
@@ -104,6 +170,24 @@ export interface FeishuTransport {
   addReaction(messageId: string, emoji: string): Promise<void>
   /** Replace the text of a message the bot previously sent. */
   editText(messageId: string, text: string): Promise<void>
+  /**
+   * Fetch one document comment and its reply thread. The comment-add event
+   * payload carries no comment text, so the doc-comment handler calls this to
+   * fill it in. Best-effort: returns `null` for a file type with no comment
+   * API or on any API failure, and never throws — a failure degrades the
+   * notification rather than dropping the event.
+   */
+  fetchDocComment(
+    fileToken: string,
+    fileType: string,
+    commentId: string,
+  ): Promise<FeishuDocComment | null>
+  /**
+   * Fetch a document's title and URL, so a comment notification names the
+   * document a human would recognize. Best-effort: returns `null` for a file
+   * type with no metadata API or on any API failure, and never throws.
+   */
+  fetchDocMeta(fileToken: string, fileType: string): Promise<FeishuDocMeta | null>
   /** Close the connection and release every resource it holds. */
   close(): Promise<void>
 }
@@ -248,6 +332,57 @@ export function createFeishuTransport(
         path: { message_id: messageId },
         data: { msg_type: 'text', content: JSON.stringify({ text }) },
       })
+    },
+
+    async fetchDocComment(
+      fileToken: string,
+      fileType: string,
+      commentId: string,
+    ): Promise<FeishuDocComment | null> {
+      // The file-comment API only serves a subset of document types; for any
+      // other type there is no comment to fetch, so skip the call outright.
+      const ct = asCommentFileType(fileType)
+      if (!ct) return null
+      try {
+        const res = await client.drive.fileComment.get({
+          path: { file_token: fileToken, comment_id: commentId },
+          // Resolve reply authors to open_id, so they match the open_id the
+          // event carries and the sender_id of chat messages.
+          params: { file_type: ct, user_id_type: 'open_id' },
+        })
+        const data = res.data
+        if (!data) return null
+        const replies: FeishuDocCommentReply[] = (data.reply_list?.replies ?? []).map(
+          (reply) => ({
+            replyId: reply.reply_id ?? '',
+            authorId: reply.user_id ?? '',
+            elements: reply.content?.elements ?? [],
+          }),
+        )
+        return { isWhole: data.is_whole ?? true, quote: data.quote ?? '', replies }
+      } catch (err) {
+        console.error(
+          `[feishu-channel] could not fetch comment ${commentId} on ${fileToken}:`,
+          err,
+        )
+        return null
+      }
+    },
+
+    async fetchDocMeta(fileToken: string, fileType: string): Promise<FeishuDocMeta | null> {
+      const dt = asMetaDocType(fileType)
+      if (!dt) return null
+      try {
+        const res = await client.drive.meta.batchQuery({
+          data: { request_docs: [{ doc_token: fileToken, doc_type: dt }], with_url: true },
+        })
+        const meta = res.data?.metas?.[0]
+        if (!meta) return null
+        return { title: meta.title ?? '', url: meta.url ?? '' }
+      } catch (err) {
+        console.error(`[feishu-channel] could not fetch metadata for ${fileToken}:`, err)
+        return null
+      }
     },
 
     async close(): Promise<void> {

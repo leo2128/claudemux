@@ -23,13 +23,10 @@ Add the claudemux marketplace, then install the plugin:
 
 ## Configure your Feishu app
 
-The steps below are manual. With the plugin installed in a Claude Code
-session you can instead ask Claude to do it — `feishu-channel` ships a
-`configure` skill that walks through setup and an `access` skill for managing
-who may reach the session.
+### 1. Create the Feishu self-built app
 
 Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
-(open.larksuite.com for Lark):
+(open.larksuite.com for Lark). These steps happen in the Feishu console:
 
 1. Create a new **self-built app** (企业自建应用).
 2. Enable the **Bot** capability (添加机器人能力).
@@ -54,17 +51,36 @@ Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
 > event picker before relying on it. If it is unavailable, the channel still
 > works for chat messages — only document-comment delivery is affected.
 
-Store the credentials in the channel's env file at
-`~/.claude/channels/feishu/.env`:
+### 2. Save the credentials
+
+In a Claude Code session with the plugin installed, run:
+
+```
+/feishu-channel:configure <App ID> <App Secret>
+```
+
+The command saves the credentials to the channel's env file and immediately
+verifies them against Feishu, so an invalid App Secret is caught right then —
+not at the next launch. Run it with no arguments to be prompted for the values
+interactively. Re-run it any time to update the credentials. For an
+international **Lark** app, the command accepts a base URL —
+see `/feishu-channel:configure`'s own guidance.
+
+<details>
+<summary>Manual fallback</summary>
+
+The command is the supported path. If you cannot run it, the channel reads its
+credentials from `~/.claude/channels/feishu/.env`:
 
 ```
 FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-The channel server reads this file on startup. `FEISHU_APP_ID` /
-`FEISHU_APP_SECRET` set in the process environment are used as a fallback. The
-server refuses to start if neither source supplies both values.
+`FEISHU_APP_ID` / `FEISHU_APP_SECRET` set in the process environment are used
+as a fallback. The server refuses to start if neither source supplies both
+values.
+</details>
 
 ## Enable the channel
 
@@ -126,7 +142,8 @@ to the session:
 
 The policy lives in `~/.claude/channels/feishu/access.json`. A corrupt or
 missing file is reported and the channel falls back to safe defaults rather
-than failing open.
+than failing open. Approvals — pairing codes, the allowlist, and group policy —
+are managed through the bundled `access` skill.
 
 To diagnose why a message was not delivered, launch Claude Code with
 `FEISHU_CHANNEL_DEBUG=1` in the environment — the channel then logs every
@@ -145,7 +162,9 @@ Core logic lives in `src/` as small, dependency-free modules so it can be unit
 tested without a live Feishu connection or a running MCP server. Each Feishu
 event type is a self-contained handler under `src/handlers/`, registered with
 the event registry in `src/server.ts` — adding support for a new event is a
-new handler module plus one registration line. Tests are in `test/` and use
+new handler module plus one registration line. `scripts/configure.ts` is the
+credential factory behind `/feishu-channel:configure`; its pure logic is
+type-checked and tested alongside `src/`. Tests are in `test/` and use
 `bun:test`; input-heavy functions are covered with property-based tests via
 `fast-check`. The same suite runs in CI under the `feishu-channel` job.
 

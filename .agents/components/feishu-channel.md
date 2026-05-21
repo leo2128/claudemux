@@ -75,8 +75,10 @@ for the rationale.
 | `src/feishu.ts` | The Feishu transport boundary (event-type agnostic) |
 | `src/handlers/*.ts` | One module per Feishu event type |
 | `src/*.ts` | Core logic — access control, content parsing, pairing, … |
+| `scripts/configure.ts` | Credential factory — writes `.env`, verifies against Feishu |
+| `commands/configure.md` | The `/feishu-channel:configure` slash command |
 | `test/*.ts` | `bun:test` unit tests; input-heavy modules use `fast-check` |
-| `skills/` | The `configure` and `access` skills |
+| `skills/` | The `access` skill |
 
 The core logic is written as small modules with **no live-Feishu dependency**
 so it unit-tests without a running server or connection.

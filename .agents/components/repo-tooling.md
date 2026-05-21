@@ -86,8 +86,8 @@ jobs:
   type-check. That suite is OS-agnostic TypeScript, so one OS is enough; it
   is a separate job so the Bun toolchain stays off the bats lane.
 
-The `feishu-channel` job covers a plugin that is still on a branch — see
-[components/feishu-channel.md](/.agents/components/feishu-channel.md).
+See [components/feishu-channel.md](/.agents/components/feishu-channel.md) for
+the plugin the `feishu-channel` job covers.
 
 ## See also
 

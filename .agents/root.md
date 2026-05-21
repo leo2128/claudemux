@@ -53,7 +53,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | Path | What it is |
 |---|---|
 | `plugins/claudemux/` | The claudemux plugin: `bin/tm`, `hooks/`, `skills/`, `templates/`, `commands/` |
-| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript + Bun). **WIP**, currently on branch `feishu-channel-plugin` |
+| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript + Bun) |
 | `bin/` | Repo-level dev tooling — `bump-version`, `check-author`, `tm` test runners |
 | `.githooks/` | `pre-commit` — author-email + version-bump nudge |
 | `.github/workflows/ci.yml` | CI — shellcheck + bats for claudemux, plus a Bun job for feishu-channel |
@@ -71,7 +71,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | The hook scripts — BUSY/idle signal, sid rotation | [components/hooks.md](/.agents/components/hooks.md) |
 | The `dispatcher` skill, its references, the dispatcher template, `/claudemux:setup` | [components/dispatcher-skill.md](/.agents/components/dispatcher-skill.md) |
 | The `optimize` skill — periodic dispatcher self-review | [components/optimize-skill.md](/.agents/components/optimize-skill.md) |
-| The `feishu-channel` plugin (WIP) | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
+| The `feishu-channel` plugin | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
 | Repo tooling — versioning, lint, CI, tests | [components/repo-tooling.md](/.agents/components/repo-tooling.md) |
 
 **Domains** — cross-cutting contracts that span more than one component:

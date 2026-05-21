@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# release <plugin> — cut a release for a plugin.
+#
+# Consumes every pending changeset fragment under plugins/<plugin>/.changeset/,
+# bumps the manifest `version` by the highest level among them, prepends a
+# dated section to plugins/<plugin>/CHANGELOG.md, and deletes the consumed
+# fragments.
+#
+# This is the only command that edits a manifest's `version` field. Feature
+# commits add a changeset fragment instead (see `bin/changeset`), so the
+# `version` line is mutated only by release commits — and release commits for
+# one plugin are cut one at a time, so they do not collide either.
+#
+# Edits the working tree only; stage and commit the result yourself.
+#
+# Echoes "<plugin>: <old> -> <new>" on success.
+
+set -euo pipefail
+
+die() { echo "release: $*" >&2; exit 1; }
+
+plugin="${1:-}"
+[[ -n "$plugin" ]] || die "usage: bin/release <plugin>"
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
+manifest="$root/plugins/$plugin/.claude-plugin/plugin.json"
+if [[ ! -f "$manifest" ]]; then
+    available=""
+    for dir in "$root"/plugins/*/; do
+        [[ -d "$dir" ]] || continue
+        name=${dir%/}
+        available+="${name##*/} "
+    done
+    die "unknown plugin '$plugin' — no manifest at" \
+        "plugins/$plugin/.claude-plugin/plugin.json (available: ${available:-none})"
+fi
+
+# --- Collect the pending changeset fragments ------------------------------
+dir="$root/plugins/$plugin/.changeset"
+fragments=()
+if [[ -d "$dir" ]]; then
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && fragments+=("$f")
+    done < <(find "$dir" -name '*.md' -type f | LC_ALL=C sort)
+fi
+if (( ${#fragments[@]} == 0 )); then
+    echo "release: no pending changesets for '$plugin' — nothing to release"
+    exit 0
+fi
+
+# --- Aggregate level + collect CHANGELOG entries --------------------------
+# Highest level wins: any major -> major, else any minor -> minor, else patch.
+highest='patch'
+entries=""
+for f in "${fragments[@]}"; do
+    rel="${f#"$root"/}"
+    level=$(sed -n '1p' "$f" | tr -d '[:space:]')
+    case "$level" in
+        major) highest='major' ;;
+        minor) [[ "$highest" == 'major' ]] || highest='minor' ;;
+        patch) ;;
+        *) die "changeset '$rel' has an invalid level line '$level' —" \
+               "line 1 must be patch, minor, or major" ;;
+    esac
+    # The summary is the first non-blank line after the level line.
+    summary=$(tail -n +2 "$f" | awk 'NF { print; exit }')
+    [[ -n "$summary" ]] || die "changeset '$rel' has no summary line"
+    entries+="- ($level) $summary"$'\n'
+done
+
+# --- Bump the manifest version --------------------------------------------
+old=$(jq -r '.version // empty' "$manifest")
+[[ "$old" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
+    || die "current version '$old' is not semver MAJOR.MINOR.PATCH"
+M="${BASH_REMATCH[1]}"; m="${BASH_REMATCH[2]}"; p="${BASH_REMATCH[3]}"
+case "$highest" in
+    major) M=$((M + 1)); m=0; p=0 ;;
+    minor) m=$((m + 1)); p=0 ;;
+    patch) p=$((p + 1)) ;;
+esac
+new="${M}.${m}.${p}"
+
+tmp=$(mktemp)
+jq --arg v "$new" '.version = $v' "$manifest" > "$tmp"
+mv "$tmp" "$manifest"
+
+# --- Prepend the dated section to the plugin's CHANGELOG ------------------
+# `release` is the sole writer of this file: line 1 is the title, line 2 is
+# blank, and dated sections (newest first) follow. A new section is inserted
+# directly after the title block.
+changelog="$root/plugins/$plugin/CHANGELOG.md"
+date=$(date -u +%Y-%m-%d)
+tmp=$(mktemp)
+{
+    if [[ -f "$changelog" ]]; then
+        sed -n '1p' "$changelog"
+    else
+        echo "# $plugin changelog"
+    fi
+    echo
+    echo "## $new — $date"
+    echo
+    printf '%s' "$entries"
+    if [[ -f "$changelog" ]]; then
+        old_sections=$(tail -n +3 "$changelog")
+        if [[ -n "$old_sections" ]]; then
+            echo
+            printf '%s\n' "$old_sections"
+        fi
+    fi
+} > "$tmp"
+mv "$tmp" "$changelog"
+
+# --- Consume the fragments ------------------------------------------------
+for f in "${fragments[@]}"; do
+    rm -f "$f"
+done
+# Drop the .changeset directory once empty so it does not linger as cruft.
+rmdir "$dir" 2>/dev/null || true
+
+echo "$plugin: $old -> $new"
+echo "release: consumed ${#fragments[@]} changeset(s) at level '$highest'," \
+     "wrote plugins/$plugin/CHANGELOG.md"
+echo "release: stage and commit — git add -A plugins/$plugin"

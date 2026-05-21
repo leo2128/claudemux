@@ -11,8 +11,8 @@
 
 import type { Access, Mention, PendingEntry } from './types'
 
-/** Cap on simultaneously-pending pairing requests. */
-export const MAX_PENDING = 3
+/** Cap on simultaneously-pending pairing requests — direct and group share it. */
+export const MAX_PENDING = 10
 /** Cap on pairing-code replies sent to one un-paired sender. */
 export const MAX_PAIRING_REPLIES = 2
 /** How long a pairing code stays valid, in milliseconds. */
@@ -79,8 +79,11 @@ function gateDirect(input: GateInput, access: Access, changed: boolean): GateRes
   }
 
   // dmPolicy === 'pairing' — an unknown sender starts (or repeats) a pairing.
+  // The `kind` guard matters: a group-pairing entry also carries a senderId
+  // (its triggerer), so without it a group triggerer's later DM would match
+  // that entry and be answered with the group's code.
   for (const [code, entry] of Object.entries(access.pending)) {
-    if (entry.senderId !== input.senderId) continue
+    if (entry.kind !== 'dm' || entry.senderId !== input.senderId) continue
     if (entry.replies >= MAX_PAIRING_REPLIES) {
       return { action: 'drop', access, changed, reason: 'pairing reply cap reached' }
     }
@@ -95,6 +98,7 @@ function gateDirect(input: GateInput, access: Access, changed: boolean): GateRes
     return { action: 'drop', access, changed, reason: 'too many pending pairings' }
   }
   const entry: PendingEntry = {
+    kind: 'dm',
     senderId: input.senderId,
     chatId: input.chatId,
     createdAt: input.now,
@@ -112,7 +116,7 @@ function gateDirect(input: GateInput, access: Access, changed: boolean): GateRes
 function gateGroup(input: GateInput, access: Access, changed: boolean): GateResult {
   const policy = access.groups[input.chatId]
   if (!policy) {
-    return { action: 'drop', access, changed, reason: 'group not configured' }
+    return gateUnconfiguredGroup(input, access, changed)
   }
   if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(input.senderId)) {
     return { action: 'drop', access, changed, reason: 'sender not allowed in this group' }
@@ -134,6 +138,60 @@ function gateGroup(input: GateInput, access: Access, changed: boolean): GateResu
     }
   }
   return { action: 'deliver', access, changed }
+}
+
+/**
+ * Decide a message from a group that is not yet in `access.groups`.
+ *
+ * A group joins `access.groups` the same way an unknown direct sender joins
+ * the allowlist — by pairing. But a group pairing is started only by a
+ * deliberate @-mention of the bot, the group equivalent of choosing to open a
+ * 1:1 chat: that keeps the bot from posting a pairing code in every group it
+ * was incidentally added to, and bounds it to one code per group rather than
+ * one per group message. A non-mention message is dropped silently.
+ *
+ * Only one pairing runs per group at a time: while a `group` entry for this
+ * chat_id is pending, further mentions are dropped rather than posting a
+ * second code. The entry expires via `pruneExpiredPending`, so an un-approved
+ * pairing reopens on the next mention after its TTL.
+ */
+function gateUnconfiguredGroup(
+  input: GateInput,
+  access: Access,
+  changed: boolean,
+): GateResult {
+  if (input.botOpenId === undefined) {
+    return {
+      action: 'drop',
+      access,
+      changed,
+      reason: 'unconfigured group; bot open_id is unknown, so a mention cannot be detected',
+    }
+  }
+  if (!isBotMentioned(input.mentions, input.botOpenId)) {
+    return { action: 'drop', access, changed, reason: 'unconfigured group; bot not mentioned' }
+  }
+  for (const entry of Object.values(access.pending)) {
+    if (entry.kind === 'group' && entry.chatId === input.chatId) {
+      return { action: 'drop', access, changed, reason: 'group pairing already pending' }
+    }
+  }
+  if (Object.keys(access.pending).length >= MAX_PENDING) {
+    return { action: 'drop', access, changed, reason: 'too many pending pairings' }
+  }
+  const entry: PendingEntry = {
+    kind: 'group',
+    senderId: input.senderId,
+    chatId: input.chatId,
+    createdAt: input.now,
+    expiresAt: input.now + PAIRING_TTL_MS,
+    replies: 1,
+  }
+  const nextAccess: Access = {
+    ...access,
+    pending: { ...access.pending, [input.newCode]: entry },
+  }
+  return { action: 'pair', access: nextAccess, changed: true, code: input.newCode, isResend: false }
 }
 
 /** True when one of `mentions` resolves to the bot's own open_id. */

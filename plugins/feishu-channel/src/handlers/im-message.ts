@@ -88,14 +88,15 @@ export function createImMessageHandler(): EventHandler {
           return null
         case 'pair': {
           // Send the pairing code before recording the pending entry. A
-          // transient send failure then leaves no pending entry the sender
-          // never received a code for — their next message simply starts a
-          // fresh pairing instead of finding a code they never saw.
+          // transient send failure then leaves no pending entry no one ever
+          // received a code for — the next message simply starts a fresh
+          // pairing instead of finding a code that was never seen.
+          const prompt =
+            event.chatType === 'group'
+              ? groupPairingPrompt(decision.code)
+              : pairingPrompt(decision.code, decision.isResend)
           try {
-            await ctx.transport.sendText(
-              event.chatId,
-              pairingPrompt(decision.code, decision.isResend),
-            )
+            await ctx.transport.sendText(event.chatId, prompt)
           } catch (err) {
             ctx.logError('failed to send a pairing code', err)
             return null
@@ -129,6 +130,20 @@ function pairingPrompt(code: string, isResend: boolean): string {
     lead,
     `Pairing code: ${code}`,
     'Share this code with the operator running Claude Code so they can approve you.',
+  ].join('\n')
+}
+
+/**
+ * The message posted into an un-paired group, carrying its pairing code. The
+ * code is visible to every group member, but it grants nothing on its own —
+ * authorizing the group still takes the operator, the access skill, and the
+ * running Claude Code session.
+ */
+function groupPairingPrompt(code: string): string {
+  return [
+    'This group is not yet authorized for this Claude Code channel.',
+    `Pairing code: ${code}`,
+    'Share this code with the operator running Claude Code so they can authorize this group.',
   ].join('\n')
 }
 

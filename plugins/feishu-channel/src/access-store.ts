@@ -109,6 +109,9 @@ function normalizePending(v: unknown): Record<string, PendingEntry> {
       // A pending entry with no sender can never be matched — drop it.
       if (!senderId) continue
       out[code] = {
+        // Anything that is not exactly 'group' — including a missing field in
+        // an access.json written before group pairing existed — is a 'dm'.
+        kind: p.kind === 'group' ? 'group' : 'dm',
         senderId,
         chatId: typeof p.chatId === 'string' ? p.chatId : '',
         createdAt: typeof p.createdAt === 'number' ? p.createdAt : 0,

@@ -18,6 +18,7 @@ function access(overrides: Partial<Access> = {}): Access {
 
 function pending(overrides: Partial<PendingEntry> = {}): PendingEntry {
   return {
+    kind: 'dm',
     senderId: 'ou_sender',
     chatId: 'oc_chat',
     createdAt: NOW,
@@ -25,6 +26,17 @@ function pending(overrides: Partial<PendingEntry> = {}): PendingEntry {
     replies: 1,
     ...overrides,
   }
+}
+
+/** A GateInput for a message in a group, with the bot @-mentioned by default. */
+function groupInput(overrides: Partial<GateInput> = {}): GateInput {
+  return input({
+    chatType: 'group',
+    chatId: 'oc_group',
+    botOpenId: 'ou_bot',
+    mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+    ...overrides,
+  })
 }
 
 function input(overrides: Partial<GateInput> = {}): GateInput {
@@ -112,11 +124,7 @@ describe('gate — direct messages', () => {
 })
 
 describe('gate — group messages', () => {
-  test('drops a message from an unconfigured group', () => {
-    const r = gate(input({ chatType: 'group' }))
-    expect(r.action).toBe('drop')
-  })
-
+  // Unconfigured groups are covered in 'gate — group pairing' below.
   test('requires a mention when the group policy asks for one', () => {
     const a = access({ groups: { oc_chat: { requireMention: true, allowFrom: [] } } })
     const r = gate(input({ chatType: 'group', access: a, botOpenId: 'ou_bot' }))
@@ -171,6 +179,64 @@ describe('gate — group messages', () => {
       }),
     )
     expect(r.action).toBe('deliver')
+  })
+})
+
+describe('gate — group pairing', () => {
+  test('an @-mention in an unconfigured group starts a group pairing', () => {
+    const r = gate(groupInput())
+    expect(r.action).toBe('pair')
+    if (r.action !== 'pair') throw new Error('unreachable')
+    expect(r.code).toBe('aaaaaa')
+    expect(r.isResend).toBe(false)
+    const entry = r.access.pending['aaaaaa']
+    expect(entry?.kind).toBe('group')
+    expect(entry?.chatId).toBe('oc_group')
+    expect(entry?.senderId).toBe('ou_sender')
+  })
+
+  test('a non-mention message in an unconfigured group is dropped silently', () => {
+    const r = gate(groupInput({ mentions: [] }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toContain('not mentioned')
+  })
+
+  test('an unconfigured group cannot pair while the bot open_id is unknown', () => {
+    const r = gate(groupInput({ botOpenId: undefined }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toContain('open_id is unknown')
+  })
+
+  test('a second mention while a group pairing is pending does not post another code', () => {
+    const a = access({ pending: { existing: pending({ kind: 'group', chatId: 'oc_group' }) } })
+    const r = gate(groupInput({ access: a }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('group pairing already pending')
+  })
+
+  test('a group pairing is dropped once MAX_PENDING requests are outstanding', () => {
+    const full: Record<string, PendingEntry> = {}
+    for (let i = 0; i < MAX_PENDING; i++) {
+      full[`code-${i}`] = pending({ senderId: `ou_other_${i}` })
+    }
+    const r = gate(groupInput({ access: access({ pending: full }) }))
+    expect(r.action).toBe('drop')
+  })
+
+  test('a group pending entry never answers a direct message with the group code', () => {
+    // The group triggerer later sends a direct message. The kind guard in
+    // gateDirect must skip the group entry, so the DM starts its own fresh
+    // dm pairing rather than resending the group code.
+    const a = access({ pending: { groupcode: pending({ kind: 'group', chatId: 'oc_group' }) } })
+    const r = gate(input({ access: a }))
+    expect(r.action).toBe('pair')
+    if (r.action !== 'pair') throw new Error('unreachable')
+    expect(r.code).toBe('aaaaaa')
+    expect(r.isResend).toBe(false)
+    expect(r.access.pending['aaaaaa']?.kind).toBe('dm')
   })
 })
 

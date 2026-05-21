@@ -16,17 +16,31 @@ export interface GroupPolicy {
   allowFrom: string[]
 }
 
-/** A pending pairing request, keyed in Access.pending by its pairing code. */
+/**
+ * A pending pairing request, keyed in Access.pending by its pairing code.
+ *
+ * `kind` says what approving the code authorizes: a `dm` request adds
+ * `senderId` to the top-level `allowFrom`; a `group` request adds `chatId` to
+ * `groups`. The two kinds share this one map and the one approval gesture.
+ */
 export interface PendingEntry {
-  /** open_id of the sender awaiting approval. */
+  /** What approving this code authorizes — a direct sender, or a group. */
+  kind: 'dm' | 'group'
+  /**
+   * open_id of the awaiting party: the sender for a `dm` request, or the
+   * group member whose @-mention triggered a `group` request.
+   */
   senderId: string
-  /** chat_id the pairing request arrived in. */
+  /**
+   * chat_id the request arrived in — the direct chat for a `dm` request, or
+   * the group itself for a `group` request (the id approval adds to `groups`).
+   */
   chatId: string
   /** Epoch millis the request was created. */
   createdAt: number
   /** Epoch millis the request expires. */
   expiresAt: number
-  /** How many pairing-code replies were sent to this sender. */
+  /** How many pairing-code replies were sent. A `group` request sends once. */
   replies: number
 }
 

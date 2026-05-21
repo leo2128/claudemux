@@ -228,6 +228,48 @@ describe('createImMessageHandler — pairing', () => {
   })
 })
 
+describe('createImMessageHandler — group pairing', () => {
+  test('an @-mention in an unconfigured group posts a pairing code into the group', async () => {
+    writeAccess({})
+    const transport = new FakeTransport('ou_bot')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({
+        chat_id: 'oc_group',
+        chat_type: 'group',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      }),
+      makeCtx(transport),
+    )
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(1)
+    expect(transport.sent[0]?.chatId).toBe('oc_group')
+    expect(transport.sent[0]?.text).toContain('abc123')
+    expect(transport.sent[0]?.text).toContain('authorize this group')
+
+    const entry = loadAccess(accessFile).access.pending['abc123']
+    expect(entry?.kind).toBe('group')
+    expect(entry?.chatId).toBe('oc_group')
+  })
+
+  test('a non-mention message in an unconfigured group sends no code', async () => {
+    writeAccess({})
+    const transport = new FakeTransport('ou_bot')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({ chat_id: 'oc_group', chat_type: 'group' }),
+      makeCtx(transport),
+    )
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(0)
+    expect(loadAccess(accessFile).access.pending).toEqual({})
+  })
+})
+
 describe('createImMessageHandler — drops', () => {
   test('a disabled DM policy delivers nothing and sends nothing', async () => {
     writeAccess({ dmPolicy: 'disabled' })

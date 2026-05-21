@@ -108,4 +108,20 @@ describe('normalizeAccess', () => {
     expect(Object.keys(pending)).toEqual(['good'])
     expect(pending['good']?.replies).toBe(1)
   })
+
+  test('a pending entry without a kind defaults to a dm request', () => {
+    const pending = normalizeAccess({ pending: { c: { senderId: 'ou_a' } } }).pending
+    expect(pending['c']?.kind).toBe('dm')
+  })
+
+  test('a group pending entry keeps its kind; a bogus kind falls back to dm', () => {
+    const pending = normalizeAccess({
+      pending: {
+        grp: { senderId: 'ou_a', kind: 'group' },
+        bog: { senderId: 'ou_b', kind: 'nonsense' },
+      },
+    }).pending
+    expect(pending['grp']?.kind).toBe('group')
+    expect(pending['bog']?.kind).toBe('dm')
+  })
 })

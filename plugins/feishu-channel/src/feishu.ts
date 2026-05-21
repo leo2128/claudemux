@@ -15,6 +15,24 @@
 
 import * as lark from '@larksuiteoapi/node-sdk'
 
+import {
+  connectionErrorLogLine,
+  reconnectedLogLine,
+  reconnectingLogLine,
+  startupTimeoutLogLine,
+} from './connection'
+
+/** Cap on a single WebSocket handshake before it is aborted into a retry. */
+const WS_HANDSHAKE_TIMEOUT_MS = 15_000
+
+/**
+ * How long the initial connection is given to come up before the channel
+ * stops it. Long enough to absorb a brief blip and the SDK's own early
+ * retries; past it, an unreachable Feishu would otherwise retry in a tight
+ * loop, so the channel cuts the attempt off.
+ */
+const WS_STARTUP_GRACE_MS = 30_000
+
 /** Outcome of an outbound send. */
 export interface FeishuSendResult {
   /** message_id of the sent message, when Feishu reported one. */
@@ -84,8 +102,46 @@ export function createFeishuTransport(creds: FeishuCredentials): FeishuTransport
     async start(routes: InboundRoutes): Promise<void> {
       resolvedBotOpenId = await resolveBotOpenId(client)
       const dispatcher = new lark.EventDispatcher({}).register(routes)
-      wsClient = new lark.WSClient({ appId: creds.appId, appSecret: creds.appSecret })
-      await wsClient.start({ eventDispatcher: dispatcher })
+
+      // Resolves the first time the connection reaches `ready`; the startup
+      // watchdog below races against it.
+      let markReady: () => void = () => {}
+      const ready = new Promise<void>((resolve) => {
+        markReady = resolve
+      })
+
+      const ws = new lark.WSClient({
+        appId: creds.appId,
+        appSecret: creds.appSecret,
+        // Bound a stuck WebSocket handshake so it fails into a retry rather
+        // than holding a stuck DNS / NAT path open indefinitely.
+        handshakeTimeoutMs: WS_HANDSHAKE_TIMEOUT_MS,
+        // autoReconnect stays on: an established connection that drops should
+        // self-heal. The callbacks make every step of that loop visible, so a
+        // failing connection is observable instead of a silent retry loop.
+        autoReconnect: true,
+        onReady: () => markReady(),
+        onReconnecting: () => logConnection(reconnectingLogLine()),
+        onReconnected: () => logConnection(reconnectedLogLine()),
+        onError: (err) => logConnection(connectionErrorLogLine(err)),
+      })
+      wsClient = ws
+
+      void ws.start({ eventDispatcher: dispatcher }).catch((err: unknown) => {
+        logConnection(connectionErrorLogLine(err))
+      })
+
+      // The SDK retries pullConnectConfig with no delay until it first
+      // succeeds — it has no server-provided reconnect interval yet — so a
+      // Feishu that is unreachable at startup spins a tight retry loop.
+      // Give the initial connection a grace window; if it is still not up,
+      // stop it so the loop does not run unbounded and unobserved.
+      const cameUp = await raceConnectionReady(ready)
+      if (!cameUp) {
+        const gaveUp = ws.getConnectionStatus().state === 'failed'
+        logConnection(startupTimeoutLogLine(WS_STARTUP_GRACE_MS, gaveUp))
+        ws.close()
+      }
     },
 
     async sendText(chatId: string, text: string): Promise<FeishuSendResult> {
@@ -173,4 +229,24 @@ async function resolveBotOpenId(client: lark.Client): Promise<string | undefined
 /** Resolve after `ms` milliseconds — the backoff between bot-info attempts. */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Write a connection-lifecycle line to the channel's stderr log. */
+function logConnection(line: string): void {
+  console.error(`[feishu-channel] ${line}`)
+}
+
+/**
+ * Resolve `true` if `ready` settles within the startup grace window, `false`
+ * if the window elapses first. The timer is cleared on the winning path so it
+ * does not keep the process alive after the race is decided.
+ */
+function raceConnectionReady(ready: Promise<void>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), WS_STARTUP_GRACE_MS)
+    void ready.then(() => {
+      clearTimeout(timer)
+      resolve(true)
+    })
+  })
 }

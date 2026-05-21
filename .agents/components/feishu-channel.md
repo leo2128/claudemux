@@ -73,11 +73,13 @@ for the rationale.
 | `src/events.ts` | The `EventHandler` interface and the `EventRegistry` |
 | `src/server.ts` | `createChannelCore` — registry dispatch + the outbound tools |
 | `src/feishu.ts` | The Feishu transport boundary (event-type agnostic) |
+| `src/connection.ts` | Pure log-line builders for the WebSocket connection lifecycle |
 | `src/handlers/*.ts` | One module per Feishu event type |
 | `src/*.ts` | Core logic — access control, content parsing, pairing, … |
 | `scripts/configure.ts` | Credential factory — writes `.env`, verifies against Feishu |
 | `commands/configure.md` | The `/feishu-channel:configure` slash command |
-| `test/*.ts` | `bun:test` unit tests; input-heavy modules use `fast-check` |
+| `test/*.test.ts` | `bun:test` unit tests; input-heavy modules use `fast-check` |
+| `test/feishu-live.ts` | Live integration test against the real Feishu platform |
 | `skills/` | The `access` skill |
 
 The core logic is written as small modules with **no live-Feishu dependency**
@@ -93,6 +95,15 @@ so it unit-tests without a running server or connection.
   third-party integrations, **not** confirmed against Feishu's own docs. The
   handler decodes defensively and never throws; still, confirm the event in
   the Feishu app console before relying on it.
+- The channel connects to Feishu **directly**, not through the session's HTTP
+  proxy. `.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case)
+  in the MCP server's environment, so a proxy set for the Claude Code session
+  does not apply to this server. The empty `env` values in `.mcp.json` are
+  load-bearing — see [decision 0008](/.agents/decisions/0008-feishu-channel-launch-without-session-proxy.md).
+- `src/feishu.ts` wires the `WSClient`'s `onError` / `onReconnecting` /
+  `onReconnected` callbacks and a startup-grace watchdog, so a failed or
+  dropped connection is logged instead of retrying silently. The log wording
+  is built by the pure functions in `src/connection.ts`.
 
 ## See also
 

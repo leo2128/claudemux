@@ -16,6 +16,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0005](/.agents/decisions/0005-feishu-channel-plugin.md) | A Feishu channel ships as a separate TypeScript+Bun plugin from this repo | In progress |
 | [0006](/.agents/decisions/0006-feishu-channel-event-registry.md) | The Feishu channel handles events through an extensible registry of per-event handlers | In progress |
 | [0007](/.agents/decisions/0007-teammates-launch-without-askuserquestion.md) | Teammates launch with the `AskUserQuestion` tool disabled | Accepted |
+| [0008](/.agents/decisions/0008-feishu-channel-launch-without-session-proxy.md) | The Feishu channel's MCP server is launched with the session HTTP proxy cleared | Accepted |
 
 ## When to add a record
 

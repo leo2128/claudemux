@@ -84,7 +84,10 @@ jobs:
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`
   only. It installs Bun and runs the plugin's `bun test` suite and
   type-check. That suite is OS-agnostic TypeScript, so one OS is enough; it
-  is a separate job so the Bun toolchain stays off the bats lane.
+  is a separate job so the Bun toolchain stays off the bats lane. A final
+  step runs `test/feishu-live.ts` against the real Feishu platform, using the
+  `FEISHU_APP_ID` / `FEISHU_APP_SECRET` repository secrets; that test skips
+  itself when the secrets are absent.
 
 The `feishu-channel` job covers a plugin that is still on a branch — see
 [components/feishu-channel.md](/.agents/components/feishu-channel.md).

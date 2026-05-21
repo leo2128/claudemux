@@ -96,6 +96,19 @@ registers a channel when it is named on the command line. The flag also does
 not override an organization's `channelsEnabled` policy; if channels are
 disabled org-wide, the channel will not load.
 
+## Proxy environments
+
+The channel's MCP server is launched with the HTTP proxy environment variables
+(`HTTP_PROXY` / `HTTPS_PROXY`) cleared, so it connects to Feishu **directly**.
+A proxy configured for your Claude Code session — for example in
+`~/.claude/settings.json` — still applies to the rest of the session; it just
+does not apply to this server, which does not need it. The clearing is done in
+the plugin's `.mcp.json`.
+
+The server therefore needs a direct network path to Feishu — `open.feishu.cn`
+and the `*.feishu.cn` WebSocket endpoint. On a network that can only reach
+Feishu through a proxy, this channel is not currently configurable for that.
+
 ## How it works
 
 The plugin ships an MCP server (over stdio) that declares the `claude/channel`
@@ -167,6 +180,17 @@ credential factory behind `/feishu-channel:configure`; its pure logic is
 type-checked and tested alongside `src/`. Tests are in `test/` and use
 `bun:test`; input-heavy functions are covered with property-based tests via
 `fast-check`. The same suite runs in CI under the `feishu-channel` job.
+
+`test/feishu-live.ts` is a separate integration test that talks to the real
+Feishu Open Platform. It is not a `*.test.ts` file, so `bun test` does not run
+it by default; run it explicitly with credentials in the environment:
+
+```bash
+FEISHU_APP_ID=... FEISHU_APP_SECRET=... bun test ./test/feishu-live.ts
+```
+
+CI runs it on every commit using repository secrets. With no credentials it
+skips itself.
 
 ## License
 

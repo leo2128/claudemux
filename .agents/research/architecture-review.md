@@ -273,9 +273,11 @@ still extract `session_id` by three different inline methods, with no shared
 `parse_hook_payload` helper. Same conditional-future shape as the protocol
 version field — decision 0009's second confirming case.
 
-### `on-stop.sh` narrates a rejected alternative (§6)
-**Promoted** → fixed in commit `be884f0`, the `on-stop.sh` rewrite recorded in
-decision 0004.
+### CLAUDE.md "rejected alternative" anti-pattern (§6)
+**Promoted** → the headline violation — `on-stop.sh` narrating a prior `rm`
+behaviour — was fixed in commit `be884f0`, the rewrite recorded in decision
+0004. §6's secondary `bin/tm` site, which the audit itself rated "borderline",
+was not changed: a low-severity wording item with no breaking trigger.
 
 ### `bin/tm` is a 2000-line monolith (§5)
 **Deferred** → the audit sets its own revisit signals: a second maintainer

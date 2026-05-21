@@ -81,3 +81,32 @@ setup() {
     run fmt_age 86400
     [ "$output" = "1d" ]
 }
+
+# ---- teammate_launch_flags: claude flags shared by every teammate launch ----
+
+@test "teammate_launch_flags: exact flag string for a trivial settings JSON" {
+    # Locks the whole shape: --settings carrying the JSON single-quoted,
+    # then exactly --disallowedTools AskUserQuestion and nothing else.
+    run teammate_launch_flags '{}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "--settings '{}' --disallowedTools AskUserQuestion" ]
+}
+
+@test "teammate_launch_flags: settings JSON passes through verbatim, single-quoted" {
+    # The real caller hands in the claudeMdExcludes JSON, whose embedded
+    # double quotes must survive into the launch command untouched.
+    local json='{"claudeMdExcludes":["/repo/CLAUDE.md","/repo/CLAUDE.local.md"]}'
+    run teammate_launch_flags "$json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "--settings '$json' --disallowedTools AskUserQuestion" ]
+}
+
+@test "teammate_launch_flags: AskUserQuestion is the only tool disabled" {
+    # The disable is intentionally scoped to one tool. If a second tool
+    # were ever appended it would show as a comma/space-joined list.
+    run teammate_launch_flags '{}'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--disallowedTools AskUserQuestion" ]]
+    [[ "$output" != *"--disallowedTools AskUserQuestion "* ]]
+    [[ "$output" != *"AskUserQuestion,"* ]]
+}

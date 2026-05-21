@@ -17,3 +17,10 @@ tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]
       reply yet" error instead of stale content from an earlier sid.
       The --prompt sync path inherits 'tm send''s stderr ctx echo
       after the first-turn Stop.
+      Every teammate launches with the AskUserQuestion tool disabled
+      (this applies to 'tm resume' too). A teammate runs with no
+      human at its terminal, and that tool's modal holds the turn
+      open so the Stop hook never fires — a sync verb would then
+      block until --timeout. With the tool gone, a teammate raises
+      questions by ending its turn with text, which 'tm send' /
+      'tm spawn --prompt' relays straight back to the dispatcher.

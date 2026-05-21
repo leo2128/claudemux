@@ -516,6 +516,28 @@ cmd_ls() {
     echo "$rows"
 }
 
+# Build the `claude` launch flags shared by every teammate the
+# dispatcher starts. Both a fresh `tm spawn` and a `tm resume` reach
+# their REPL through cmd_spawn's send-keys lines, so routing both
+# through this one builder keeps the launch policy single-sourced.
+# Takes the claudeMdExcludes JSON; emits the flag string that sits
+# between `claude --session-id|--resume <sid>` and the optional
+# `-n <name>`.
+#
+# --disallowedTools AskUserQuestion: a spawned teammate runs with no
+# human at its terminal. AskUserQuestion opens an interactive modal,
+# and a turn holding an open modal never reaches the Stop hook — so the
+# dispatcher's `tm send` blocks until its --timeout (default 1800s)
+# elapses, and only a manual `tmux send-keys` can clear it. A bare tool
+# name in --disallowedTools drops the tool from the model's context
+# entirely, so the teammate never calls it: it surfaces questions by
+# ending its turn with plain text, which `tm send` relays back to the
+# dispatcher as the reply.
+teammate_launch_flags() {
+    local md_excludes="$1"
+    printf '%s' "--settings '$md_excludes' --disallowedTools AskUserQuestion"
+}
+
 cmd_spawn() {
     local repo="${1:-}"
     [[ -n "$repo" ]] || die "usage: tm spawn <repo> [--task <slug>] [--prompt \"...\"] [--no-wait]"
@@ -626,9 +648,12 @@ cmd_spawn() {
     local sid sf; sf=$(sid_file "$repo")
     local name_note=""
     [[ -n "$display_name" ]] && name_note=", name=$display_name"
+    # Launch flags shared by both the resume and fresh-spawn paths —
+    # see teammate_launch_flags for what they carry and why.
+    local launch_flags; launch_flags=$(teammate_launch_flags "$md_excludes")
     if [[ -n "$resume_sid" ]]; then
         sid="$resume_sid"
-        tmux send-keys -t "$pane" "claude --resume $sid --settings '$md_excludes'$name_arg" Enter
+        tmux send-keys -t "$pane" "claude --resume $sid $launch_flags$name_arg" Enter
         echo "spawned: $repo (tmux=$name, cwd=$cwd_phys, resumed sid=$sid$name_note)" >&2
     else
         # Pre-generate the UUID so the sid is known the moment spawn returns.
@@ -636,7 +661,7 @@ cmd_spawn() {
         # filename equal to this UUID, and the global Stop hook touches
         # /tmp/claude-idle/<that-same-uuid> on every turn-end.
         sid=$(new_sid)
-        tmux send-keys -t "$pane" "claude --session-id $sid --settings '$md_excludes'$name_arg" Enter
+        tmux send-keys -t "$pane" "claude --session-id $sid $launch_flags$name_arg" Enter
         echo "spawned: $repo (tmux=$name, cwd=$cwd_phys, sid=$sid$name_note)" >&2
     fi
     echo "$sid" > "$sf"
@@ -1820,6 +1845,13 @@ tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]
       reply yet" error instead of stale content from an earlier sid.
       The --prompt sync path inherits 'tm send''s stderr ctx echo
       after the first-turn Stop.
+      Every teammate launches with the AskUserQuestion tool disabled
+      (this applies to 'tm resume' too). A teammate runs with no
+      human at its terminal, and that tool's modal holds the turn
+      open so the Stop hook never fires — a sync verb would then
+      block until --timeout. With the tool gone, a teammate raises
+      questions by ending its turn with text, which 'tm send' /
+      'tm spawn --prompt' relays straight back to the dispatcher.
 EOF
 }
 

@@ -68,8 +68,8 @@ accept the create call and then never fire. This empirical fact drives the
 
 ## Editing rule
 
-`SKILL.md` is a feature-class path: a change to it requires a `plugin.json`
-version bump in the same commit (see
+`SKILL.md` is a feature-class path: a change to it requires a changeset
+fragment in the same commit (see
 [components/repo-tooling.md](/.agents/components/repo-tooling.md)). The
 references are plain `*.md` and are exempt.
 

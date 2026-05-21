@@ -179,9 +179,10 @@ clone 后跑一次启用 pre-commit hook:
 git config core.hooksPath .githooks
 ```
 
-它会拦截同一提交里改了某个插件 feature-class 路径却没 bump 那个插件
-版本的 commit。`plugins/` 下每个插件各自独立计版,用
-`bin/bump-version <插件> <patch|minor|major>` 抬对应插件的版本即可。
+它会拦截同一提交里改了某个插件 feature-class 路径却没有 changeset 声明
+变更的 commit。`plugins/` 下每个插件各自独立计版:feature 提交用
+`bin/changeset <插件> <patch|minor|major> "<摘要>"` 记录变更,之后由
+`bin/release <插件>` 把累积的 changeset 汇成一次版本号抬升和 CHANGELOG 条目。
 
 ## 卸载
 

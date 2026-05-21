@@ -95,8 +95,12 @@ so it unit-tests without a running server or connection.
 
 - **Bun is required** and is not a claudemux dependency. On the dev machine
   Bun lives at `~/.bun/bin` and is not on `PATH` — invoke it by absolute path.
-- The plugin has its **own** `version` in its own `plugin.json`; the
-  claudemux version-bump rule and its pre-commit hook do not apply to it.
+- The plugin has its **own** `version` in its own `plugin.json`, bumped
+  independently of claudemux. A change under `feishu-channel/` takes a
+  `feishu-channel` changeset (`bin/changeset feishu-channel ...`), not a
+  claudemux one; the pre-commit changeset check and `bin/release` treat it
+  like any other plugin. See
+  [components/repo-tooling.md](/.agents/components/repo-tooling.md).
 - `drive.notice.comment_add_v1` is decoded through the Feishu SDK's own
   `normalizeComment` — the authoritative payload reference — and the handler
   fetches the comment text and document title from Feishu, because a comment

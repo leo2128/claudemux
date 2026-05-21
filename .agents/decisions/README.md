@@ -22,6 +22,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md) | The Feishu doc-comment handler decodes via the SDK and enriches the event with fetched text and title | Accepted |
 | [0012](/.agents/decisions/0012-feishu-channel-group-policy-modes.md) | Feishu group access is a three-mode `groupPolicy` switch — block / allowlist (decision 0010) / follow-user | Accepted |
 | [0013](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md) | The Feishu channel marks an inbound chat message with a reaction when it reaches the session, and clears it on reply | Accepted |
+| [0014](/.agents/decisions/0014-changeset-release-versioning.md) | Versioning moves to changeset fragments consumed by a release step, so parallel PRs never collide on the version line | Accepted |
 
 ## When to add a record
 

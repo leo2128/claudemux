@@ -20,6 +20,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0009](/.agents/decisions/0009-research-hazard-dispositions.md) | Every research hazard reaches a recorded disposition before it leaves the research layer | Accepted |
 | [0010](/.agents/decisions/0010-feishu-channel-group-pairing.md) | A Feishu group is authorized by pairing — an @-mention posts a code the operator approves | Accepted |
 | [0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md) | The Feishu doc-comment handler decodes via the SDK and enriches the event with fetched text and title | Accepted |
+| [0012](/.agents/decisions/0012-feishu-channel-group-policy-modes.md) | Feishu group access is a three-mode `groupPolicy` switch — block / allowlist (decision 0010) / follow-user | Accepted |
 
 ## When to add a record
 

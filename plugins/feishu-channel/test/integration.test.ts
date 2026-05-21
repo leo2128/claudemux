@@ -47,6 +47,7 @@ afterEach(() => {
 function writeAccess(overrides: Partial<Access>): void {
   saveAccess(accessFile, {
     dmPolicy: 'pairing',
+    groupPolicy: 'allowlist',
     allowFrom: [],
     groups: {},
     pending: {},

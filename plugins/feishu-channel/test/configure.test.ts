@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_FEISHU_BASE,
   interpretTokenResponse,
+  parseGroupPolicy,
   renderEnvFile,
   tokenEndpoint,
   validateCredentialInput,
@@ -53,6 +54,24 @@ describe('renderEnvFile', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('parseGroupPolicy', () => {
+  test('accepts each of the three known modes', () => {
+    expect(parseGroupPolicy('block')).toBe('block')
+    expect(parseGroupPolicy('allowlist')).toBe('allowlist')
+    expect(parseGroupPolicy('follow-user')).toBe('follow-user')
+  })
+
+  test('trims surrounding whitespace', () => {
+    expect(parseGroupPolicy('  allowlist  ')).toBe('allowlist')
+  })
+
+  test('rejects an unknown, empty, or missing value', () => {
+    expect(parseGroupPolicy('open')).toBeNull()
+    expect(parseGroupPolicy('')).toBeNull()
+    expect(parseGroupPolicy(undefined)).toBeNull()
   })
 })
 

@@ -1,6 +1,6 @@
 ---
 name: access
-description: Manage who may reach a Claude Code session through the Feishu channel — approve a pairing code from a first-time direct-message sender or an unconfigured group, manage the direct-message allowlist, and configure which Feishu groups the bot answers in. Use when the user wants to approve, pair, allowlist, or block a Feishu sender or group, received a pairing code, or asks why a Feishu message was not delivered. Also use for the Chinese phrasings — "飞书配对 / 通过配对码 / 飞书 allowlist / 批准飞书用户 / 飞书群授权 / 飞书群配对".
+description: Manage who may reach a Claude Code session through the Feishu channel — approve a pairing code from a first-time direct-message sender or an unconfigured group, manage the allowlist, and set the group-message policy (block, allowlist, or follow-user). Use when the user wants to approve, pair, allowlist, or block a Feishu sender or group, change how group messages are gated, received a pairing code, or asks why a Feishu message was not delivered. Also use for the Chinese phrasings — "飞书配对 / 通过配对码 / 飞书 allowlist / 批准飞书用户 / 飞书群授权 / 飞书群配对 / 飞书群权限模式".
 ---
 
 # Manage Feishu channel access
@@ -13,10 +13,14 @@ tool for deciding who gets through.
 
 Access state lives in `$HOME/.claude/channels/feishu/access.json`. Its shape:
 
-- `dmPolicy` — `pairing` (default), `allowlist`, or `disabled`.
-- `allowFrom` — array of sender open_ids allowed to direct-message the bot.
+- `dmPolicy` — `pairing` (default), `allowlist`, or `disabled`. Governs direct
+  (1:1) messages.
+- `groupPolicy` — `block`, `allowlist` (default), or `follow-user`. Governs
+  group messages — see "The group policy" below.
+- `allowFrom` — array of sender open_ids allowed to reach the bot.
 - `groups` — per-group policy, keyed by the group's chat_id; each entry has
-  `requireMention` (boolean) and `allowFrom` (array of open_ids).
+  `requireMention` (boolean) and `allowFrom` (array of open_ids). Consulted
+  only under the `allowlist` group policy.
 - `pending` — pairing requests awaiting approval, keyed by pairing code. Each
   entry has a `kind`: `dm` (a direct sender awaiting the allowlist) or `group`
   (a group awaiting a `groups` entry).
@@ -27,13 +31,35 @@ Always read the current file before editing and write valid JSON back; a
 corrupt file makes the channel fall back to safe defaults (pairing required,
 nothing allowed) rather than failing open.
 
+## The group policy
+
+`groupPolicy` selects how group messages are gated:
+
+- **`block`** — every group message is dropped; the bot ignores groups and
+  answers only direct messages.
+- **`allowlist`** (default) — a group is authorized as a unit. The first
+  @-mention of the bot in a group not yet in `groups` posts a one-time pairing
+  code; approving it adds the group to `groups`. The bot then answers
+  @-mentions there.
+- **`follow-user`** — no group is authorized. A group message is delivered
+  whenever the bot is @-mentioned **and** the sender's open_id is on the
+  top-level `allowFrom` allowlist — so a trusted person reaches the session
+  from any group, with no per-group setup. A non-mention message, and a
+  mention from a sender who is not allowlisted, are dropped; no pairing code is
+  ever posted into a group.
+
+`/feishu-channel:configure` asks which mode to use and writes it. To change it
+later, set `groupPolicy` in `access.json` directly — the change takes effect
+on the next message.
+
 ## Approve a pairing code
 
 The channel answers an un-paired contact with a one-time **pairing code** and
 records a `pending` entry. This happens for two cases: an unknown sender's
-first direct message (under the default `pairing` policy), and the first
-@-mention of the bot in a group that is not yet in `groups`. Approving the
-code is the same gesture for both — the entry's `kind` says what it grants:
+first direct message (under the default `pairing` dmPolicy), and — only under
+the `allowlist` group policy — the first @-mention of the bot in a group not
+yet in `groups`. Approving the code is the same gesture for both — the entry's
+`kind` says what it grants:
 
 1. Read `access.json`.
 2. Find the `pending` entry whose key matches the code the human relays.
@@ -63,12 +89,17 @@ step, run by the operator, brings the group in.
 - **Skip pairing** — set `dmPolicy` to `allowlist` to deliver only from
   `allowFrom` with no pairing step, or to `disabled` to drop all direct
   messages.
-- **Add a group** — the normal path is pairing: a member @-mentions the bot in
-  the group, the channel posts a code, and the human relays it for the
-  approval above. Add a `groups` entry by hand only when the chat_id is
-  already known — keep `requireMention: true` unless the human wants every
-  message in that group delivered, and leave `allowFrom` empty to allow any
-  group member or list open_ids to restrict who triggers the bot there.
+- **Change the group policy** — set `groupPolicy` to `block`, `allowlist`, or
+  `follow-user` per "The group policy" above. Switching to `follow-user` makes
+  the per-group `groups` entries inert (they are kept, but not consulted);
+  switching back to `allowlist` makes them live again.
+- **Add a group** (under the `allowlist` group policy) — the normal path is
+  pairing: a member @-mentions the bot in the group, the channel posts a code,
+  and the human relays it for the approval above. Add a `groups` entry by hand
+  only when the chat_id is already known — keep `requireMention: true` unless
+  the human wants every message in that group delivered, and leave `allowFrom`
+  empty to allow any group member or list open_ids to restrict who triggers
+  the bot there.
 
 ## Diagnose a message that did not arrive
 
@@ -76,12 +107,21 @@ When a sender reports a message never reached the session, the channel can
 say why. Have the human relaunch Claude Code with `FEISHU_CHANNEL_DEBUG=1`
 set in the environment — the channel then logs every gated-out message to
 stderr with its reason: `direct messages disabled`, `sender not on
-allowlist`, `bot not mentioned`, `unconfigured group; bot not mentioned`, and
-so on. Match the reason against the policy above to choose the fix — for
-example, `sender not on allowlist` means the sender's open_id must be added to
-`allowFrom`. A message from an unconfigured group is not simply lost: an
-@-mention of the bot there starts a group pairing, so the fix is to approve
-the code the channel posts into that group.
+allowlist`, `bot not mentioned`, `group messages are blocked (groupPolicy:
+block)`, `unconfigured group; bot not mentioned`, and so on. Match the reason
+against the policy above to choose the fix — for example, `sender not on
+allowlist` means the sender's open_id must be added to `allowFrom`.
+
+For a group message specifically:
+
+- Under `block`, every group message is dropped — switch `groupPolicy` if the
+  bot should answer in groups at all.
+- Under `allowlist`, a message from a group not in `groups` is not simply
+  lost: an @-mention of the bot there starts a group pairing, so the fix is to
+  approve the code the channel posts into that group.
+- Under `follow-user`, `sender not on allowlist` means the @-mentioning sender
+  must be added to `allowFrom`; `bot not mentioned` means the message did not
+  @-mention the bot.
 
 ## Why access is keyed on open_id
 

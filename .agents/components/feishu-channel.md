@@ -99,6 +99,12 @@ so it unit-tests without a running server or connection.
   The bot needs the document-comment and document-metadata read scopes;
   lacking them, a comment is still delivered, but with its text and title as
   a placeholder.
+- Group messages are gated by `access.json`'s `groupPolicy`, set by
+  `/feishu-channel:configure`: `block` (the bot ignores groups), `allowlist`
+  (each group authorized as a unit by pairing — decision 0010), or
+  `follow-user` (a group message is gated on the sender's `allowFrom` allowlist
+  alone, no per-group setup). See
+  [decision 0012](/.agents/decisions/0012-feishu-channel-group-policy-modes.md).
 - The channel connects to Feishu **directly**, not through the session's HTTP
   proxy. `.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case)
   in the MCP server's environment, so a proxy set for the Claude Code session

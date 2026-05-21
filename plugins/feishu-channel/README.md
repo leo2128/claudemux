@@ -61,12 +61,13 @@ In a Claude Code session with the plugin installed, run:
 /feishu-channel:configure <App ID> <App Secret>
 ```
 
-The command saves the credentials to the channel's env file and immediately
-verifies them against Feishu, so an invalid App Secret is caught right then —
-not at the next launch. Run it with no arguments to be prompted for the values
-interactively. Re-run it any time to update the credentials. For an
-international **Lark** app, the command accepts a base URL —
-see `/feishu-channel:configure`'s own guidance.
+The command saves the credentials to the channel's env file, asks which
+**group-message policy** to use (see "Access control" below), and immediately
+verifies the credentials against Feishu, so an invalid App Secret is caught
+right then — not at the next launch. Run it with no arguments to be prompted
+for the values interactively. Re-run it any time to update the credentials or
+the group policy. For an international **Lark** app, the command accepts a base
+URL — see `/feishu-channel:configure`'s own guidance.
 
 <details>
 <summary>Manual fallback</summary>
@@ -155,8 +156,11 @@ to the session:
 - **Direct messages** from an unknown sender are not delivered. The channel
   replies with a one-time **pairing code**; an operator approves the sender out
   of band, after which their messages are delivered.
-- **Group messages** are delivered only from configured groups, and by default
-  only when the bot is @-mentioned.
+- **Group messages** are gated by the `groupPolicy` setting: `block` (the bot
+  ignores groups entirely), `allowlist` (each group is authorized individually,
+  by pairing), or `follow-user` (the bot answers an @-mention from anyone on
+  the allowlist, in any group — no per-group setup). `/feishu-channel:configure`
+  asks which to use.
 
 The policy lives in `~/.claude/channels/feishu/access.json`. A corrupt or
 missing file is reported and the channel falls back to safe defaults rather

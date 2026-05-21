@@ -16,8 +16,10 @@
  */
 
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { GROUP_POLICIES, loadAccess, saveAccess } from '../src/access-store'
 import { isRecord } from '../src/json'
-import { envFile, stateDir } from '../src/paths'
+import { accessFile, envFile, stateDir } from '../src/paths'
+import type { GroupPolicy } from '../src/types'
 
 /** Feishu's open-platform base URL — the default for a mainland self-built app. */
 export const DEFAULT_FEISHU_BASE = 'https://open.feishu.cn'
@@ -41,6 +43,17 @@ export function validateCredentialInput(
     return 'App ID and App Secret must not contain line breaks.'
   }
   return null
+}
+
+/**
+ * Parse the group-message policy the user chose. Returns the policy, or `null`
+ * when the value is missing or not one of the three known modes — `block`
+ * (the bot ignores groups), `allowlist` (each group is authorized by pairing),
+ * or `follow-user` (a group message is gated on the sender's allowlist alone).
+ */
+export function parseGroupPolicy(value: string | undefined): GroupPolicy | null {
+  const v = (value ?? '').trim()
+  return (GROUP_POLICIES as readonly string[]).includes(v) ? (v as GroupPolicy) : null
 }
 
 /**
@@ -140,15 +153,24 @@ async function probeCredentials(
 
 /** Effectful entry point: write the `.env`, then verify against Feishu. */
 async function main(): Promise<void> {
-  const [rawAppId, rawAppSecret, rawBase] = process.argv.slice(2)
+  const [rawAppId, rawAppSecret, rawGroupPolicy, rawBase] = process.argv.slice(2)
   const appId = (rawAppId ?? '').trim()
   const appSecret = (rawAppSecret ?? '').trim()
   const baseUrl = (rawBase ?? '').trim() || DEFAULT_FEISHU_BASE
 
+  const usage = 'Usage: configure <app_id> <app_secret> <group_policy> [feishu_base_url]'
+
   const inputError = validateCredentialInput(appId, appSecret)
   if (inputError) {
     console.error(`configure: ${inputError}`)
-    console.error('Usage: configure <app_id> <app_secret> [feishu_base_url]')
+    console.error(usage)
+    process.exit(1)
+  }
+
+  const groupPolicy = parseGroupPolicy(rawGroupPolicy)
+  if (!groupPolicy) {
+    console.error(`configure: group policy must be one of: ${GROUP_POLICIES.join(', ')}.`)
+    console.error(usage)
     process.exit(1)
   }
 
@@ -161,6 +183,14 @@ async function main(): Promise<void> {
   writeFileSync(file, renderEnvFile(appId, appSecret), { mode: 0o600 })
   chmodSync(file, 0o600)
   console.log(`Wrote ${file} (owner-only).`)
+
+  // Persist the chosen group-message policy into access.json, preserving every
+  // other access field — re-running configure must not wipe the allowlist or
+  // any pending pairings.
+  const accessPath = accessFile(dir)
+  const { access } = loadAccess(accessPath)
+  saveAccess(accessPath, { ...access, groupPolicy })
+  console.log(`Set the group policy to "${groupPolicy}" in ${accessPath}.`)
 
   // Verify the credentials now, so an invalid App Secret surfaces here rather
   // than at the next channel boot.

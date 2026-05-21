@@ -13,7 +13,14 @@ import type { Access, PendingEntry } from '../src/types'
 const NOW = 1_700_000_000_000
 
 function access(overrides: Partial<Access> = {}): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {}, ...overrides }
+  return {
+    dmPolicy: 'pairing',
+    groupPolicy: 'allowlist',
+    allowFrom: [],
+    groups: {},
+    pending: {},
+    ...overrides,
+  }
 }
 
 function pending(overrides: Partial<PendingEntry> = {}): PendingEntry {
@@ -123,8 +130,8 @@ describe('gate — direct messages', () => {
   })
 })
 
-describe('gate — group messages', () => {
-  // Unconfigured groups are covered in 'gate — group pairing' below.
+describe('gate — group messages (groupPolicy: allowlist)', () => {
+  // Unconfigured groups are covered in the group-pairing tests below.
   test('requires a mention when the group policy asks for one', () => {
     const a = access({ groups: { oc_chat: { requireMention: true, allowFrom: [] } } })
     const r = gate(input({ chatType: 'group', access: a, botOpenId: 'ou_bot' }))
@@ -182,7 +189,7 @@ describe('gate — group messages', () => {
   })
 })
 
-describe('gate — group pairing', () => {
+describe('gate — group pairing (groupPolicy: allowlist)', () => {
   test('an @-mention in an unconfigured group starts a group pairing', () => {
     const r = gate(groupInput())
     expect(r.action).toBe('pair')
@@ -237,6 +244,62 @@ describe('gate — group pairing', () => {
     expect(r.code).toBe('aaaaaa')
     expect(r.isResend).toBe(false)
     expect(r.access.pending['aaaaaa']?.kind).toBe('dm')
+  })
+})
+
+describe('gate — groupPolicy block', () => {
+  test('drops every group message, even an allowlisted mention', () => {
+    const a = access({ groupPolicy: 'block', allowFrom: ['ou_sender'] })
+    const r = gate(groupInput({ access: a }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toContain('block')
+  })
+
+  test('does not start a group pairing', () => {
+    const r = gate(groupInput({ access: access({ groupPolicy: 'block' }) }))
+    expect(r.action).toBe('drop')
+    expect(r.changed).toBe(false)
+  })
+})
+
+describe('gate — groupPolicy follow-user', () => {
+  const followUser = (overrides: Partial<Access> = {}): Access =>
+    access({ groupPolicy: 'follow-user', ...overrides })
+
+  test('delivers an allowlisted sender who @-mentions the bot, with no groups entry', () => {
+    const r = gate(groupInput({ access: followUser({ allowFrom: ['ou_sender'] }) }))
+    expect(r.action).toBe('deliver')
+  })
+
+  test('drops a mention from a sender who is not on the allowlist', () => {
+    const r = gate(groupInput({ access: followUser() }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('sender not on allowlist')
+  })
+
+  test('drops a non-mention group message', () => {
+    const r = gate(groupInput({ access: followUser({ allowFrom: ['ou_sender'] }), mentions: [] }))
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('bot not mentioned')
+  })
+
+  test('drops a group message while the bot open_id is unknown', () => {
+    const r = gate(
+      groupInput({ access: followUser({ allowFrom: ['ou_sender'] }), botOpenId: undefined }),
+    )
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toContain('open_id is unknown')
+  })
+
+  test('never starts a group pairing — a group is not authorized as a unit here', () => {
+    const r = gate(groupInput({ access: followUser({ allowFrom: ['ou_sender'] }) }))
+    expect(r.action).not.toBe('pair')
+    const unknownSender = gate(groupInput({ access: followUser() }))
+    expect(unknownSender.action).not.toBe('pair')
   })
 })
 

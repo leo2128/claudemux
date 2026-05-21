@@ -112,8 +112,61 @@ function gateDirect(input: GateInput, access: Access, changed: boolean): GateRes
   return { action: 'pair', access: nextAccess, changed: true, code: input.newCode, isResend: false }
 }
 
-/** Decide a group message. */
+/**
+ * Decide a group message according to `access.groupPolicy` — the switch that
+ * selects one of three group-access modes. See `GroupPolicy` in `types.ts`.
+ */
 function gateGroup(input: GateInput, access: Access, changed: boolean): GateResult {
+  if (access.groupPolicy === 'block') {
+    return {
+      action: 'drop',
+      access,
+      changed,
+      reason: 'group messages are blocked (groupPolicy: block)',
+    }
+  }
+  if (access.groupPolicy === 'follow-user') {
+    return gateGroupFollowUser(input, access, changed)
+  }
+  // 'allowlist' — a group is authorized as a unit, by pairing (decision 0010).
+  return gateGroupAllowlist(input, access, changed)
+}
+
+/**
+ * Decide a group message under the `follow-user` policy: the group itself
+ * needs no authorization — the person does. A message is delivered when the
+ * bot is @-mentioned (the deliberate "engage the bot" signal, without which
+ * the bot would react to every message in the group) and the sender's open_id
+ * is on the top-level `allowFrom` allowlist — the same allowlist that
+ * authorizes direct messages. A non-mention message, or a mention from a
+ * sender who is not allowlisted, is dropped; no pairing code is posted into a
+ * group.
+ */
+function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean): GateResult {
+  if (input.botOpenId === undefined) {
+    return {
+      action: 'drop',
+      access,
+      changed,
+      reason: 'group message requires an @-mention but the bot open_id is unknown',
+    }
+  }
+  if (!isBotMentioned(input.mentions, input.botOpenId)) {
+    return { action: 'drop', access, changed, reason: 'bot not mentioned' }
+  }
+  if (!access.allowFrom.includes(input.senderId)) {
+    return { action: 'drop', access, changed, reason: 'sender not on allowlist' }
+  }
+  return { action: 'deliver', access, changed }
+}
+
+/**
+ * Decide a group message under the `allowlist` policy — a group is authorized
+ * as a unit (decision 0010). A configured group is gated by its own
+ * `requireMention` / `allowFrom` entry; an unconfigured group is brought in by
+ * pairing.
+ */
+function gateGroupAllowlist(input: GateInput, access: Access, changed: boolean): GateResult {
   const policy = access.groups[input.chatId]
   if (!policy) {
     return gateUnconfiguredGroup(input, access, changed)

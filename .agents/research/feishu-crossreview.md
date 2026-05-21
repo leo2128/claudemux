@@ -334,3 +334,28 @@ git ls-files plugins/feishu-channel/   # 确认 node_modules 未入库、无 ski
 ```
 
 未修改任何飞书代码,未提交,未触碰 `plugins/`。本报告是本次评审唯一写入的文件。
+
+---
+
+## Hazard dispositions
+
+> Appended 2026-05-21, after this snapshot was frozen, per
+> [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+> The snapshot body above is unchanged; this appendix is append-only.
+
+This is the plugin's first independent cross-review. Its Top-6 must-fix
+findings — the pairing-approval dead end, unwired `chunk`, silent `botOpenId`
+failure, the dead-code cluster, discarded drop reasons, and the untested MCP
+assembly layer — were all resolved in the plugin's round-3c work; the §可选改进
+force-exit watchdog was added in commit `cfdf5a9`. The snapshot is kept as the
+record of what the review caught, not as an open defect list (see the note in
+[index.md](/.agents/research/index.md)).
+**Disposition: all findings Promoted / resolved.**
+
+One observation belongs to
+[decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md): this
+review was thorough and adversarial, yet did not catch the fan-out hazard —
+because it reviewed against the spec, and the spec had already dropped it. An
+adversarial review inherits the blind spot of the document it anchors on. That
+is why the hazard discipline has to sit on the research→spec boundary, not on
+a later review.

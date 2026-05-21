@@ -118,3 +118,25 @@
 | jeremylongshore/claude-code-slack-channel | github.com/jeremylongshore/claude-code-slack-channel | TS strict / Bun·Node·Docker | 模块化(server+supervisor+policy+journal…) | **bun:test ~180+,fast-check,Stryker,CI** | **高** |
 | retrodigio/claude-channel-slack | github.com/retrodigio/claude-channel-slack | TS / Bun | 单文件 server.ts | gate.test.ts 一个,无 CI | 中 |
 | mpociot/claude-code-slack-bot、yuya-takeyama/cc-slack | — | — | 非 channel(spawn claude / SDK) | — | 不在范围 |
+
+---
+
+## Hazard dispositions
+
+> Appended 2026-05-21, after this snapshot was frozen, per
+> [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+> The snapshot body above is unchanged; this appendix is append-only.
+
+This is a survey of reference channel implementations and their testing
+methodology. It carried one implementer-facing hazard and one methodology
+requirement; both travelled.
+
+### Reference channels leak their process on exit (§2b — the m1heng / retrodigio comparison)
+**Promoted** → spec hard-requirement #3 →
+[decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md)
+(`ShutdownCoordinator`). Same hazard as
+[feishu-channel-notes.md](/.agents/research/feishu-channel-notes.md) §3.
+
+### Test methodology — pure-function units, `bun:test` + `fast-check`, no mocked protocol (Top 1 / Top 2)
+**Promoted** → spec hard-requirement #2, which names this document as the
+methodology to follow.

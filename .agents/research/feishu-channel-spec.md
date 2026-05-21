@@ -35,3 +35,20 @@
 - bun 在 `$HOME/.bun/bin/bun`(不在 PATH)
 - 分支 `feishu-channel-plugin`,增量 commit,不直推 main
 - 知识库(`.agents/`)完成后 cherry-pick 过来,开发中同步沉淀飞书 channel 的决策
+
+---
+
+## Hazard dispositions
+
+> Appended 2026-05-21, after this snapshot was frozen, per
+> [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+> The snapshot body above is unchanged; this appendix is append-only.
+
+This document is the research→implementation hand-off anchor — every Feishu
+build round was driven from it. It raises no hazard of its own; hazards from
+the sibling research notes are meant to land here as hard-requirements. The
+process-leak hazard did, as hard-requirement #3. The fan-out hazard from
+[feishu-channel-notes.md](/.agents/research/feishu-channel-notes.md) §1.2 did
+**not** — and this spec is exactly the surface where it should have appeared
+and was silently dropped. That omission is the motivating case for
+[decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).

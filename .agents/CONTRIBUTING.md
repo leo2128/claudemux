@@ -63,6 +63,42 @@ Before you finish any non-trivial change, ask one question:
 - A fact that is obvious from reading a single file or `tm <verb> --help`.
 - A one-off debugging conclusion, a TODO, or in-progress scratch state.
 
+## Hazard dispositions
+
+A research document is a hand-off: the next agent acts on it without having
+done the investigation. A **hazard** in that document — a constraint, trap, or
+platform fact that breaks the product if mishandled — must not be able to
+reach the end of the document and simply stop there. Every research doc
+reconciles the hazards it raised to an explicit disposition, in a closing
+`## Hazard dispositions` section. The reason and the full case are in
+[decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+
+For each implementer-facing hazard the document raised, give exactly one:
+
+- **Promoted** — it became a binding requirement. Link the carrier: a spec
+  hard-requirement, a decision record, a `components/` foot-gun, or a guard
+  test / hook.
+- **Deferred** — real, intentionally not handled now. Record the trigger that
+  must reopen it; triggers are usually event-based ("before the first `/tmp`
+  protocol schema change"), not date-based.
+- **Out of scope** — judged not to apply. Record the reason.
+
+One step is mandatory: **cross each hazard with claudemux's deployment model**
+— one Claude Code session per teammate, the plugin loaded once per session. A
+bare platform fact ("the platform behaves like X") becomes a claudemux hazard
+only after that cross-product; skipping it is how a real hazard reads as
+harmless background.
+
+A doc that raised no implementer-facing hazard still carries the section,
+stating so in one honest line. The section's job is to make the absence a
+visible claim, not an untracked silence.
+
+**When the section is written.** For a research doc written from now on, the
+section is part of the snapshot — written before the doc is archived. For a
+doc frozen before this discipline existed, the section is a dated, append-only
+**appendix**; the snapshot body stays verbatim. `scripts/check.sh` fails a
+research doc that has no `## Hazard dispositions` section, and CI runs it.
+
 ## Writing standard
 
 - Write KB files in **English** (the repo convention for agent-facing docs).

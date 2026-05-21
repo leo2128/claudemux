@@ -22,6 +22,12 @@ Practical consequences when you open one of these:
 - **Do not edit them to "fix" drift.** Correcting a snapshot destroys the
   snapshot. If the world moved, the right home for the new truth is a
   `component`/`domain` doc or a new decision record — not an edit here.
+- **One exception — the `## Hazard dispositions` appendix.** A research doc
+  carries a closing section reconciling the hazards it raised to a
+  disposition. For docs frozen before that discipline existed, the section is
+  a dated, append-only appendix. This is not "fixing drift": the snapshot body
+  stays verbatim, and the appendix is append-only, the same model the decision
+  records follow. See [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
 - **The decision record is the authority.** Where a snapshot and a decision
   record disagree, the decision record (kept fresh) wins; the snapshot just
   shows the reasoning at the time.

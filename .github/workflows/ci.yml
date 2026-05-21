@@ -62,7 +62,11 @@ jobs:
             plugins/claudemux/scripts/*.sh \
             bin/bump-version \
             bin/check-author \
-            .githooks/pre-commit
+            .githooks/pre-commit \
+            .agents/scripts/check.sh
+
+      - name: agents — KB structural check
+        run: bash .agents/scripts/check.sh
 
       - name: bats — pure functions
         if: hashFiles('tests/pure/*.bats') != ''

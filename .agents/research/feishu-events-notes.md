@@ -212,3 +212,23 @@
 - 添加评论 API:https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/drive-v1/file-comment/create
 - 文档评论事件第三方参考(OpenClaw):https://github.com/openclaw/openclaw/blob/main/docs/channels/feishu.md
 - 文档评论事件第三方参考(Hermes Agent Issue):https://github.com/NousResearch/hermes-agent/issues/11465
+
+---
+
+## Hazard dispositions
+
+> Appended 2026-05-21, after this snapshot was frozen, per
+> [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+> The snapshot body above is unchanged; this appendix is append-only.
+
+### `drive.notice.comment_add_v1` could not be confirmed against Feishu's own docs (§二)
+**Promoted** → [decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md):
+the doc-comment handler decodes defensively, never throws, and logs an
+unrecognized-payload note; the README and the `configure` skill tell operators
+to confirm the event in their app console before relying on it.
+
+### Noise events would flood the single serial session queue (§三)
+**Promoted** → the spec's event scope (this round: chat messages plus document
+comments only) and the registry design in decision 0006. The "only
+react-worthy signals" rule keeps high-frequency `drive.file.*` events off the
+queue.

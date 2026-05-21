@@ -83,3 +83,18 @@ The investigation above was host-probing only — no official docs read. This pa
 ## Final recommendation
 
 Adopt **Path C (statusline sidecar)**. It replaces Path A (declarative flag — a guess) and Path D (`/context` scraping — accurate but fragile and state-mutating). Path C reads Claude Code's own computed `context_window_size`, needs no model turn, refreshes automatically after every assistant message, and degrades cleanly to the existing heuristic when the statusline is not installed. Keep the jsonl peak-usage heuristic strictly as the no-sidecar fallback.
+
+---
+
+## Hazard dispositions
+
+> Appended 2026-05-21, after this snapshot was frozen, per
+> [decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+> The snapshot body above is unchanged; this appendix is append-only.
+
+No implementer-facing hazard. This document is a feature-capability probe —
+whether `tm` can learn a teammate's true context-window size without a model
+turn. Its outcome, Path C (a statusline sidecar), is an unimplemented feature
+enhancement, not a hazard: `tm`'s `ctx` line falling back to `assumed 200k` is
+a known, harmless degradation, not a breakage. Path C is feature backlog,
+outside hazard-disposition scope.

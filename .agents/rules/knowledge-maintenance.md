@@ -39,8 +39,20 @@ that the next agent would otherwise re-debate — add a numbered record under
 append-only history: do not delete an old record when the decision is later
 superseded; add a new record and mark the old one `Superseded by …`.
 
+## Research hazards
+
+When you finish a research round, every implementer-facing hazard the
+research raised must reach a recorded disposition — **Promoted**, **Deferred**,
+or **Out of scope** — in a `## Hazard dispositions` section of the research
+doc. A hazard left as loose prose is dropped silently at the next hand-off.
+The disposition vocabulary, the mandatory deployment-model cross step, and the
+appendix rule for already-frozen docs are in
+[CONTRIBUTING.md](/.agents/CONTRIBUTING.md); the reason is
+[decision 0009](/.agents/decisions/0009-research-hazard-dispositions.md).
+
 ## Verification
 
 After any KB edit, run `bash .agents/scripts/check.sh`. It must report no
-broken links. Resolve any orphan-document warning by linking the new doc
-into the navigation, or by deleting the doc if it is no longer needed.
+broken links and no research doc missing its `## Hazard dispositions`
+section. Resolve any orphan-document warning by linking the new doc into the
+navigation, or by deleting the doc if it is no longer needed.

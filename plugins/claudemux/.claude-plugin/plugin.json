@@ -1,6 +1,6 @@
 {
   "name": "claudemux",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Multi-repo Claude Code orchestrator. Run one dispatcher session in the parent of your repos; spawn, message, and wait on tmux teammates across them — all from one place.",
   "author": {
     "name": "YourWildDad"

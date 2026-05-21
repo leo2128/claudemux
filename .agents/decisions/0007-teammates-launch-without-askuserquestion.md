@@ -44,8 +44,11 @@ the flag with no separate code path.
 
 ## Consequences
 
-- A teammate cannot pop an `AskUserQuestion` modal; the freeze class
-  above is gone.
+- A teammate can no longer pop an `AskUserQuestion` modal — that one
+  freeze vector is closed. This does *not* eliminate the freeze
+  class: `ExitPlanMode` opens the same kind of human-input modal and
+  is deliberately left in scope (next bullet), so a teammate can
+  still be frozen that way.
 - Teammates lose interactive multiple-choice prompting. This is
   intended: there is no human at the teammate terminal to answer one,
   and turn-ending text reaches the dispatcher instead.
@@ -54,8 +57,9 @@ the flag with no separate code path.
   disables only the tool named in the originating task. A future task
   may extend `teammate_launch_flags` to deny it the same way; the
   builder is the one place to do so.
-- `tm help spawn` documents the disabled tool, so the shipped help
-  stays the source of truth for teammate launch behavior.
+- `tm help spawn` and `tm help resume` both document the disabled
+  tool, so the shipped help stays the source of truth for teammate
+  launch behavior.
 
 ## References
 

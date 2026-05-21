@@ -11,3 +11,7 @@ tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]
       'tm spawn --prompt' (inherits 'tm send''s stderr ctx echo on
       the sync path). --no-wait (with --prompt) fires without
       waiting. --task relabels the resumed conversation.
+      Like every teammate launch, the resumed REPL starts with the
+      AskUserQuestion tool disabled (see 'tm help spawn' for why): a
+      resumed teammate raises questions by ending its turn with
+      text, not by opening a modal.

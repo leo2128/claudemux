@@ -60,7 +60,8 @@ jobs:
             plugins/claudemux/bin/tm \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
-            bin/bump-version \
+            bin/changeset \
+            bin/release \
             bin/check-author \
             .githooks/pre-commit \
             .agents/scripts/check.sh
@@ -75,6 +76,10 @@ jobs:
       - name: bats — help snapshots
         if: hashFiles('tests/help/*.bats') != ''
         run: bats tests/help/
+
+      - name: bats — release tooling
+        if: hashFiles('tests/cli/*.bats') != ''
+        run: bats tests/cli/
 
   # The feishu-channel plugin is a Bun/TypeScript project with its own unit
   # suite. It runs in a separate job so the Bun toolchain stays off the bats +

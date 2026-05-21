@@ -100,3 +100,15 @@ jobs:
 
       - name: Unit tests
         run: bun test
+
+      # A live check against the real Feishu Open Platform: the credentials
+      # mint a tenant_access_token and a WSClient opens the long-lived
+      # WebSocket. test/feishu-live.ts is not a *.test.ts file, so `bun test`
+      # above never runs it — it runs here, by explicit path, with the app
+      # credentials from repository secrets. When the secrets are absent (a
+      # fork pull request), the test skips itself rather than failing.
+      - name: Live Feishu integration test
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+        run: bun test ./test/feishu-live.ts

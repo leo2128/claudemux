@@ -45,6 +45,16 @@ const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel'
  */
 export const FEISHU_TEXT_LIMIT = 4000
 
+/**
+ * The emoji the channel reacts with to mark an inbound chat message as
+ * received into the Claude session. `GLANCE` is Feishu's 👀 emoji — it reads
+ * as "seen, being looked at", which is exactly the signal the sender wants:
+ * their message landed and Claude is on it. The channel adds this reaction
+ * once a message reaches the session and removes it once Claude replies into
+ * that chat.
+ */
+export const RECEIVED_REACTION_EMOJI = 'GLANCE'
+
 /** Pushes one inbound event to the Claude session. */
 export type ChannelNotifier = (
   content: string,
@@ -180,6 +190,17 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     }
   }
 
+  /**
+   * message_id → the chat it belongs to and the reaction_id of its "received"
+   * indicator, for every inbound chat message delivered to the session and
+   * still awaiting a reply. Held in memory, not on disk, on purpose: the
+   * process that owns the inbound connection is the same one whose `reply`
+   * tool answers the session it feeds, so a process-local map is consistent,
+   * and a restart discards the Claude conversation and this map together —
+   * persisting it would only preserve indicators for context that is gone.
+   */
+  const pendingReactions = new Map<string, { chatId: string; reactionId: string }>()
+
   async function handleEvent(eventType: string, raw: unknown): Promise<void> {
     const messageId = inboundMessageId(raw)
     const handler = registry.get(eventType)
@@ -206,8 +227,62 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     logInfo(`${eventType} gated through — delivering (message ${messageId})`)
     try {
       await deps.notify(delivery.content, delivery.meta)
+      // The event is now in the session's context — mark the source message
+      // as received so the Feishu sender sees it landed. `markReceived`
+      // swallows its own failures, so it never reaches the catch below.
+      await markReceived(delivery.meta)
     } catch (err) {
       logError(`failed to deliver a ${eventType} notification`, err)
+    }
+  }
+
+  /**
+   * Mark a just-delivered message as received: add the "received" reaction on
+   * Feishu and remember its reaction_id so a later reply can take it back off.
+   * Only chat messages carry the indicator — a doc comment is not an IM
+   * message, and the message-reaction API has nothing to act on for it.
+   * Best-effort: it catches its own failures so a reaction problem is logged
+   * and never looks like a delivery failure to the caller.
+   */
+  async function markReceived(meta: Record<string, string>): Promise<void> {
+    if (meta.kind !== 'message') return
+    const messageId = meta.message_id
+    const chatId = meta.chat_id
+    if (!messageId || !chatId) return
+    try {
+      const reactionId = await deps.transport.addReaction(messageId, RECEIVED_REACTION_EMOJI)
+      if (!reactionId) {
+        logError(
+          `Feishu returned no reaction_id for the received reaction on message ` +
+            `${messageId}; it cannot be cleared when Claude replies`,
+        )
+        return
+      }
+      pendingReactions.set(messageId, { chatId, reactionId })
+    } catch (err) {
+      logError(`failed to add the received reaction to message ${messageId}`, err)
+    }
+  }
+
+  /**
+   * Clear the "received" reaction from every message in a chat that is still
+   * awaiting a reply — called once a reply has been sent into that chat, since
+   * those messages are now answered. A `reply` carries only a chat_id, while a
+   * reaction lives on a specific message_id, so the whole chat's pending set
+   * is cleared: anything outstanding when Claude answers the chat is treated
+   * as addressed by that answer. Each removal is best-effort and a message is
+   * dropped from the map even when its removal fails, so a reaction_id Feishu
+   * will not accept is not retried on every later reply.
+   */
+  async function clearReceived(chatId: string): Promise<void> {
+    const pending = [...pendingReactions].filter(([, record]) => record.chatId === chatId)
+    for (const [messageId, record] of pending) {
+      pendingReactions.delete(messageId)
+      try {
+        await deps.transport.removeReaction(messageId, record.reactionId)
+      } catch (err) {
+        logError(`failed to remove the received reaction from message ${messageId}`, err)
+      }
     }
   }
 
@@ -228,6 +303,11 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
             const result = await deps.transport.sendText(chatId, part)
             if (result.messageId) ids.push(result.messageId)
           }
+          // The chat has been answered — take the "received" indicator back
+          // off every message in it that was waiting for this reply. Reached
+          // only after the send loop succeeds, so a failed reply leaves the
+          // indicator in place.
+          await clearReceived(chatId)
           const summary =
             parts.length === 1
               ? `Sent to ${chatId}${ids[0] ? ` as ${ids[0]}` : ''}.`

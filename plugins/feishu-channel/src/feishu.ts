@@ -166,8 +166,19 @@ export interface FeishuTransport {
    * unrelated conversation.
    */
   sendText(chatId: string, text: string): Promise<FeishuSendResult>
-  /** Add an emoji reaction to a message. */
-  addReaction(messageId: string, emoji: string): Promise<void>
+  /**
+   * Add an emoji reaction to a message and return the reaction_id Feishu
+   * assigned. That id is what `removeReaction` needs to take the same reaction
+   * back off; Feishu can omit it, in which case an empty string is returned.
+   */
+  addReaction(messageId: string, emoji: string): Promise<string>
+  /**
+   * Remove a reaction from a message, identified by the reaction_id that
+   * `addReaction` returned. Feishu only lets the app that added a reaction
+   * remove it, so this is always paired with a prior `addReaction` from the
+   * same channel.
+   */
+  removeReaction(messageId: string, reactionId: string): Promise<void>
   /** Replace the text of a message the bot previously sent. */
   editText(messageId: string, text: string): Promise<void>
   /**
@@ -320,10 +331,17 @@ export function createFeishuTransport(
       return { messageId: res.data?.message_id }
     },
 
-    async addReaction(messageId: string, emoji: string): Promise<void> {
-      await client.im.messageReaction.create({
+    async addReaction(messageId: string, emoji: string): Promise<string> {
+      const res = await client.im.messageReaction.create({
         path: { message_id: messageId },
         data: { reaction_type: { emoji_type: emoji } },
+      })
+      return res.data?.reaction_id ?? ''
+    },
+
+    async removeReaction(messageId: string, reactionId: string): Promise<void> {
+      await client.im.messageReaction.delete({
+        path: { message_id: messageId, reaction_id: reactionId },
       })
     },
 

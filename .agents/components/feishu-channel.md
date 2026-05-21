@@ -47,6 +47,12 @@ Claude replies through MCP tools the server exposes (`reply`, `react`,
 `edit_message`), which call the Feishu API. Channels are a Claude Code
 research-preview feature (requires Claude Code ≥ 2.1.80).
 
+A delivered chat message is also given a 👀 reaction on Feishu the moment it
+reaches the session — a receipt signal for the sender — and the reaction is
+cleared automatically when Claude replies into that chat. The `message_id →
+reaction_id` map this needs is held in memory in `createChannelCore`, not on
+disk. See [decision 0013](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md).
+
 ## The event registry — the extensibility seam
 
 Event handling is a registry, not a per-event branch in the server. Each
@@ -120,5 +126,6 @@ so it unit-tests without a running server or connection.
 
 - [decisions/0005-feishu-channel-plugin.md](/.agents/decisions/0005-feishu-channel-plugin.md) — why a second plugin, why TS+Bun.
 - [decisions/0006-feishu-channel-event-registry.md](/.agents/decisions/0006-feishu-channel-event-registry.md) — the event registry and core design choices.
+- [decisions/0013-feishu-channel-received-reaction-indicator.md](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound chat messages.
 - [components/repo-tooling.md](/.agents/components/repo-tooling.md) — the CI `feishu-channel` job.
 - [root.md](/.agents/root.md) — repo layout.

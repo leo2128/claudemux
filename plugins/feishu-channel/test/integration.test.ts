@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
-import { channelNotification, createChannelCore } from '../src/server'
+import { channelNotification, createChannelCore, RECEIVED_REACTION_EMOJI } from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
 
@@ -151,5 +151,27 @@ describe('integration — tool call to outbound send', () => {
       // would produce.
       expect(JSON.stringify(result.content)).not.toContain('Unknown tool')
     }
+  })
+})
+
+describe('integration — received-reaction indicator', () => {
+  test('an inbound message is reacted to, and a reply takes the reaction back off', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const { server, core } = assemble(transport)
+
+    // Inbound: the event reaches the session, then the source message is
+    // marked as received.
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+    expect(server.notifications).toHaveLength(1)
+    expect(transport.reactions).toEqual([
+      { messageId: 'om_msg', emoji: RECEIVED_REACTION_EMOJI },
+    ])
+
+    // Reply: answering the chat takes the indicator off the message.
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answer' })
+    expect(transport.reactionRemovals).toEqual([
+      { messageId: 'om_msg', reactionId: 'rk_om_msg' },
+    ])
   })
 })

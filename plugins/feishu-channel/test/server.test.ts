@@ -3,8 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
+import { DOC_COMMENT_EVENT_TYPE } from '../src/handlers/doc-comment'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
-import { createChannelCore, FEISHU_TEXT_LIMIT, loadCredentials, readEnvFile } from '../src/server'
+import {
+  createChannelCore,
+  FEISHU_TEXT_LIMIT,
+  loadCredentials,
+  readEnvFile,
+  RECEIVED_REACTION_EMOJI,
+} from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
 
@@ -49,19 +56,24 @@ function makeCore(
   })
 }
 
-/** A raw `im.message.receive_v1` event body from a fixed test sender. */
-function rawImEvent(): Record<string, unknown> {
+/** A raw `im.message.receive_v1` event body with a given message_id and chat_id. */
+function rawIm(messageId: string, chatId: string): Record<string, unknown> {
   return {
     sender: { sender_id: { open_id: 'ou_sender' }, sender_type: 'user' },
     message: {
-      message_id: 'om_msg',
-      chat_id: 'oc_chat',
+      message_id: messageId,
+      chat_id: chatId,
       chat_type: 'p2p',
       message_type: 'text',
       content: '{"text":"hello there"}',
       mentions: [],
     },
   }
+}
+
+/** A raw `im.message.receive_v1` event body from a fixed test sender. */
+function rawImEvent(): Record<string, unknown> {
+  return rawIm('om_msg', 'oc_chat')
 }
 
 function writeAccess(overrides: Partial<Access>): void {
@@ -230,6 +242,146 @@ describe('handleTool — react and edit_message', () => {
 
     expect(result.isError).toBeUndefined()
     expect(transport.edits).toEqual([{ messageId: 'om_msg', text: 'revised' }])
+  })
+})
+
+describe('received-reaction indicator', () => {
+  test('adds the received reaction once an inbound chat message is delivered', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+
+    expect(transport.reactions).toEqual([
+      { messageId: 'om_msg', emoji: RECEIVED_REACTION_EMOJI },
+    ])
+  })
+
+  test('a reply clears the received reaction for that chat', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answered' })
+
+    expect(transport.reactionRemovals).toEqual([
+      { messageId: 'om_msg', reactionId: 'rk_om_msg' },
+    ])
+  })
+
+  test('a reply clears every message still pending in that chat', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawIm('om_a', 'oc_chat'))
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawIm('om_b', 'oc_chat'))
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answered both' })
+
+    expect(transport.reactionRemovals.map((r) => r.messageId).sort()).toEqual(['om_a', 'om_b'])
+  })
+
+  test('a reply leaves another chat’s pending reaction in place', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawIm('om_a', 'oc_one'))
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawIm('om_b', 'oc_two'))
+    await core.handleTool('reply', { chat_id: 'oc_one', text: 'answered one' })
+
+    expect(transport.reactionRemovals).toEqual([{ messageId: 'om_a', reactionId: 'rk_om_a' }])
+
+    // The untouched chat still clears on its own reply.
+    await core.handleTool('reply', { chat_id: 'oc_two', text: 'answered two' })
+    expect(transport.reactionRemovals.map((r) => r.messageId)).toEqual(['om_a', 'om_b'])
+  })
+
+  test('a gated-out message gets no reaction', async () => {
+    writeAccess({ dmPolicy: 'pairing' })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+
+    expect(transport.reactions).toHaveLength(0)
+  })
+
+  test('a delivered doc comment gets no reaction — it is not an IM message', async () => {
+    const transport = new FakeTransport()
+    const notes: Note[] = []
+    const core = makeCore(transport, notes)
+
+    await core.handleEvent(DOC_COMMENT_EVENT_TYPE, {
+      file_token: 'doccnAbC123',
+      file_type: 'docx',
+      comment_id: 'cmt_1',
+      user_id: { open_id: 'ou_commenter' },
+      is_mentioned: true,
+      create_time: '1716200000000',
+    })
+
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.meta.kind).toBe('doc_comment')
+    expect(transport.reactions).toHaveLength(0)
+  })
+
+  test('a failed addReaction is logged and never blocks delivery', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    transport.failOn = 'addReaction'
+    const notes: Note[] = []
+    const logErrors: string[] = []
+    const core = makeCore(transport, notes, logErrors)
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+
+    expect(notes).toHaveLength(1)
+    expect(logErrors.some((m) => m.includes('received reaction'))).toBe(true)
+  })
+
+  test('a failed removeReaction is logged, and the message is not retried later', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    transport.failOn = 'removeReaction'
+    const logErrors: string[] = []
+    const core = makeCore(transport, [], logErrors)
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+    const result = await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answered' })
+
+    expect(result.isError).toBeUndefined()
+    const removalErrors = (): number =>
+      logErrors.filter((m) => m.includes('remove the received reaction')).length
+    expect(removalErrors()).toBe(1)
+
+    // The message was dropped from the pending set despite the failure, so a
+    // later reply into the same chat does not retry the doomed removal — the
+    // removal error count stays at one.
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'again' })
+    expect(removalErrors()).toBe(1)
+  })
+
+  test('a reply that fails to send leaves the indicator in place', async () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport()
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
+    transport.failOn = 'sendText'
+    const failed = await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answered' })
+
+    expect(failed.isError).toBe(true)
+    expect(transport.reactionRemovals).toHaveLength(0)
+
+    // The message is still pending — a later successful reply clears it.
+    transport.failOn = undefined
+    await core.handleTool('reply', { chat_id: 'oc_chat', text: 'retry' })
+    expect(transport.reactionRemovals).toEqual([
+      { messageId: 'om_msg', reactionId: 'rk_om_msg' },
+    ])
   })
 })
 

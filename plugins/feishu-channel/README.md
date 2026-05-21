@@ -38,9 +38,10 @@ Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
    - `drive.notice.comment_add_v1` — new comments and replies on Feishu
      documents. See the note below before relying on this one.
 5. Grant the permission scopes the bot needs: reading incoming messages,
-   sending messages as the bot, adding message reactions (for the `react`
-   tool), and — for document comments — reading document comments and
-   document metadata. The app's permission console lists each scope.
+   sending messages as the bot, adding and removing message reactions (for the
+   `react` tool and the received indicator), and — for document comments —
+   reading document comments and document metadata. The app's permission
+   console lists each scope.
 6. **Publish a release** of the app so the bot and its permissions take effect.
 7. From the app's credentials page, copy the **App ID** and **App Secret**.
 
@@ -136,6 +137,13 @@ attribute says which kind of event it is:
 
 New event types are added by registering one more handler — the channel is not
 hardcoded to a fixed set of events.
+
+**Received indicator.** Once a chat message clears access control and is
+delivered into the session, the channel adds a 👀 reaction to it on Feishu —
+so the sender can see their message landed and Claude is on it. The reaction is
+removed automatically when Claude replies into that chat: every message in the
+chat that was still awaiting a reply has its indicator cleared. Document
+comments are not IM messages and carry no such reaction.
 
 **Outbound.** The server exposes three MCP tools:
 

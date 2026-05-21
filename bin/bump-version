@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
-# bump-version <patch|minor|major> — bump the "version" field in the plugin
-# manifest. Run from anywhere inside the claudemux git repo.
+# bump-version <plugin> <patch|minor|major> — bump the "version" field in a
+# plugin's manifest. <plugin> is a directory name under plugins/. Run from
+# anywhere inside the claudemux git repo.
 #
-# Echoes "<old> -> <new>" on success.
+# Echoes "<plugin>: <old> -> <new>" on success.
 #
-# Pairs with .githooks/pre-commit, which rejects commits that touch
-# feature-class paths (bin/, hooks/, scripts/, templates/, skills/*/SKILL.md)
-# without a corresponding version bump in the same commit.
+# Pairs with .githooks/pre-commit, which rejects a commit that touches a
+# plugin's feature-class paths without bumping that plugin's own version.
 
 set -euo pipefail
 
 die() { echo "bump-version: $*" >&2; exit 1; }
 
-level="${1:-}"
+plugin="${1:-}"
+level="${2:-}"
+
+[[ -n "$plugin" ]] || die "usage: bin/bump-version <plugin> <patch|minor|major>"
 case "$level" in
     patch|minor|major) ;;
-    "") die "usage: bin/bump-version <patch|minor|major>" ;;
+    "") die "usage: bin/bump-version <plugin> <patch|minor|major>" ;;
     *)  die "invalid level '$level' — must be patch, minor, or major" ;;
 esac
 
 root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
-manifest="$root/plugins/claudemux/.claude-plugin/plugin.json"
-[[ -f "$manifest" ]] || die "$manifest not found"
+manifest="$root/plugins/$plugin/.claude-plugin/plugin.json"
+if [[ ! -f "$manifest" ]]; then
+    available=""
+    for dir in "$root"/plugins/*/; do
+        [[ -d "$dir" ]] || continue
+        name=${dir%/}
+        available+="${name##*/} "
+    done
+    die "unknown plugin '$plugin' — no manifest at" \
+        "plugins/$plugin/.claude-plugin/plugin.json (available: ${available:-none})"
+fi
 
 old=$(jq -r '.version' "$manifest")
 [[ "$old" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
@@ -39,4 +51,4 @@ tmp=$(mktemp)
 jq --arg v "$new" '.version = $v' "$manifest" > "$tmp"
 mv "$tmp" "$manifest"
 
-echo "$old -> $new"
+echo "$plugin: $old -> $new"

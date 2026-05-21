@@ -188,9 +188,9 @@ Enable the pre-commit hook once after cloning:
 git config core.hooksPath .githooks
 ```
 
-It rejects feature-class changes (`bin/`, `hooks/`, `scripts/`,
-`templates/`, `skills/*/SKILL.md`) that don't bump the plugin version in
-the same commit. Bump with `bin/bump-version <patch|minor|major>`.
+It rejects a commit that changes a plugin's feature-class paths without
+bumping that plugin's version. Each plugin under `plugins/` is versioned
+on its own; bump one with `bin/bump-version <plugin> <patch|minor|major>`.
 
 ## Uninstall
 

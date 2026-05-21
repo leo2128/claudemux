@@ -179,9 +179,9 @@ clone 后跑一次启用 pre-commit hook:
 git config core.hooksPath .githooks
 ```
 
-它会拦截同一提交里改了 feature-class(`bin/` / `hooks/` / `scripts/` /
-`templates/` / `skills/*/SKILL.md`)却没 bump 版本的 commit。在这次
-commit 里用 `bin/bump-version <patch|minor|major>` 抬一下版本即可。
+它会拦截同一提交里改了某个插件 feature-class 路径却没 bump 那个插件
+版本的 commit。`plugins/` 下每个插件各自独立计版,用
+`bin/bump-version <插件> <patch|minor|major>` 抬对应插件的版本即可。
 
 ## 卸载
 

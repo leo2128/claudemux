@@ -3,9 +3,9 @@
 #   1) Commit author email must be a real, well-formed address — not a
 #      machine-default identity (git's whoami@hostname guess). The rule
 #      lives in bin/check-author and is shared with the CI workflow.
-#   2) Touching a feature-class path (bin/, hooks/, scripts/, templates/,
-#      skills/*/SKILL.md) requires a matching version bump in the
-#      plugin manifest.
+#   2) Touching a plugin's feature-class path requires a matching version
+#      bump in that plugin's own manifest. Every plugin under plugins/ is
+#      versioned independently, so each is checked on its own.
 #
 # Enable per clone:  git config core.hooksPath .githooks
 # Bypass once:       git commit --no-verify
@@ -26,46 +26,107 @@ if ! "$(git rev-parse --show-toplevel)/bin/check-author" "$author_email"; then
 fi
 
 # --- 2) Version-bump check ------------------------------------------------
-manifest="plugins/claudemux/.claude-plugin/plugin.json"
+# This repo ships more than one plugin under plugins/, each with its own
+# manifest and its own version. A staged feature-class file requires a bump
+# in *that plugin's* manifest, checked independently of the other plugins.
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [[ -z "$staged" ]] && exit 0
 
-# Allowlist: paths whose change implies user-visible behavior shift.
-feature_paths=()
+# Feature-class globs per plugin, matched against the path *within* the
+# plugin directory. The plugins have different shapes — a Bash plugin and a
+# TypeScript plugin — so each declares its own set. A blanket "everything but
+# docs" rule is deliberately avoided: it would silently reclassify
+# claudemux's command docs and skill references as feature-class. A path is
+# feature-class when changing it shifts user-visible runtime behavior.
+# To onboard a new plugin, add a case branch here.
+feature_class_globs() {
+  case "$1" in
+    claudemux)
+      printf '%s\n' 'bin/*' 'hooks/*' 'scripts/*' 'templates/*' 'skills/*/SKILL.md' ;;
+    feishu-channel)
+      printf '%s\n' 'src/*' '.mcp.json' 'package.json' 'skills/*/SKILL.md' ;;
+    *) ;;  # Unknown plugin: no declared set — reported below, never blocked on.
+  esac
+}
+
+# The .version field of a JSON manifest blob read from stdin, "" if absent.
+manifest_version() { jq -r '.version // empty' 2>/dev/null || true; }
+
+touched=" "   # space-padded unique plugin names with a feature-class change
+unknown=" "   # space-padded unique plugin names with no feature-class rule
+report=""     # human-readable per-file list for the rejection message
+
 while IFS= read -r f; do
-    case "$f" in
-        plugins/claudemux/bin/*)              feature_paths+=("$f") ;;
-        plugins/claudemux/hooks/*)            feature_paths+=("$f") ;;
-        plugins/claudemux/scripts/*)          feature_paths+=("$f") ;;
-        plugins/claudemux/templates/*)        feature_paths+=("$f") ;;
-        plugins/claudemux/skills/*/SKILL.md)  feature_paths+=("$f") ;;
+  [[ "$f" == plugins/*/* ]] || continue
+  rest="${f#plugins/}"
+  plugin="${rest%%/*}"
+  rel="${rest#*/}"
+
+  globs=$(feature_class_globs "$plugin")
+  if [[ -z "$globs" ]]; then
+    [[ "$unknown" == *" $plugin "* ]] || unknown+="$plugin "
+    continue
+  fi
+
+  while IFS= read -r glob; do
+    # $glob is an intentional case pattern, not a literal string.
+    # shellcheck disable=SC2254
+    case "$rel" in
+      $glob)
+        [[ "$touched" == *" $plugin "* ]] || touched+="$plugin "
+        report+="  [$plugin] $f"$'\n'
+        break ;;
     esac
+  done <<< "$globs"
 done <<< "$staged"
 
-[[ ${#feature_paths[@]} -eq 0 ]] && exit 0
-
-# Did the staged manifest actually change the "version" field?
-version_bumped=0
-if grep -qx "$manifest" <<< "$staged"; then
-    old=$(git show "HEAD:$manifest" 2>/dev/null | jq -r '.version' 2>/dev/null || echo "")
-    new=$(jq -r '.version' "$manifest" 2>/dev/null || echo "")
-    [[ -n "$old" && -n "$new" && "$old" != "$new" ]] && version_bumped=1
+# A plugin with no feature-class rule cannot be checked — say so, but never
+# block on it, so an unrecognized plugin does not wedge every commit.
+if [[ "$unknown" != " " ]]; then
+  # shellcheck disable=SC2086  # intentional word-split over the name list
+  for p in $unknown; do
+    echo "pre-commit: note — plugins/$p/ has no feature-class rule in" \
+         ".githooks/pre-commit; its version bump is not enforced." >&2
+  done
 fi
 
-if (( version_bumped )); then
-    exit 0
-fi
+[[ "$touched" == " " ]] && exit 0
 
-cat >&2 <<EOF
-pre-commit: feature-class files staged but plugin.json version not bumped.
+# Each touched plugin must have changed the version field of its own manifest
+# in this commit. old/new are read from git blobs — HEAD and the staged index
+# — so a manifest edited but not re-staged does not count, and a brand-new
+# plugin arriving with a version (no HEAD blob) does.
+missing=""
+# shellcheck disable=SC2086  # intentional word-split over the name list
+for p in $touched; do
+  manifest="plugins/$p/.claude-plugin/plugin.json"
+  bumped=0
+  if grep -qxF "$manifest" <<< "$staged"; then
+    old=$(git show "HEAD:$manifest" 2>/dev/null | manifest_version || true)
+    new=$(git show ":$manifest" 2>/dev/null | manifest_version || true)
+    [[ -n "$new" && "$old" != "$new" ]] && bumped=1
+  fi
+  if (( ! bumped )); then
+    missing+="$p "
+  fi
+done
 
-Touched paths:
-$(printf '  %s\n' "${feature_paths[@]}")
+[[ -z "$missing" ]] && exit 0
 
-Run:    bin/bump-version <patch|minor|major>
-Then:   git add $manifest && git commit ...
-
-Bypass with --no-verify if this change genuinely doesn't warrant a bump.
-EOF
+{
+  echo "pre-commit: feature-class files staged, but the plugin version was not bumped."
+  echo
+  echo "Touched feature-class paths:"
+  printf '%s' "$report"
+  echo
+  echo "Bump each affected plugin in this commit:"
+  # shellcheck disable=SC2086  # intentional word-split over the name list
+  for p in $missing; do
+    echo "  bin/bump-version $p <patch|minor|major>"
+    echo "  git add plugins/$p/.claude-plugin/plugin.json"
+  done
+  echo
+  echo "Bypass with --no-verify if this change genuinely doesn't warrant a bump."
+} >&2
 exit 1

@@ -60,7 +60,9 @@ jobs:
             plugins/claudemux/bin/tm \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
-            bin/bump-version
+            bin/bump-version \
+            bin/check-author \
+            .githooks/pre-commit
 
       - name: bats — pure functions
         if: hashFiles('tests/pure/*.bats') != ''

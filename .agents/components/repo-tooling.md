@@ -8,7 +8,7 @@ workflow.
 
 | Path | Role |
 |---|---|
-| [`/bin/bump-version`](/bin/bump-version) | Bump the `version` field in the claudemux `plugin.json` (`patch`/`minor`/`major`) |
+| [`/bin/bump-version`](/bin/bump-version) | Bump the `version` field in a plugin's manifest — `bin/bump-version <plugin> <patch\|minor\|major>` |
 | [`/bin/check-author`](/bin/check-author) | Validate one git author email — the single source of truth for the author rule |
 | [`/bin/test-tm-mem`](/bin/test-tm-mem), `/bin/test-tm-prompt-splat` | Standalone `tm` behavior test runners |
 | [`/.githooks/pre-commit`](/.githooks/pre-commit) | Two ordered checks: author email, then version bump |
@@ -17,31 +17,40 @@ workflow.
 
 ## Versioning
 
-The plugin version lives in
-[`/plugins/claudemux/.claude-plugin/plugin.json`](/plugins/claudemux/.claude-plugin/plugin.json).
-Bump it with `bin/bump-version <patch|minor|major>` whenever you ship a
-change to a **feature-class path**:
+This repo ships more than one plugin under `plugins/`. Each has its own
+manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version;
+the plugins are versioned independently. Bump one with
+`bin/bump-version <plugin> <patch|minor|major>` whenever you ship a change to
+that plugin's **feature-class paths**.
 
-- `bin/`, `hooks/`, `scripts/`, `templates/` under `plugins/claudemux/`
-- any `skills/*/SKILL.md`
+What counts as feature-class is per-plugin, because the plugins differ in
+shape:
+
+- `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any
+  `skills/*/SKILL.md`.
+- `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and
+  any `skills/*/SKILL.md`.
 
 `patch` = bug fix, no visible behavior change; `minor` = new
 backward-compatible feature; `major` = breaking change to a documented
 contract (a CLI flag, a file path, an on-disk format).
 
 Pure-docs commits (README, `CLAUDE.md`, KB files, any `*.md` that is not a
-`SKILL.md`), CI/test changes, and `plugin.json` description/keyword edits
-are **exempt**. The `.agents/` KB is not a feature-class path — KB changes
-never need a version bump.
+`SKILL.md`), CI/test changes, and manifest description/keyword edits are
+**exempt**. The `.agents/` KB is not a feature-class path — KB changes never
+need a version bump.
 
 ## The pre-commit hook
 
 [`/.githooks/pre-commit`](/.githooks/pre-commit) runs two checks:
 
 1. **Author email** — delegates to `bin/check-author` (see below).
-2. **Version bump** — if any staged file is feature-class and `plugin.json`'s
-   `version` field did not change in the same commit, the commit is
-   rejected, with the exact `bin/bump-version` command printed to stderr.
+2. **Version bump** — for each plugin with a staged feature-class file, the
+   commit is rejected unless that plugin's manifest `version` field changed
+   in the same commit. Plugins are checked independently, and the exact
+   `bin/bump-version` command is printed to stderr. The per-plugin
+   feature-class globs live in the hook's `feature_class_globs` function — a
+   new plugin is onboarded by adding one case branch there.
 
 It is a workflow nudge, not a wall: `git commit --no-verify` bypasses it.
 Enable it once per clone: `git config core.hooksPath .githooks`.
@@ -68,7 +77,8 @@ jobs:
 - **`check`** — the claudemux plugin, on an `ubuntu-latest` +
   `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
   install `tmux`/`bats`/`shellcheck` → `shellcheck` on `tm`, the hooks, the
-  scripts, and `bin/bump-version` → `bats tests/pure/` → `bats tests/help/`.
+  scripts, `bin/bump-version`, `bin/check-author`, and `.githooks/pre-commit`
+  → `bats tests/pure/` → `bats tests/help/`.
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`

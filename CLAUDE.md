@@ -55,13 +55,18 @@ These rules cover the shared surfaces between `bin/tm`, the hooks, and the host 
 
 ## Versioning
 
-The plugin version is in `plugins/claudemux/.claude-plugin/plugin.json`. Bump it with `bin/bump-version <patch|minor|major>` whenever you ship a change to a feature-class path:
+This repo ships more than one plugin under `plugins/`. Each plugin has its own manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version number — the plugins are versioned independently. Bump a plugin's version with `bin/bump-version <plugin> <patch|minor|major>` whenever you ship a change to one of *that plugin's* feature-class paths:
 
 - `patch` — bug fix, no behavior change visible to users
 - `minor` — new feature, backward-compatible
 - `major` — breaking change to a documented contract (CLI flag removal, file path change, on-disk format change)
 
-A pre-commit hook at `.githooks/pre-commit` enforces this: staging a feature-class file (`bin/`, `hooks/`, `scripts/`, `templates/`, `skills/*/SKILL.md`) without a version bump in the same commit is rejected, with the exact `bin/bump-version` invocation to run printed to stderr. Pure-docs commits (README, CLAUDE.md, references, *.md outside `SKILL.md`), CI/test changes, and edits limited to `plugin.json` description/keywords are exempt — the hook doesn't trigger on them.
+What counts as feature-class differs per plugin, because the plugins have different shapes:
+
+- `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any `skills/*/SKILL.md`.
+- `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and any `skills/*/SKILL.md`.
+
+A pre-commit hook at `.githooks/pre-commit` enforces this: staging a feature-class file for a plugin without bumping that plugin's manifest version in the same commit is rejected, with the exact `bin/bump-version` invocation printed to stderr. When several plugins are touched in one commit, each is checked independently. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords are exempt — the hook doesn't trigger on them. The per-plugin feature-class sets live in the `feature_class_globs` function in the hook; onboarding a new plugin means adding a case branch there.
 
 To enable the hook on a fresh clone, run once: `git config core.hooksPath .githooks`.
 

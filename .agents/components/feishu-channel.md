@@ -99,7 +99,8 @@ so it unit-tests without a running server or connection.
   proxy. `.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case)
   in the MCP server's environment, so a proxy set for the Claude Code session
   does not apply to this server. The empty `env` values in `.mcp.json` are
-  load-bearing — see [decision 0008](/.agents/decisions/0008-feishu-channel-launch-without-session-proxy.md).
+  load-bearing — `test/mcp-config.test.ts` fails if they are dropped. See
+  [decision 0008](/.agents/decisions/0008-feishu-channel-launch-without-session-proxy.md).
 - `src/feishu.ts` wires the `WSClient`'s `onError` / `onReconnecting` /
   `onReconnected` callbacks and a startup-grace watchdog, so a failed or
   dropped connection is logged instead of retrying silently. The log wording

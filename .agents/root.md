@@ -84,6 +84,10 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 
 - [decisions/README.md](/.agents/decisions/README.md) — index of decision records and how to add one.
 
+**Research archive** — the investigation behind the decisions:
+
+- [research/index.md](/.agents/research/index.md) — frozen, point-in-time research snapshots (Feishu channel survey, `tm` architecture audits). Read them as history: dated, not maintained, and not authoritative where they disagree with a decision record.
+
 **Rules & meta:**
 
 - [CONTRIBUTING.md](/.agents/CONTRIBUTING.md) — how to use and extend this KB; the knowledge-delta protocol.

@@ -7,7 +7,8 @@
 
 ## Knowledge Base
 
-- `.agents/` holds the agent knowledge base — architecture overview, per-component guides, a cross-process protocol reference, and decision records. Read `.agents/root.md` first when starting non-trivial work; it routes you to the document that matches your task.
+- `.agents/` holds the agent knowledge base — architecture overview, per-component guides, a cross-process protocol reference, decision records, and a research archive. Read `.agents/root.md` first when starting non-trivial work; it routes you to the document that matches your task.
+- `.agents/research/` archives the point-in-time research snapshots behind those decisions (the Feishu channel survey, the `tm` architecture audits). They are dated history, not maintained — start from `.agents/research/index.md` and treat a decision record as authoritative where the two disagree.
 - This file (`CLAUDE.md`) remains authoritative for binding rules. The KB is the navigation, architecture, and decision layer on top of it; when the two disagree, `CLAUDE.md` wins and the KB has drifted — fix the KB.
 - After a change that moves a component boundary, the cross-process file protocol, the `tm` verb set, hook wiring, or that settles a design decision, update the matching `.agents/` document in the same change, then run `bash .agents/scripts/check.sh`. The protocol and writing standard are in `.agents/CONTRIBUTING.md`.
 

@@ -55,7 +55,7 @@ network access. Each run costs a handful of model turns.
 See [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md)
 for why trust is seeded this way rather than via an isolated config dir.
 
-## Re-aiming the suite at the native verbs (PR ③b)
+## Re-aiming the suite at the native verbs
 
 Every `tm` call resolves through `resolveTmBinary` (`src/tm.ts`), which honors
 the `CLAUDEMUX_TM` environment override. The suite runs against the Bash

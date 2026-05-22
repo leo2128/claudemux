@@ -48,12 +48,13 @@ if (!probe.ok) {
 }
 
 /**
- * A successful `send`/`wait` prints either the reply (carrying `token`) or
- * `tm`'s documented empty-turn sentinel. Either is a valid round-trip; only a
+ * Whether `stdout` is a valid `send`/`wait` round-trip result — it carries the
+ * reply (with `token`) or `tm`'s documented empty-turn sentinel. A plain
+ * substring test, not a regex: `token` is content, never a pattern. Only a
  * timeout or a crash fails the verb.
  */
-function replyOrSentinel(token: string): RegExp {
-  return new RegExp(`${token}|no text reply this turn`)
+function repliedOrSentinel(stdout: string, token: string): boolean {
+  return stdout.includes(token) || stdout.includes('no text reply this turn')
 }
 
 describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => {
@@ -92,7 +93,7 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
     ])
     expect(sent.code, tmDetail('tm send', sent)).toBe(0)
     expect(sent.stderr, tmDetail('tm send', sent)).toContain(`sent to ${repo}`)
-    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('PONG'))
+    expect(repliedOrSentinel(sent.stdout, 'PONG'), tmDetail('tm send', sent)).toBe(true)
   })
 
   test('send — a second turn builds transcript for compact', async () => {
@@ -105,7 +106,7 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
       '120',
     ])
     expect(sent.code, tmDetail('tm send', sent)).toBe(0)
-    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('ROGER'))
+    expect(repliedOrSentinel(sent.stdout, 'ROGER'), tmDetail('tm send', sent)).toBe(true)
   })
 
   test('wait — collects a turn driven without a waiting send', async () => {
@@ -122,7 +123,7 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
 
     const waited = await dispatcher.tm(['wait', repo, '--timeout', '120'])
     expect(waited.code, tmDetail('tm wait', waited)).toBe(0)
-    expect(waited.stdout, tmDetail('tm wait', waited)).toMatch(replyOrSentinel('ECHO'))
+    expect(repliedOrSentinel(waited.stdout, 'ECHO'), tmDetail('tm wait', waited)).toBe(true)
   })
 
   test('compact — runs /compact and verifies it completed', async () => {
@@ -152,6 +153,6 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
       '120',
     ])
     expect(sent.code, tmDetail('tm send', sent)).toBe(0)
-    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('BACK'))
+    expect(repliedOrSentinel(sent.stdout, 'BACK'), tmDetail('tm send', sent)).toBe(true)
   })
 })

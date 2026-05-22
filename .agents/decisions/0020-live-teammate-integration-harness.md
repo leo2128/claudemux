@@ -60,9 +60,9 @@ them. The suite is test-only — it adds no production code.
   no `--all` fan-out, so unique names contain the blast radius; teardown plus a
   signal/exit handler kill every teammate a run spawns.
 - **The suite reaches `tm` through `resolveTmBinary` / `CLAUDEMUX_TM`.** It
-  runs against the Bash `bin/tm` today; stage 3b re-aims it at the native
-  verbs by pointing that override at the native CLI, with the harness itself
-  unchanged.
+  runs against the Bash `bin/tm` today; stage 3's hot-path verb migration
+  re-aims it at the native verbs by pointing that override at the native CLI,
+  with the harness itself unchanged.
 
 ## Consequences
 
@@ -73,8 +73,8 @@ them. The suite is test-only — it adds no production code.
   `projects.<temp-path>` keys, and the cleaner alternative (an isolated config
   dir) is empirically blocked by auth.
 - The suite cannot run in CI — there is no `claude` binary and no auth there —
-  by design. Stage 3b's merge bar is therefore "CI green **and** a reported
-  green run of this suite", not pure CI green.
+  by design. The hot-path verb migration's merge bar is therefore "CI green
+  **and** a reported green run of this suite", not pure CI green.
 - Running the suite needs `~/.claude.json` present, `claude` and `tmux`
   installed, the claudemux plugin enabled, and an authenticated `claude`. The
   probe checks each and skips with a printed reason, so the suite is inert

@@ -29,13 +29,13 @@
  *   spawns one throwaway teammate and checks its SessionStart hook fired, and
  *   the suite skips with a clear reason if it did not.
  *
- * ## The `tm` indirection — the seam stage 3 (PR ③b) flips
+ * ## The `tm` indirection — the seam the verb migration flips
  *
  * Every `tm` invocation routes through `resolveTmBinary` (`src/tm.ts`), which
  * honors the `CLAUDEMUX_TM` environment override. Today that resolves to the
- * Bash `bin/tm`. When the hot-path verbs are migrated to native code, pointing
- * `CLAUDEMUX_TM` at the native CLI re-aims this whole suite at it — the harness
- * itself does not change.
+ * Bash `bin/tm`. When stage 3's hot-path verbs are migrated to native code,
+ * pointing `CLAUDEMUX_TM` at the native CLI re-aims this whole suite at it —
+ * the harness itself does not change.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -144,7 +144,8 @@ function readClaudeJson(): ClaudeJson {
  */
 function writeClaudeJson(claudeJson: ClaudeJson): void {
   const path = claudeJsonPath()
-  const tmp = `${path}.itest-${process.pid}.tmp`
+  // pid + random suffix: unique even if two writes ever overlap in one process.
+  const tmp = `${path}.itest-${process.pid}-${randomBytes(4).toString('hex')}.tmp`
   writeFileSync(tmp, JSON.stringify(claudeJson))
   chmodSync(tmp, 0o600)
   renameSync(tmp, path)
@@ -160,13 +161,16 @@ function unseedTrust(physPaths: readonly string[]): void {
   writeClaudeJson(withoutProjectPaths(readClaudeJson(), physPaths))
 }
 
-// --- the teammate-kill safety net -----------------------------------------
+// --- the crash / interrupt safety net -------------------------------------
 //
-// A leaked teammate is an authenticated `claude` process burning tokens. If
-// vitest is interrupted (Ctrl-C) or exits before `cleanup()` runs, this net
-// still kills every teammate the run spawned.
+// The normal teardown is the async `Dispatcher.cleanup` an `afterAll` runs.
+// If vitest is interrupted (Ctrl-C) or the process exits before that runs, a
+// leaked teammate is an authenticated `claude` burning tokens and a leaked
+// trust key sits in the user's `~/.claude.json`. This net does the same
+// teardown synchronously — the only kind a signal/exit handler can do — so an
+// interrupted run still cleans up after itself.
 
-/** Per-dispatcher state the safety net needs to kill what a run leaked. */
+/** Per-dispatcher state the safety net needs to undo what a run leaked. */
 interface DispatcherState {
   /** The temp dispatcher dir — `tm`'s `TM_DISPATCHER_DIR`. */
   dir: string
@@ -180,9 +184,20 @@ interface DispatcherState {
 const liveDispatchers = new Set<DispatcherState>()
 
 let safetyNetInstalled = false
+let netFired = false
 
-/** Synchronously `tm kill` every teammate every live dispatcher spawned. */
-function killAllSync(): void {
+/**
+ * Synchronously tear down every still-live dispatcher: kill its teammates,
+ * unseed its trust keys, and remove its transcript and temp directories. Runs
+ * at most once — a normal `cleanup` drains `liveDispatchers`, so on a clean
+ * run this is a no-op. Best-effort: every step is guarded, since a signal
+ * handler must not throw. Unlike the async `cleanup` it cannot wait out a
+ * dying teammate's last `~/.claude.json` write, so a rare inert trust key may
+ * survive an interrupt — harmless, it points at a deleted dir (decision 0020).
+ */
+function cleanupAllSync(): void {
+  if (netFired) return
+  netFired = true
   for (const state of liveDispatchers) {
     for (const repo of state.repos) {
       try {
@@ -195,20 +210,41 @@ function killAllSync(): void {
         // Best effort — a teammate that is already gone is the goal anyway.
       }
     }
+    try {
+      unseedTrust(state.physPaths)
+    } catch {
+      // A leftover inert trust key is harmless (decision 0020).
+    }
+    for (const phys of state.physPaths) {
+      try {
+        rmSync(join(homedir(), '.claude', 'projects', encodeProjectDir(phys)), {
+          recursive: true,
+          force: true,
+        })
+      } catch {
+        // Best effort.
+      }
+    }
+    try {
+      rmSync(state.dir, { recursive: true, force: true })
+    } catch {
+      // Best effort.
+    }
   }
+  liveDispatchers.clear()
 }
 
-/** Install the kill-on-interrupt / kill-on-exit safety net exactly once. */
+/** Install the crash / interrupt safety net exactly once. */
 function installSafetyNet(): void {
   if (safetyNetInstalled) return
   safetyNetInstalled = true
-  process.once('exit', killAllSync)
+  process.once('exit', cleanupAllSync)
   process.once('SIGINT', () => {
-    killAllSync()
+    cleanupAllSync()
     process.exit(130)
   })
   process.once('SIGTERM', () => {
-    killAllSync()
+    cleanupAllSync()
     process.exit(143)
   })
 }
@@ -238,8 +274,9 @@ export interface Dispatcher {
    * (`claudemux-itest-<label>-<rand>`) because the tmux session it becomes
    * (`teammate-<repo>`) lives on the shared tmux server: a fixed name could
    * collide with — and the teardown would then kill — a real teammate.
-   * `label` is a readability hint only. The repo is not spawned — that is a
-   * separate `tm spawn` call.
+   * `label` is a readability hint only; keep it to ASCII letters and digits,
+   * since it becomes part of the fixture's filesystem path. The repo is not
+   * spawned — that is a separate `tm spawn` call.
    */
   addRepo(label: string): string
   /** Run one `tm` verb against this dispatcher and capture its result. */
@@ -359,39 +396,51 @@ async function commandWorks(argv: readonly string[]): Promise<boolean> {
  * not. The probe teammate takes no turn, so it costs a REPL boot, not tokens.
  */
 export async function probeLiveTeammate(): Promise<LiveProbe> {
-  if (!existsSync(claudeJsonPath())) {
+  try {
+    if (!existsSync(claudeJsonPath())) {
+      return {
+        ok: false,
+        reason: `${claudeJsonPath()} not found — Claude Code is not set up on this machine`,
+      }
+    }
+    if (!(await commandWorks(['claude', '--version']))) {
+      return { ok: false, reason: 'the `claude` CLI is not on PATH' }
+    }
+    if (!(await commandWorks(['tmux', '-V']))) {
+      return { ok: false, reason: 'tmux is not on PATH' }
+    }
+
+    const dispatcher = createDispatcher()
+    try {
+      const probeRepo = dispatcher.addRepo('probe')
+      const spawned = await dispatcher.tm(['spawn', probeRepo])
+      if (spawned.code !== 0) {
+        return {
+          ok: false,
+          reason: `tm spawn failed: ${spawned.stderr.trim() || spawned.stdout.trim()}`,
+        }
+      }
+      if (!/^ready:/m.test(spawned.stderr)) {
+        return {
+          ok: false,
+          reason:
+            'a spawned teammate did not signal ready — the claudemux plugin/hooks ' +
+            'are not loaded for teammate sessions (enable the claudemux plugin)',
+        }
+      }
+      return { ok: true, reason: '' }
+    } finally {
+      await dispatcher.cleanup()
+    }
+  } catch (err) {
+    // The probe must never reject: `hot-path.itest.ts` awaits it at module
+    // scope, so a throw would abort vitest collection instead of skipping the
+    // suite. A corrupt `~/.claude.json` — a torn concurrent write — lands here.
     return {
       ok: false,
-      reason: `${claudeJsonPath()} not found — Claude Code is not set up on this machine`,
+      reason: `the live-teammate probe could not complete: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
     }
-  }
-  if (!(await commandWorks(['claude', '--version']))) {
-    return { ok: false, reason: 'the `claude` CLI is not on PATH' }
-  }
-  if (!(await commandWorks(['tmux', '-V']))) {
-    return { ok: false, reason: 'tmux is not on PATH' }
-  }
-
-  const dispatcher = createDispatcher()
-  try {
-    const probeRepo = dispatcher.addRepo('probe')
-    const spawned = await dispatcher.tm(['spawn', probeRepo])
-    if (spawned.code !== 0) {
-      return {
-        ok: false,
-        reason: `tm spawn failed: ${spawned.stderr.trim() || spawned.stdout.trim()}`,
-      }
-    }
-    if (!/^ready:/m.test(spawned.stderr)) {
-      return {
-        ok: false,
-        reason:
-          'a spawned teammate did not signal ready — the claudemux plugin/hooks ' +
-          'are not loaded for teammate sessions (enable the claudemux plugin)',
-      }
-    }
-    return { ok: true, reason: '' }
-  } finally {
-    await dispatcher.cleanup()
   }
 }

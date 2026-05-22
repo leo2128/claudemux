@@ -139,8 +139,9 @@ framework: a temp-dispatcher fixture, a `tm` runner, the `~/.claude.json`
 directory-trust seeding a teammate needs to boot past the workspace-trust
 dialog, and a precondition probe that *skips* the suite — rather than failing
 it — when no live teammate can run. Every `tm` call resolves through
-`resolveTmBinary` / `CLAUDEMUX_TM`, so stage 3b re-aims the suite at the native
-hot-path verbs by pointing that override. Why trust is seeded by a targeted
+`resolveTmBinary` / `CLAUDEMUX_TM`, so stage 3's hot-path verb migration
+re-aims the suite at the native verbs by pointing that override. Why trust is
+seeded by a targeted
 write rather than an isolated config dir is
 [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md);
 the run instructions are the suite's own

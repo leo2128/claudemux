@@ -17,7 +17,7 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync } from 'node:fs'
 
-import { isNativeVerb, NATIVE_VERBS, triggersTmHelp } from './native'
+import { isNativeVerb, NATIVE_VERBS, type NativeEnv, triggersTmHelp } from './native'
 import { cwdFile, sidFile } from './paths'
 import type { Registry } from './registry'
 import type { SignalSource } from './subscription'
@@ -95,26 +95,7 @@ export function createCore(deps: CoreDeps): Core {
     const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined
     let result: TmResult
     try {
-      // A migrated verb runs natively; the rest still shell out to `tm`.
-      // Either way the verb produces a `TmResult`, so the shaping below is
-      // identical — that is what keeps the migration drop-in.
-      //
-      // A `--help` invocation is the exception: `tm`'s own dispatcher prints
-      // per-verb help, and a native handler has no help text — so when the
-      // arguments would trigger that pre-scan the verb shells out even if
-      // migrated, exactly as it did before the migration.
-      const native =
-        isNativeVerb(verb.name) && !triggersTmHelp(argv) ? NATIVE_VERBS[verb.name] : undefined
-      result = native
-        ? await native(argv, options, {
-            runTmux: deps.runTmux,
-            runColumn: deps.runColumn,
-            runGrep: deps.runGrep,
-            runTm: deps.runTm,
-            dispatcherDir: deps.dispatcherDir,
-            projectsDir: deps.projectsDir,
-          })
-        : await deps.runTm(verb.name, argv, options)
+      result = await runVerb(verb.name, argv, options, deps)
     } catch (err) {
       // A verb that cannot even start — `tm` or `tmux` missing, an exec
       // failure — is a tool error, not a crashed request; surface it as one.
@@ -133,6 +114,31 @@ export function createCore(deps: CoreDeps): Core {
   }
 
   return { tools, handleTool }
+}
+
+/**
+ * Run one `tm` verb and return its `TmResult`. A migrated verb runs natively
+ * (`native.ts`); every other verb shells out to `tm`. Either way the verb
+ * produces the same `{code, stdout, stderr}` shape — that is what keeps the
+ * migration drop-in.
+ *
+ * A `--help` invocation is the exception: `tm`'s own dispatcher prints the
+ * per-verb help and a native handler carries no help text, so an argument
+ * vector that would trigger `tm`'s help pre-scan shells out even for a
+ * migrated verb.
+ *
+ * `argv` is the verb's full argument vector. This is the dispatch the CLI
+ * front end (`cli.ts`) runs every verb through.
+ */
+export async function runVerb(
+  verb: string,
+  argv: string[],
+  options: TmRunOptions | undefined,
+  env: NativeEnv,
+): Promise<TmResult> {
+  const native =
+    isNativeVerb(verb) && !triggersTmHelp(argv) ? NATIVE_VERBS[verb] : undefined
+  return native ? native(argv, options, env) : env.runTm(verb, argv, options)
 }
 
 /**

@@ -53,13 +53,24 @@ export function resolveTmBinary(): string {
 }
 
 /**
- * The production `TmRunner`: spawn `tm`, forward the argument vector and any
- * stdin verbatim, and capture exit code, stdout, and stderr without
- * interpretation. The core's job in Phase A is to be a faithful pass-through;
- * interpreting `tm`'s output is a per-verb Phase B task.
+ * Runs `tm` with a raw argument vector — `tm` followed by `args` verbatim,
+ * with no verb/arguments split. The CLI front end uses this for an argv that
+ * is not a verb invocation (a bare `tm`, a global flag): bash `tm` stays the
+ * authority on its own help and error output.
  */
-export const runTm: TmRunner = async (verb, args, options) => {
-  const proc = Bun.spawn([resolveTmBinary(), verb, ...args], {
+export type RawTmRunner = (
+  args: readonly string[],
+  options?: TmRunOptions,
+) => Promise<TmResult>
+
+/**
+ * The production `RawTmRunner`: spawn `tm`, forward the argument vector and
+ * any stdin verbatim, and capture exit code, stdout, and stderr without
+ * interpretation — a faithful pass-through; interpreting `tm`'s output is a
+ * per-verb migration task.
+ */
+export const runTmRaw: RawTmRunner = async (args, options) => {
+  const proc = Bun.spawn([resolveTmBinary(), ...args], {
     stdin: options?.stdin != null ? new TextEncoder().encode(options.stdin) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -72,3 +83,10 @@ export const runTm: TmRunner = async (verb, args, options) => {
   ])
   return { code, stdout, stderr }
 }
+
+/**
+ * The production `TmRunner`: a verb invocation of `tm`, which is `runTmRaw`
+ * with the verb as the first argument.
+ */
+export const runTm: TmRunner = (verb, args, options) =>
+  runTmRaw([verb, ...args], options)

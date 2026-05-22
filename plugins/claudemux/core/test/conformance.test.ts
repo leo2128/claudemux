@@ -44,6 +44,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -335,6 +336,47 @@ function killWorld(repo: string, sid?: string): string[] {
   return paths
 }
 
+/** The dispatcher's auto-memory directory — `tm`'s `memory_dir`, the `archive` world. */
+function archiveMemoryDir(): string {
+  return join(projectsDir, encodeProjectDir(dispatcherDir), 'memory')
+}
+
+/**
+ * Wipe and recreate the memory directory. `tm`'s `memory_dir` is keyed to the
+ * dispatcher, not a per-test name, so every `archive` scenario starts from a
+ * clean slate here rather than inheriting the previous scenario's ledgers.
+ */
+function resetMemoryDir(): void {
+  const dir = archiveMemoryDir()
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+}
+
+/** Write the active dispatcher-task ledger; the memory dir must exist first. */
+function writeActiveLedger(content: string): void {
+  writeFileSync(join(archiveMemoryDir(), 'active-dispatcher-tasks.md'), content)
+}
+
+/** Write the dispatcher-task archive ledger; the memory dir must exist first. */
+function writeArchiveLedger(content: string): void {
+  writeFileSync(join(archiveMemoryDir(), 'dispatcher-tasks-archive.md'), content)
+}
+
+/** A two-entry active ledger — `t-alpha` mid-list, `t-beta` last. */
+const STANDARD_LEDGER = `# Active dispatcher tasks
+
+### t-alpha  [in progress]
+- repo: acme
+- branch: feature/login
+- intent: wire up the login flow
+- notes: blocked on review
+
+### t-beta  [PAUSED — waiting on infra]
+- repo: widgets
+- branch: main
+- intent: ship the widget
+`
+
 /**
  * A filesystem snapshot — each path mapped to its content, or `null` when the
  * path is absent. A mutating verb (`kill`, `archive`) cannot be conformance-
@@ -351,6 +393,24 @@ function snapshotPaths(paths: readonly string[]): FsSnapshot {
   const snap: FsSnapshot = {}
   for (const path of paths) {
     snap[path] = existsSync(path) ? readFileSync(path, 'utf8') : null
+  }
+  return snap
+}
+
+/** Snapshot every file under a directory tree — for a verb whose world is a subtree. */
+function snapshotTree(root: string): FsSnapshot {
+  const snap: FsSnapshot = {}
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else snap[full] = readFileSync(full, 'utf8')
+    }
+  }
+  try {
+    walk(root)
+  } catch {
+    // An absent root is an empty snapshot — `archive` may run before its dir.
   }
   return snap
 }
@@ -1220,6 +1280,135 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           marker(sidFile(repo), `${sid}\n`)
           marker(cwdFile(repo), '/some/teammate/cwd\n')
           return { args: [repo], snapshot: () => snapshotPaths(killWorld(repo, sid)) }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'archive',
+    scenarios: [
+      {
+        name: 'no id argument → the usage error',
+        setup: () => {
+          resetMemoryDir()
+          return { args: [], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => {
+          resetMemoryDir()
+          return { args: ['--bogus', 't-alpha'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'a second positional → the unexpected-arg error',
+        setup: () => {
+          resetMemoryDir()
+          return { args: ['t-alpha', 't-beta'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'a bare --status with no value → tm exits 1 with no output',
+        setup: () => {
+          resetMemoryDir()
+          return { args: ['--status'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'no active ledger → the no-ledger error',
+        setup: () => {
+          resetMemoryDir()
+          return { args: ['t-alpha'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'a whitespace-only outcome on stdin → the outcome-required error',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          return { args: ['t-alpha'], stdin: '   \n \t ' }
+        },
+      },
+      {
+        name: 'an id not in the ledger → the not-found error with the available list',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          return { args: ['t-missing'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'an id matching two entries → the ambiguity error',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(
+            '# Active dispatcher tasks\n\n### t-dup  [a]\n- repo: one\n\n### t-dup  [b]\n- repo: two\n',
+          )
+          return { args: ['t-dup'], stdin: 'an outcome' }
+        },
+      },
+      {
+        name: 'a happy-path archive → block cut from active, entry seeds a fresh archive',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          return {
+            args: ['t-alpha'],
+            stdin: 'shipped the login flow\n',
+            snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
+        },
+      },
+      {
+        name: 'archiving when the archive file exists → entry prepended above the first',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          writeArchiveLedger(
+            '# Dispatcher task archive\n\n### t-old  [done]\n- outcome: an earlier task\n',
+          )
+          return {
+            args: ['t-alpha'],
+            stdin: 'shipped it',
+            snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
+        },
+      },
+      {
+        name: '--status overrides the carried [tag]',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          return {
+            args: ['t-alpha', '--status', 'reverted'],
+            stdin: 'rolled it back',
+            snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
+        },
+      },
+      {
+        name: 'the last block in the ledger → archived through to EOF',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger(STANDARD_LEDGER)
+          return {
+            args: ['t-beta'],
+            stdin: 'the widget shipped',
+            snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
+        },
+      },
+      {
+        name: 'a block with no repo/branch/intent lines → "(unknown)" fields',
+        setup: () => {
+          resetMemoryDir()
+          writeActiveLedger('# Active dispatcher tasks\n\n### t-bare  [done]\n- notes: just a note\n')
+          return {
+            args: ['t-bare'],
+            stdin: 'closed it out',
+            snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
         },
       },
     ],

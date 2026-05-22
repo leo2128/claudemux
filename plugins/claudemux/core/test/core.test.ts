@@ -110,7 +110,9 @@ describe('every not-yet-migrated verb forwards faithfully to tm', () => {
   test('stdin is forwarded to the runner', async () => {
     const runner = fakeRunner()
     const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('archive', { stdin: 'task-9' })
+    // `reload` still shells out — it exercises the core's stdin plumbing into
+    // `runTm`; the one verb that actually reads stdin, `archive`, is native.
+    await core.handleTool('reload', { stdin: 'task-9' })
     expect(runner.calls[0]?.stdin).toBe('task-9')
   })
 })
@@ -249,6 +251,17 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(runner.calls).toHaveLength(0)
     expect(result.isError).toBe(false)
     expect(textOf(result)).toContain('__coretest_kill_probe__')
+  })
+
+  test('archive is served natively, and its arguments reach the handler', async () => {
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
+    // An unknown flag makes the native handler return its unknown-flag error,
+    // echoing the flag — proving `args` reached it, never reaching `runTm`.
+    const result = await core.handleTool('archive', { args: ['--coretest-probe'] })
+    expect(runner.calls).toHaveLength(0)
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('--coretest-probe')
   })
 })
 

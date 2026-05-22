@@ -17,8 +17,8 @@ contracts they hold.
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
 > a time, read-only verbs first — the read-only set (`ls`, `last`, `ctx`,
 > `states`, `mem`, `history`), the diagnostic verbs (`status`, `poll`), and
-> `kill` run natively, the rest still shell out. `tm` is unchanged and remains
-> fully usable on its own.
+> the mutating verbs (`kill`, `archive`) run natively, the rest still shell
+> out. `tm` is unchanged and remains fully usable on its own.
 
 ## Module layout
 
@@ -129,12 +129,13 @@ last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
 migrated. The read-only set — `ls`, `last`, `ctx`, `states`, `mem`, `history`
-— the diagnostic verbs `status` and `poll`, and `kill` are native; several
-still need a backend — `ls`, `states`, `ctx --all`, `status`, `poll`, and
-`kill` run `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts),
-and `ctx`, `mem`, and `history` resolve a teammate's transcripts and
-auto-memory under the dispatcher dir and `~/.claude/projects` (both resolved
-once at boot and injected, so a test can sandbox them).
+— the diagnostic verbs `status` and `poll`, and the mutating verbs `kill` and
+`archive` are native; several still need a backend — `ls`, `states`,
+`ctx --all`, `status`, `poll`, and `kill` run `tmux` through
+[`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx`, `mem`, `history`,
+and `archive` resolve a teammate's transcripts, auto-memory, or task ledgers
+under the dispatcher dir and `~/.claude/projects` (both resolved once at boot
+and injected, so a test can sandbox them).
 
 A native verb keeps the *logic* in the core but may still shell out to a
 presentation, session, or matching backend. `states` and `history` build
@@ -178,10 +179,11 @@ cross-platform behavior is itself what it pins.
 A *mutating* verb cannot be checked by running the oracle and the native
 handler against the same fixture: the oracle changes the world the native run
 would then see. Such a scenario instead supplies a `snapshot` closure
-capturing its "world" — for `kill`, its four repo-keyed `/tmp` files, the
-session list, and its idle markers. The harness snapshots the world, runs the
-oracle, snapshots the effect, resets the world to the snapshot, runs native,
-and asserts the two post-states match (as well as the two `TmResult`s).
+capturing its "world" — for `kill`, its `/tmp` files, idle markers, and the
+session list; for `archive`, the dispatcher's memory directory. The harness
+snapshots the world, runs the oracle, snapshots the effect, resets the world
+to the snapshot, runs native, and asserts the two post-states match (as well
+as the two `TmResult`s).
 
 ## See also
 

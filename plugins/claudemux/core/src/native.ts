@@ -18,10 +18,18 @@
  * behavior is a separate change, never folded into the migration.
  *
  * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`, `history`, `status`,
- * `poll`, `kill`.
+ * `poll`, `kill`, `archive`.
  */
 
-import { readdirSync, readFileSync, realpathSync, rmSync, statSync, type Stats } from 'node:fs'
+import {
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  type Stats,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import {
@@ -1134,6 +1142,202 @@ const kill: NativeVerb = async (args, _options, env) => {
   return { code: 0, stdout: `not running: ${repo} (tmux=${name})\n`, stderr: '' }
 }
 
+/**
+ * The seed `dispatcher-tasks-archive.md` `tm archive` writes when the archive
+ * file does not exist yet — `cmd_archive`'s `ARCHIVE_EOF` heredoc, verbatim.
+ */
+const ARCHIVE_TEMPLATE = `${[
+  '---',
+  'name: dispatcher-tasks-archive',
+  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read — only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
+  'metadata:',
+  '  node_type: memory',
+  '  type: project',
+  '---',
+  '',
+  '# Dispatcher task archive',
+  '',
+  'Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a',
+  'pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis',
+  'that outlives a task should be promoted to its own memory file, not kept here.',
+  '',
+  '<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->',
+].join('\n')}\n`
+
+/** The current date as `YYYY-MM-DD` in local time — `tm`'s `date +%Y-%m-%d`. */
+function fmtLocalDate(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * Split a ledger file into its lines as `grep`/`sed` count them — a trailing
+ * newline does not add an empty final line.
+ */
+function ledgerLines(content: string): string[] {
+  const lines = content.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+/** The outcome of parsing `tm archive`'s arguments: an `id`/`status`, or an early exit. */
+type ArchiveArgs = { id: string; status: string } | { error: TmResult }
+
+/**
+ * Parse `tm archive`'s flags — one positional `id`, an optional `--status` /
+ * `--status=` — mirroring `cmd_archive`'s loop. A bare trailing `--status`
+ * reproduces `tm`'s quirk: the `shift 2` past the end fails under `set -e`, so
+ * `tm` exits 1 with no output.
+ */
+function parseArchiveArgs(args: readonly string[]): ArchiveArgs {
+  let id = ''
+  let status = ''
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--status') {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: '', stderr: '' } }
+      status = args[i + 1]!
+      i++
+    } else if (arg.startsWith('--status=')) {
+      status = arg.slice('--status='.length)
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm archive: unknown flag: ${arg}`) }
+    } else if (id === '') {
+      id = arg
+    } else {
+      return { error: die(`tm archive: unexpected arg: ${arg}`) }
+    }
+  }
+  return { id, status }
+}
+
+/**
+ * `tm archive` — move a finished task from the active dispatcher ledger to the
+ * archive. It cuts the entry block out of `active-dispatcher-tasks.md`, copies
+ * repo/branch/intent from it, stamps the close date and the outcome (read from
+ * stdin), and prepends a compressed entry to `dispatcher-tasks-archive.md`,
+ * creating that file from its template when it does not exist. `cmd_archive`
+ * reproduced, including the grep-located block and the `[status]`-tag carry.
+ */
+const archive: NativeVerb = async (args, options, env) => {
+  const parsed = parseArchiveArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { id } = parsed
+  if (id === '') {
+    return die("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)")
+  }
+
+  const memoryDir = join(env.projectsDir, encodeProjectDir(env.dispatcherDir), 'memory')
+  const activePath = join(memoryDir, 'active-dispatcher-tasks.md')
+  const archivePath = join(memoryDir, 'dispatcher-tasks-archive.md')
+  if (!isRegularFile(activePath)) return die(`no active ledger at ${activePath}`)
+
+  // The outcome is read from stdin so multi-word / URL text needs no quoting.
+  const outcome = (options?.stdin ?? '').replace(/\n+$/, '')
+  if (outcome.replace(/\s/g, '') === '') {
+    return die(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`)
+  }
+
+  const activeContent = readFileSync(activePath, 'utf8')
+  const activeLines = ledgerLines(activeContent)
+
+  // Locate the entry block. The header carries a trailing status tag, so the
+  // id is matched by prefix: `### <id>` then whitespace or end-of-line. `tm`
+  // interpolates the id straight into the `grep -E` pattern; an id `grep`
+  // cannot compile (a stray metacharacter) finds nothing, like `tm`'s.
+  let headerRe: RegExp
+  try {
+    headerRe = new RegExp(`^### ${id}(\\s|$)`)
+  } catch {
+    headerRe = /(?!)/
+  }
+  const headerLines = activeLines
+    .map((line, index) => (headerRe.test(line) ? index + 1 : 0))
+    .filter((lineNo) => lineNo > 0)
+  if (headerLines.length === 0) {
+    const available = activeLines
+      .map((line) => /^### [^ ]+/.exec(line)?.[0])
+      .filter((match): match is string => match != null)
+      .map((match) => match.slice('### '.length))
+      .join(' ')
+    return die(`id not found in active ledger: ${id}\n  available: ${available}`)
+  }
+  if (headerLines.length !== 1) {
+    return die(`id matches ${headerLines.length} entries in active ledger: ${id}`)
+  }
+
+  // The block runs from its header to the line before the next `### `/`## `
+  // header, or to the last line (`wc -l`) when none follows.
+  const start = headerLines[0]!
+  const total = (activeContent.match(/\n/g) ?? []).length
+  let end = total
+  for (let index = start; index < activeLines.length; index++) {
+    if (/^(### |## )/.test(activeLines[index]!)) {
+      end = index
+      break
+    }
+  }
+  const blockLines = activeLines.slice(start - 1, end)
+
+  // Carry the header's `[tag]` as the status unless `--status` overrode it.
+  let status = parsed.status
+  if (status === '') {
+    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? '')
+    status = tag ? tag[1]! : 'done'
+  }
+
+  const field = (name: string): string => {
+    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`))
+    if (line === undefined) return '(unknown)'
+    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, '')
+    return value === '' ? '(unknown)' : value
+  }
+  const entry =
+    `### ${id}  [${status}]\n` +
+    `- repo/branch: ${field('repo')} / ${field('branch')}\n` +
+    `- intent: ${field('intent')}\n` +
+    `- outcome: ${outcome}\n` +
+    `- closed: ${fmtLocalDate()}`
+
+  // Prepend the entry to the archive — above its first `### ` entry, or after
+  // the header block when it has none. The archive is seeded if it is absent.
+  const archiveContent = isRegularFile(archivePath)
+    ? readFileSync(archivePath, 'utf8')
+    : ARCHIVE_TEMPLATE
+  const archiveLines = ledgerLines(archiveContent)
+  let firstEntry = 0
+  for (let index = 0; index < archiveLines.length; index++) {
+    if (archiveLines[index]!.startsWith('### ')) {
+      firstEntry = index + 1
+      break
+    }
+  }
+  let newArchive: string
+  if (firstEntry > 0) {
+    const head =
+      firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join('\n')}\n` : ''
+    const tail = `${archiveLines.slice(firstEntry - 1).join('\n')}\n`
+    newArchive = `${head}${entry}\n\n${tail}`
+  } else {
+    newArchive = `${archiveContent}\n${entry}\n`
+  }
+
+  // Remove the original block from the active ledger.
+  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)]
+  const newActive = remaining.length > 0 ? `${remaining.join('\n')}\n` : ''
+
+  writeFileSync(archivePath, newArchive)
+  writeFileSync(activePath, newActive)
+  return {
+    code: 0,
+    stdout:
+      `archived ${id}  [${status}] -> dispatcher-tasks-archive.md  ` +
+      '(removed from active ledger)\n',
+    stderr: '',
+  }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
 export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   ls,
@@ -1145,6 +1349,7 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   status,
   poll,
   kill,
+  archive,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

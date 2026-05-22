@@ -18,6 +18,7 @@ import { join } from 'node:path'
 
 import type { ColumnRunner } from '../src/column'
 import { createCore } from '../src/core'
+import type { GrepRunner } from '../src/grep'
 import { Registry } from '../src/registry'
 import { createCoreNetServer, listenOnSocket } from '../src/server'
 import type { SignalSource } from '../src/subscription'
@@ -40,12 +41,16 @@ const quietTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 /** A fake `column` runner — echoes its input; the socket tests render no tables. */
 const quietColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
 
+/** A fake `grep` runner — the socket tests drive no `poll`. */
+const quietGrep: GrepRunner = async () => 1
+
 /** Build a core over fakes, on a throwaway registry file. */
 function fakeCore(dir: string): ReturnType<typeof createCore> {
   return createCore({
     runTm: echoRunner,
     runTmux: quietTmux,
     runColumn: quietColumn,
+    runGrep: quietGrep,
     registry: new Registry(join(dir, 'registry.json')),
     subscription: fakeSignals,
     dispatcherDir: dir,

@@ -27,6 +27,7 @@ import { join } from 'node:path'
 
 import { runColumn } from './column'
 import { type Core, createCore } from './core'
+import { runGrep } from './grep'
 import { coreSocketPath, registryFile, sidFile } from './paths'
 import { Registry } from './registry'
 import { SocketServerTransport } from './socket-transport'
@@ -167,6 +168,7 @@ async function main(): Promise<void> {
     runTm,
     runTmux,
     runColumn,
+    runGrep,
     registry,
     subscription,
     dispatcherDir,

@@ -17,7 +17,8 @@
  * today, bug for bug, down to the exact text of an error line. Fixing a `tm`
  * behavior is a separate change, never folded into the migration.
  *
- * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`, `history`.
+ * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`, `history`, `status`,
+ * `poll`.
  */
 
 import { readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs'
@@ -26,6 +27,7 @@ import { dirname, join } from 'node:path'
 import { busyMarkerFor, cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
 import type { TmResult, TmRunOptions } from './tm'
 import type { ColumnRunner } from './column'
+import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
 
 /** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
@@ -37,6 +39,8 @@ export interface NativeEnv {
   runTmux: TmuxRunner
   /** Aligns tab-separated rows via `column -t` — for table-rendering verbs. */
   runColumn: ColumnRunner
+  /** Matches input against a regex via `grep -qE` — for the `poll` verb. */
+  runGrep: GrepRunner
   /** The dispatcher directory — the parent of the sibling teammate repos. */
   dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
@@ -973,6 +977,107 @@ const history: NativeVerb = async (args, _options, env) => {
     : historyDetail(repo, projectDir, sidArg)
 }
 
+/**
+ * `tm`'s `require_session`: a `die` `TmResult` when the teammate's tmux
+ * session does not exist, or `null` when it does. `tm` checks with
+ * `has-session -t "=<name>"` — the `=` is tmux's exact-match modifier.
+ */
+async function requireSession(repo: string, runTmux: TmuxRunner): Promise<TmResult | null> {
+  const name = `${SESSION_PREFIX}${repo}`
+  let exists = false
+  try {
+    exists = (await runTmux(['has-session', '-t', `=${name}`])).code === 0
+  } catch {
+    exists = false
+  }
+  return exists ? null : die(`no such teammate session: ${repo} (tmux=${name}; try 'tm ls')`)
+}
+
+/**
+ * `tm`'s `resolve_pane_target`: the tmux internal session id of a teammate's
+ * session, or `''` when none matches. `tm` matches the session name exactly
+ * against `list-sessions -F '#{session_id} #{session_name}'` — a pane-target
+ * call cannot take the `=NAME` modifier, so the id is resolved instead.
+ */
+async function resolvePaneTarget(repo: string, runTmux: TmuxRunner): Promise<string> {
+  const name = `${SESSION_PREFIX}${repo}`
+  let listing = ''
+  try {
+    listing = (await runTmux(['list-sessions', '-F', '#{session_id} #{session_name}'])).stdout
+  } catch {
+    listing = ''
+  }
+  for (const line of listing.split('\n')) {
+    const space = line.indexOf(' ')
+    if (space >= 0 && line.slice(space + 1) === name) return line.slice(0, space)
+  }
+  return ''
+}
+
+/** Pause for `ms` milliseconds — `tm poll`'s inter-poll `sleep 3`. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * `tm status` — capture a teammate's live pane (a diagnostic verb).
+ *
+ * Resolves the session, then prints `tmux capture-pane` verbatim: that
+ * capture's result *is* the verb's result, exactly as `cmd_status` ends in a
+ * bare `capture-pane`. The `lines` argument bounds the scrollback `-S`.
+ */
+const status: NativeVerb = async (args, _options, env) => {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) return die('usage: tm status <repo> [lines=80]')
+  const lines = args[1] ?? '80'
+
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+
+  const pane = await resolvePaneTarget(repo, env.runTmux)
+  if (pane === '') return die(`could not resolve pane target for ${repo}`)
+
+  return env.runTmux(['capture-pane', '-t', pane, '-p', '-S', `-${lines}`])
+}
+
+/**
+ * `tm poll` — block until a teammate's pane matches a regex, or a timeout
+ * elapses (a diagnostic verb).
+ *
+ * The poll loop is native; the match itself delegates to the real `grep -E`,
+ * the way `states` delegates alignment to `column`. `tm`'s `capture-pane |
+ * grep -qE` runs under `set -o pipefail`, so a match needs both the capture
+ * to succeed and `grep` to exit 0.
+ */
+const poll: NativeVerb = async (args, _options, env) => {
+  const repo = args[0] ?? ''
+  const pattern = args[1] ?? ''
+  if (repo === '' || pattern === '') {
+    return die('usage: tm poll <repo> <regex> [timeout=180]')
+  }
+  const timeoutArg = args[2] ?? '180'
+
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+
+  const pane = await resolvePaneTarget(repo, env.runTmux)
+  if (pane === '') return die(`could not resolve pane target for ${repo}`)
+
+  const end = Math.floor(Date.now() / 1000) + bashNum(timeoutArg)
+  while (Math.floor(Date.now() / 1000) < end) {
+    const capture = await env.runTmux(['capture-pane', '-t', pane, '-p', '-S', '-300'])
+    if (capture.code === 0 && (await env.runGrep(pattern, capture.stdout)) === 0) {
+      return { code: 0, stdout: `matched: ${pattern}\n`, stderr: '' }
+    }
+    await sleep(3000)
+  }
+  return {
+    code: 1,
+    stdout: '',
+    stderr: `tm: timeout after ${timeoutArg}s waiting for /${pattern}/ in ${repo}\n`,
+  }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
 export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   ls,
@@ -981,6 +1086,8 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   states,
   mem,
   history,
+  status,
+  poll,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

@@ -53,6 +53,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { runColumn } from '../src/column'
+import { runGrep } from '../src/grep'
 import { NATIVE_VERBS } from '../src/native'
 import { busyMarkerFor, cwdFile, encodeProjectDir, idleDir, lastFileFor, sidFile } from '../src/paths'
 import type { TmResult } from '../src/tm'
@@ -75,6 +76,8 @@ const HARNESS_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
 
 /** Where the fake `tmux` reads its session list — one file, rewritten per test. */
 let sessionsFile = ''
+/** Where the fake `tmux capture-pane` reads its pane buffer — rewritten per test. */
+let captureFile = ''
 /** A scratch dir for the harness's own files. */
 let scratchDir = ''
 /** The sandbox dispatcher dir — `tm`'s `TM_DISPATCHER_DIR`, the core's `dispatcherDir`. */
@@ -88,6 +91,7 @@ const tmpFiles: string[] = []
 /** Env values saved on entry, restored after the file so nothing leaks. */
 let savedTmux: string | undefined
 let savedSessions: string | undefined
+let savedCapture: string | undefined
 
 beforeAll(() => {
   // Save the env first, before anything that can throw — `bun test` shares
@@ -95,10 +99,13 @@ beforeAll(() => {
   // even if setup fails partway, or a stale `delete` leaks to later files.
   savedTmux = process.env.CLAUDEMUX_TMUX
   savedSessions = process.env.FAKE_TMUX_SESSIONS
+  savedCapture = process.env.FAKE_TMUX_CAPTURE
 
   scratchDir = mkdtempSync(join(tmpdir(), 'claudemux-conf-'))
   sessionsFile = join(scratchDir, 'tmux-sessions')
   writeFileSync(sessionsFile, '')
+  captureFile = join(scratchDir, 'tmux-capture')
+  writeFileSync(captureFile, '')
   dispatcherDir = join(scratchDir, 'dispatcher')
   sandboxHome = join(scratchDir, 'home')
   projectsDir = join(sandboxHome, '.claude', 'projects')
@@ -107,9 +114,10 @@ beforeAll(() => {
   mkdirSync(idleDir(), { recursive: true })
 
   // Point the native `runTmux` at the same fake `tmux` the `tm` subprocess
-  // reaches through `PATH`, reading the same session list.
+  // reaches through `PATH`, reading the same session list and pane buffer.
   process.env.CLAUDEMUX_TMUX = FAKE_TMUX
   process.env.FAKE_TMUX_SESSIONS = sessionsFile
+  process.env.FAKE_TMUX_CAPTURE = captureFile
 })
 
 afterAll(() => {
@@ -117,6 +125,8 @@ afterAll(() => {
   else process.env.CLAUDEMUX_TMUX = savedTmux
   if (savedSessions === undefined) delete process.env.FAKE_TMUX_SESSIONS
   else process.env.FAKE_TMUX_SESSIONS = savedSessions
+  if (savedCapture === undefined) delete process.env.FAKE_TMUX_CAPTURE
+  else process.env.FAKE_TMUX_CAPTURE = savedCapture
   if (scratchDir && existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })
 })
 
@@ -156,6 +166,7 @@ function runNative(verb: string, args: readonly string[], stdin?: string): Promi
   return handler(args, stdin != null ? { stdin } : undefined, {
     runTmux,
     runColumn,
+    runGrep,
     dispatcherDir,
     projectsDir,
   })
@@ -170,6 +181,11 @@ function marker(path: string, content: string): void {
 /** Set the session list the fake `tmux ls` returns. */
 function setSessions(text: string): void {
   writeFileSync(sessionsFile, text)
+}
+
+/** Set the pane buffer the fake `tmux capture-pane` returns. */
+function setCapture(text: string): void {
+  writeFileSync(captureFile, text)
 }
 
 /** A test repo/sid name that cannot collide with a real teammate. */
@@ -980,6 +996,107 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             assistantTextLine('x'.repeat(2000)),
           ])
           return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'status',
+    scenarios: [
+      {
+        name: 'no repo argument → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a repo with no tmux session → the no-such-session error',
+        setup: () => {
+          setSessions('')
+          return { args: [uniqueName()] }
+        },
+      },
+      {
+        name: 'a running teammate → the captured pane is printed verbatim',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('the first pane line\nthe second pane line\n')
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'an explicit lines argument is accepted',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('a captured screen\n')
+          return { args: [repo, '40'] }
+        },
+      },
+      {
+        name: 'an empty pane → empty output',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('')
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a pane with CJK / multibyte content survives both paths intact',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('teammate 屏幕内容\nemoji 🚀 也要原样\n')
+          return { args: [repo] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'poll',
+    scenarios: [
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a repo but no pattern → the usage error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'a repo with no tmux session → the no-such-session error',
+        setup: () => {
+          setSessions('')
+          return { args: [uniqueName(), 'a-pattern'] }
+        },
+      },
+      {
+        name: 'a pattern already on the pane → matched, exit 0',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('build output\nScheduled 3 tasks\n')
+          return { args: [repo, 'Scheduled'] }
+        },
+      },
+      {
+        name: 'an ERE alternation matches via grep',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('the build is complete\n')
+          return { args: [repo, 'done|complete'] }
+        },
+      },
+      {
+        name: 'a pattern absent from the pane, timeout 0 → the timeout error',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          setCapture('nothing of interest here\n')
+          // timeout 0: `end` equals `now`, so the poll loop never runs and
+          // no `sleep 3` is reached — the check stays fast and deterministic.
+          return { args: [repo, 'never-appears', '0'] }
         },
       },
     ],

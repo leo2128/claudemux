@@ -22,6 +22,7 @@ import { cwdFile, sidFile } from './paths'
 import type { Registry } from './registry'
 import type { SignalSource } from './subscription'
 import type { ColumnRunner } from './column'
+import type { GrepRunner } from './grep'
 import type { TmResult, TmRunOptions, TmRunner } from './tm'
 import type { TmuxRunner } from './tmux'
 import { TM_VERBS } from './verbs'
@@ -37,6 +38,8 @@ export interface CoreDeps {
   runTmux: TmuxRunner
   /** Runs `column -t` — for natively-migrated verbs that render tables. */
   runColumn: ColumnRunner
+  /** Runs `grep -qE` — for the natively-migrated `poll` verb. */
+  runGrep: GrepRunner
   /** The teammate registry, already loaded. */
   registry: Registry
   /** The resident idle subscription (or any signal source), already started. */
@@ -106,6 +109,7 @@ export function createCore(deps: CoreDeps): Core {
         ? await native(argv, options, {
             runTmux: deps.runTmux,
             runColumn: deps.runColumn,
+            runGrep: deps.runGrep,
             dispatcherDir: deps.dispatcherDir,
             projectsDir: deps.projectsDir,
           })

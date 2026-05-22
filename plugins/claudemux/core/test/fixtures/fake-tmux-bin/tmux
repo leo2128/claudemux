@@ -1,24 +1,79 @@
 #!/usr/bin/env bash
 # Test double for `tmux`, used by the Phase B conformance harness
 # (test/conformance.test.ts). It serves only the subcommands the migrated
-# verbs invoke — `ls` so far.
+# verbs invoke: ls, list-sessions, has-session, capture-pane.
 #
-# The "session list" is whatever the file in FAKE_TMUX_SESSIONS holds, so a
-# test controls exactly what `tmux ls` returns. Both sides of the conformance
-# check reach this same script: the real `bin/tm` finds it on PATH, the
-# native core finds it through CLAUDEMUX_TMUX — so they see identical output.
+# Two files back it, so a test controls exactly what tmux "sees":
+#   FAKE_TMUX_SESSIONS  the session list, in `tmux ls` format — one
+#                       `<name>: ...` line per session.
+#   FAKE_TMUX_CAPTURE   the pane buffer `capture-pane` prints.
+# Both sides of the conformance check reach this same script: the real
+# `bin/tm` finds it on PATH, the native core finds it through CLAUDEMUX_TMUX
+# — so they see identical output.
 set -u
+
+sessions_file="${FAKE_TMUX_SESSIONS:-}"
+
+# Print the session list, or nothing when there is no list.
+dump_sessions() {
+  if [ -n "$sessions_file" ] && [ -s "$sessions_file" ]; then
+    cat "$sessions_file"
+  fi
+}
+
 case "${1:-}" in
-  ls|list-sessions)
-    sessions="${FAKE_TMUX_SESSIONS:-}"
-    if [ -n "$sessions" ] && [ -s "$sessions" ]; then
-      cat "$sessions"
+  ls)
+    if [ -n "$sessions_file" ] && [ -s "$sessions_file" ]; then
+      cat "$sessions_file"
       exit 0
     fi
     # Real `tmux ls` exits non-zero when no server is running; mirror that so
     # the harness exercises the verb's "ignore tmux's exit code" path.
     echo "no server running" >&2
     exit 1
+    ;;
+  list-sessions)
+    # `resolve_pane_target` calls `list-sessions -F '#{session_id} ...'`. The
+    # `-F` form emits one `<id> <name>` line per session; the id is synthetic
+    # (`capture-pane` below ignores its target), it only has to be non-empty.
+    for arg in "$@"; do
+      if [ "$arg" = "-F" ]; then
+        dump_sessions | awk -F: 'NF { printf "$%d %s\n", NR - 1, $1 }'
+        exit 0
+      fi
+    done
+    # The bare form behaves like `ls`.
+    if [ -n "$sessions_file" ] && [ -s "$sessions_file" ]; then
+      cat "$sessions_file"
+      exit 0
+    fi
+    echo "no server running" >&2
+    exit 1
+    ;;
+  has-session)
+    # `require_session` calls `has-session -t "=<name>"`; the `=` is tmux's
+    # exact-match modifier. Exit 0 when the name is a known session.
+    target=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-t" ]; then
+        target="${2:-}"
+      fi
+      shift
+    done
+    target="${target#=}"
+    if dump_sessions | awk -F: 'NF { print $1 }' | grep -qxF -- "$target"; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  capture-pane)
+    # Print the pane buffer. The `-t`/`-S` flags are ignored: the harness
+    # drives one teammate at a time and its buffers fit inside any scrollback.
+    capture_file="${FAKE_TMUX_CAPTURE:-}"
+    if [ -n "$capture_file" ] && [ -f "$capture_file" ]; then
+      cat "$capture_file"
+    fi
+    exit 0
     ;;
   *)
     exit 0

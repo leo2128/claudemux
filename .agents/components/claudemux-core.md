@@ -16,8 +16,9 @@ contracts they hold.
 > subscription, and serves the `tm` verb set. Phase A shelled every verb out
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
 > a time, read-only verbs first — the read-only set (`ls`, `last`, `ctx`,
-> `states`, `mem`, `history`) runs natively, the rest still shell out. `tm`
-> is unchanged and remains fully usable on its own.
+> `states`, `mem`, `history`) and the diagnostic verbs (`status`, `poll`) run
+> natively, the rest still shell out. `tm` is unchanged and remains fully
+> usable on its own.
 
 ## Module layout
 
@@ -28,8 +29,9 @@ single-purpose; the testable logic is separated from the process wiring.
 |---|---|
 | `paths.ts` | Path builders for every `/tmp` protocol file and the core's own state — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) applied to the TypeScript side. |
 | `tm.ts` | The `tm` shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. Fronts every verb not yet migrated to native code. |
-| `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`, `states`, `ctx --all`). |
-| `column.ts` | The `column` shell-out layer — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs (`states`). |
+| `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`, `states`, `ctx --all`, `status`, `poll`). |
+| `column.ts` | The `column` shell-out layer — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs (`states`, `history`). |
+| `grep.ts` | The `grep` shell-out layer — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
 | `verbs.ts` | The catalog of `tm` verbs the core re-exposes as MCP tools. |
 | `native.ts` | Native verb implementations — Phase B reimplements verbs here, one at a time, replacing their `tm` shell-out. |
 | `registry.ts` | The teammate registry — see below. |
@@ -127,22 +129,26 @@ last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
 migrated. The read-only set — `ls`, `last`, `ctx`, `states`, `mem`, `history`
-— is native; some native verbs still need a backend — `ls`, `states`, and
-`ctx --all` run `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts),
-and `ctx`, `mem`, and `history` resolve a teammate's transcripts and
-auto-memory under the dispatcher dir and `~/.claude/projects` (both resolved
-once at boot and injected, so a test can sandbox them).
+— and the diagnostic verbs `status` and `poll` are native; several still need
+a backend — `ls`, `states`, `ctx --all`, `status`, and `poll` run `tmux`
+through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx`, `mem`,
+and `history` resolve a teammate's transcripts and auto-memory under the
+dispatcher dir and `~/.claude/projects` (both resolved once at boot and
+injected, so a test can sandbox them).
 
 A native verb keeps the *logic* in the core but may still shell out to a
-presentation or session backend. `states` and `history` build their rows
-natively, then pipe them through the real `column -t`
+presentation, session, or matching backend. `states` and `history` build
+their rows natively, then pipe them through the real `column -t`
 ([`column.ts`](/plugins/claudemux/core/src/column.ts)) rather than
 reimplementing it: how `column` measures a field's width — bytes, characters,
 or display columns — is implementation- and locale-dependent and differs
 between the BSD and GNU builds, yet `column`'s exact output *is* the behavior
 the migration must preserve, so a hand-written aligner counting code units
-could not stay faithful across platforms. `column` is a presentation backend
-here, the way `tmux` is the session backend.
+could not stay faithful across platforms. `poll` is the same call: it keeps
+the poll loop native but delegates the regex match to the real `grep -qE`
+([`grep.ts`](/plugins/claudemux/core/src/grep.ts)), because `grep`'s POSIX
+extended-regex dialect is not a JavaScript `RegExp`. `column` and `grep` are
+backends here, the way `tmux` is the session backend.
 
 A `NativeVerb` returns the same `{code, stdout, stderr}` `TmResult` a shell-out
 returns — not a shaped MCP result. That keeps `verbResult` the single

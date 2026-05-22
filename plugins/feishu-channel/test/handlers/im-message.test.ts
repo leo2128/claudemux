@@ -156,6 +156,7 @@ function makeCtx(
 function writeAccess(overrides: Partial<Access>): void {
   saveAccess(accessFile, {
     dmPolicy: 'pairing',
+    groupPolicy: 'allowlist',
     allowFrom: [],
     groups: {},
     pending: {},
@@ -267,6 +268,64 @@ describe('createImMessageHandler — group pairing', () => {
     expect(delivery).toBeNull()
     expect(transport.sent).toHaveLength(0)
     expect(loadAccess(accessFile).access.pending).toEqual({})
+  })
+})
+
+describe('createImMessageHandler — group follow-user policy', () => {
+  test('delivers an allowlisted sender who @-mentions the bot, with no groups entry', async () => {
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: ['ou_sender'] })
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({
+        chat_id: 'oc_group',
+        chat_type: 'group',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      }),
+      makeCtx(new FakeTransport('ou_bot')),
+    )
+
+    expect(delivery?.meta.chat_type).toBe('group')
+    expect(delivery?.meta.kind).toBe('message')
+  })
+
+  test('a non-allowlisted sender mentioning the bot is dropped, posts no code', async () => {
+    writeAccess({ groupPolicy: 'follow-user' })
+    const transport = new FakeTransport('ou_bot')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({
+        chat_id: 'oc_group',
+        chat_type: 'group',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      }),
+      makeCtx(transport),
+    )
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(0)
+    expect(loadAccess(accessFile).access.pending).toEqual({})
+  })
+})
+
+describe('createImMessageHandler — group block policy', () => {
+  test('drops a group message and sends nothing', async () => {
+    writeAccess({ groupPolicy: 'block', allowFrom: ['ou_sender'] })
+    const transport = new FakeTransport('ou_bot')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      rawEvent({
+        chat_id: 'oc_group',
+        chat_type: 'group',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      }),
+      makeCtx(transport),
+    )
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(0)
   })
 })
 

@@ -3,15 +3,15 @@
 #   1) Commit author email must be a real, well-formed address — not a
 #      machine-default identity (git's whoami@hostname guess). The rule
 #      lives in bin/check-author and is shared with the CI workflow.
-#   2) Touching a plugin's feature-class path requires a matching version
-#      bump in that plugin's own manifest. Every plugin under plugins/ is
+#   2) Touching a plugin's feature-class path requires a changeset fragment
+#      for that plugin in the same commit. Every plugin under plugins/ is
 #      versioned independently, so each is checked on its own.
 #
 # Enable per clone:  git config core.hooksPath .githooks
 # Bypass once:       git commit --no-verify
 #
 # This is a workflow nudge, not a security wall — bypass exists on purpose.
-# Use it when you've judged the change genuinely doesn't need a bump.
+# Use it when you've judged the change genuinely doesn't need a changeset.
 
 set -euo pipefail
 
@@ -25,10 +25,14 @@ if ! "$(git rev-parse --show-toplevel)/bin/check-author" "$author_email"; then
   exit 1
 fi
 
-# --- 2) Version-bump check ------------------------------------------------
+# --- 2) Changeset check ---------------------------------------------------
 # This repo ships more than one plugin under plugins/, each with its own
-# manifest and its own version. A staged feature-class file requires a bump
-# in *that plugin's* manifest, checked independently of the other plugins.
+# manifest and its own version. A staged feature-class file requires a
+# changeset fragment for *that plugin* in the same commit — a new, uniquely
+# named file under the plugin's .changeset/ directory, never an edit to the
+# shared `version` line. Two parallel commits therefore never collide on it;
+# `bin/release` later aggregates the fragments into one version bump.
+# Plugins are checked independently of one another.
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [[ -z "$staged" ]] && exit 0
@@ -49,9 +53,6 @@ feature_class_globs() {
     *) ;;  # Unknown plugin: no declared set — reported below, never blocked on.
   esac
 }
-
-# The .version field of a JSON manifest blob read from stdin, "" if absent.
-manifest_version() { jq -r '.version // empty' 2>/dev/null || true; }
 
 touched=" "   # space-padded unique plugin names with a feature-class change
 unknown=" "   # space-padded unique plugin names with no feature-class rule
@@ -87,46 +88,43 @@ if [[ "$unknown" != " " ]]; then
   # shellcheck disable=SC2086  # intentional word-split over the name list
   for p in $unknown; do
     echo "pre-commit: note — plugins/$p/ has no feature-class rule in" \
-         ".githooks/pre-commit; its version bump is not enforced." >&2
+         ".githooks/pre-commit; its changeset is not enforced." >&2
   done
 fi
 
 [[ "$touched" == " " ]] && exit 0
 
-# Each touched plugin must have changed the version field of its own manifest
-# in this commit. old/new are read from git blobs — HEAD and the staged index
-# — so a manifest edited but not re-staged does not count, and a brand-new
-# plugin arriving with a version (no HEAD blob) does.
+# Each touched plugin must carry a changeset fragment in this commit: a staged
+# file matching plugins/<plugin>/.changeset/<name>.md. The fragment is a new,
+# uniquely named file, so two parallel commits never collide on it — unlike
+# the single `version` line they would otherwise both edit.
 missing=""
 # shellcheck disable=SC2086  # intentional word-split over the name list
 for p in $touched; do
-  manifest="plugins/$p/.claude-plugin/plugin.json"
-  bumped=0
-  if grep -qxF "$manifest" <<< "$staged"; then
-    old=$(git show "HEAD:$manifest" 2>/dev/null | manifest_version || true)
-    new=$(git show ":$manifest" 2>/dev/null | manifest_version || true)
-    [[ -n "$new" && "$old" != "$new" ]] && bumped=1
-  fi
-  if (( ! bumped )); then
-    missing+="$p "
-  fi
+  has_changeset=0
+  while IFS= read -r f; do
+    case "$f" in
+      plugins/"$p"/.changeset/*.md) has_changeset=1; break ;;
+    esac
+  done <<< "$staged"
+  (( has_changeset )) || missing+="$p "
 done
 
 [[ -z "$missing" ]] && exit 0
 
 {
-  echo "pre-commit: feature-class files staged, but the plugin version was not bumped."
+  echo "pre-commit: feature-class files staged, but no changeset declares the change."
   echo
   echo "Touched feature-class paths:"
   printf '%s' "$report"
   echo
-  echo "Bump each affected plugin in this commit:"
+  echo "Add a changeset for each affected plugin in this commit:"
   # shellcheck disable=SC2086  # intentional word-split over the name list
   for p in $missing; do
-    echo "  bin/bump-version $p <patch|minor|major>"
-    echo "  git add plugins/$p/.claude-plugin/plugin.json"
+    echo "  bin/changeset $p <patch|minor|major> \"<one-line summary>\""
+    echo "  git add plugins/$p/.changeset"
   done
   echo
-  echo "Bypass with --no-verify if this change genuinely doesn't warrant a bump."
+  echo "Bypass with --no-verify if this change genuinely doesn't warrant a changeset."
 } >&2
 exit 1

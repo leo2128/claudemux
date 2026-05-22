@@ -10,13 +10,19 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Access, DmPolicy, GroupPolicy, PendingEntry } from './types'
+import type { Access, DmPolicy, GroupEntry, GroupPolicy, PendingEntry } from './types'
 
 const DM_POLICIES: readonly DmPolicy[] = ['pairing', 'allowlist', 'disabled']
 
-/** A fresh access state — pairing required, nothing allowed yet. */
+/** The three group-message policy values, also offered by the configure command. */
+export const GROUP_POLICIES: readonly GroupPolicy[] = ['block', 'allowlist', 'follow-user']
+
+/**
+ * A fresh access state — pairing required for direct messages, the
+ * decision-0010 per-group pairing for groups, nothing allowed yet.
+ */
 export function defaultAccess(): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
+  return { dmPolicy: 'pairing', groupPolicy: 'allowlist', allowFrom: [], groups: {}, pending: {} }
 }
 
 export interface LoadResult {
@@ -76,6 +82,9 @@ export function normalizeAccess(parsed: unknown): Access {
     dmPolicy: DM_POLICIES.includes(obj.dmPolicy as DmPolicy)
       ? (obj.dmPolicy as DmPolicy)
       : base.dmPolicy,
+    groupPolicy: GROUP_POLICIES.includes(obj.groupPolicy as GroupPolicy)
+      ? (obj.groupPolicy as GroupPolicy)
+      : base.groupPolicy,
     allowFrom: toStringArray(obj.allowFrom),
     groups: normalizeGroups(obj.groups),
     pending: normalizePending(obj.pending),
@@ -86,8 +95,8 @@ function toStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 }
 
-function normalizeGroups(v: unknown): Record<string, GroupPolicy> {
-  const out: Record<string, GroupPolicy> = {}
+function normalizeGroups(v: unknown): Record<string, GroupEntry> {
+  const out: Record<string, GroupEntry> = {}
   if (v && typeof v === 'object') {
     for (const [chatId, raw] of Object.entries(v as Record<string, unknown>)) {
       const g = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>

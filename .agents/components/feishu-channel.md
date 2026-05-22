@@ -47,6 +47,12 @@ Claude replies through MCP tools the server exposes (`reply`, `react`,
 `edit_message`), which call the Feishu API. Channels are a Claude Code
 research-preview feature (requires Claude Code ≥ 2.1.80).
 
+A delivered chat message is also given a 👀 reaction on Feishu the moment it
+reaches the session — a receipt signal for the sender — and the reaction is
+cleared automatically when Claude replies into that chat. The `message_id →
+reaction_id` map this needs is held in memory in `createChannelCore`, not on
+disk. See [decision 0013](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md).
+
 ## The event registry — the extensibility seam
 
 Event handling is a registry, not a per-event branch in the server. Each
@@ -89,8 +95,12 @@ so it unit-tests without a running server or connection.
 
 - **Bun is required** and is not a claudemux dependency. On the dev machine
   Bun lives at `~/.bun/bin` and is not on `PATH` — invoke it by absolute path.
-- The plugin has its **own** `version` in its own `plugin.json`; the
-  claudemux version-bump rule and its pre-commit hook do not apply to it.
+- The plugin has its **own** `version` in its own `plugin.json`, bumped
+  independently of claudemux. A change under `feishu-channel/` takes a
+  `feishu-channel` changeset (`bin/changeset feishu-channel ...`), not a
+  claudemux one; the pre-commit changeset check and `bin/release` treat it
+  like any other plugin. See
+  [components/repo-tooling.md](/.agents/components/repo-tooling.md).
 - `drive.notice.comment_add_v1` is decoded through the Feishu SDK's own
   `normalizeComment` — the authoritative payload reference — and the handler
   fetches the comment text and document title from Feishu, because a comment
@@ -99,6 +109,12 @@ so it unit-tests without a running server or connection.
   The bot needs the document-comment and document-metadata read scopes;
   lacking them, a comment is still delivered, but with its text and title as
   a placeholder.
+- Group messages are gated by `access.json`'s `groupPolicy`, set by
+  `/feishu-channel:configure`: `block` (the bot ignores groups), `allowlist`
+  (each group authorized as a unit by pairing — decision 0010), or
+  `follow-user` (a group message is gated on the sender's `allowFrom` allowlist
+  alone, no per-group setup). See
+  [decision 0012](/.agents/decisions/0012-feishu-channel-group-policy-modes.md).
 - The channel connects to Feishu **directly**, not through the session's HTTP
   proxy. `.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case)
   in the MCP server's environment, so a proxy set for the Claude Code session
@@ -114,5 +130,6 @@ so it unit-tests without a running server or connection.
 
 - [decisions/0005-feishu-channel-plugin.md](/.agents/decisions/0005-feishu-channel-plugin.md) — why a second plugin, why TS+Bun.
 - [decisions/0006-feishu-channel-event-registry.md](/.agents/decisions/0006-feishu-channel-event-registry.md) — the event registry and core design choices.
+- [decisions/0013-feishu-channel-received-reaction-indicator.md](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound chat messages.
 - [components/repo-tooling.md](/.agents/components/repo-tooling.md) — the CI `feishu-channel` job.
 - [root.md](/.agents/root.md) — repo layout.

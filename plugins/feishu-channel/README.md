@@ -38,9 +38,10 @@ Create a self-built app on the [Feishu Open Platform](https://open.feishu.cn)
    - `drive.notice.comment_add_v1` — new comments and replies on Feishu
      documents. See the note below before relying on this one.
 5. Grant the permission scopes the bot needs: reading incoming messages,
-   sending messages as the bot, adding message reactions (for the `react`
-   tool), and — for document comments — reading document comments and
-   document metadata. The app's permission console lists each scope.
+   sending messages as the bot, adding and removing message reactions (for the
+   `react` tool and the received indicator), and — for document comments —
+   reading document comments and document metadata. The app's permission
+   console lists each scope.
 6. **Publish a release** of the app so the bot and its permissions take effect.
 7. From the app's credentials page, copy the **App ID** and **App Secret**.
 
@@ -61,12 +62,13 @@ In a Claude Code session with the plugin installed, run:
 /feishu-channel:configure <App ID> <App Secret>
 ```
 
-The command saves the credentials to the channel's env file and immediately
-verifies them against Feishu, so an invalid App Secret is caught right then —
-not at the next launch. Run it with no arguments to be prompted for the values
-interactively. Re-run it any time to update the credentials. For an
-international **Lark** app, the command accepts a base URL —
-see `/feishu-channel:configure`'s own guidance.
+The command saves the credentials to the channel's env file, asks which
+**group-message policy** to use (see "Access control" below), and immediately
+verifies the credentials against Feishu, so an invalid App Secret is caught
+right then — not at the next launch. Run it with no arguments to be prompted
+for the values interactively. Re-run it any time to update the credentials or
+the group policy. For an international **Lark** app, the command accepts a base
+URL — see `/feishu-channel:configure`'s own guidance.
 
 <details>
 <summary>Manual fallback</summary>
@@ -136,6 +138,13 @@ attribute says which kind of event it is:
 New event types are added by registering one more handler — the channel is not
 hardcoded to a fixed set of events.
 
+**Received indicator.** Once a chat message clears access control and is
+delivered into the session, the channel adds a 👀 reaction to it on Feishu —
+so the sender can see their message landed and Claude is on it. The reaction is
+removed automatically when Claude replies into that chat: every message in the
+chat that was still awaiting a reply has its indicator cleared. Document
+comments are not IM messages and carry no such reaction.
+
 **Outbound.** The server exposes three MCP tools:
 
 | Tool | Purpose |
@@ -155,8 +164,11 @@ to the session:
 - **Direct messages** from an unknown sender are not delivered. The channel
   replies with a one-time **pairing code**; an operator approves the sender out
   of band, after which their messages are delivered.
-- **Group messages** are delivered only from configured groups, and by default
-  only when the bot is @-mentioned.
+- **Group messages** are gated by the `groupPolicy` setting: `block` (the bot
+  ignores groups entirely), `allowlist` (each group is authorized individually,
+  by pairing), or `follow-user` (the bot answers an @-mention from anyone on
+  the allowlist, in any group — no per-group setup). `/feishu-channel:configure`
+  asks which to use.
 
 The policy lives in `~/.claude/channels/feishu/access.json`. A corrupt or
 missing file is reported and the channel falls back to safe defaults rather

@@ -4,7 +4,7 @@
 > debate and one independent architecture review, **not yet implemented**. The
 > contract below is what an implementation must satisfy. The settled
 > trade-offs and the two residual rulings are recorded in
-> [decision 0012](/.agents/decisions/0012-feishu-worker-scoped-subscription.md).
+> [decision 0016](/.agents/decisions/0016-feishu-worker-scoped-subscription.md).
 
 This document specifies how a Feishu event reaches **only** the one Claude Code
 Worker that subscribed to its resource — a document's comments to the Worker
@@ -45,7 +45,7 @@ on the data path.
   carries a `role`; a dispatcher-role server preempts a teammate-role holder).
   A standalone long-lived daemon was rejected: a process that outlives session
   cycling becomes a version-upgrade liability with no offsetting gain (decision
-  0012, §Consequences).
+  0016, §Consequences).
 - **The router is pure process-level code — zero Claude turns.** In the WS
   callback it does only: extract the routing key, look it up in the route
   table, append the raw event to the resource inbox, then let the SDK ACK
@@ -402,7 +402,7 @@ the no-holder gap.
   replay window; whether that window covers a realistic handoff gap is an open
   item (§13). The handoff window is a **known exposure**, not a solved problem;
   shrinking it (clean-handoff signalling, faster standby detection) is the
-  follow-up named in decision 0012.
+  follow-up named in decision 0016.
 
 ### 10.7 Named residuals
 
@@ -493,7 +493,7 @@ drain/watch ordering) that the pre-review draft did not close.
 
 ## See also
 
-- [decision 0012](/.agents/decisions/0012-feishu-worker-scoped-subscription.md) — the decision record: trade-offs, the two rulings, consequences.
+- [decision 0016](/.agents/decisions/0016-feishu-worker-scoped-subscription.md) — the decision record: trade-offs, the two rulings, consequences.
 - [components/feishu-channel.md](/.agents/components/feishu-channel.md) — the current feishu-channel plugin this feature extends.
 - [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `tm`↔hook `/tmp` protocol; the routes/inbox protocol here is a second, independent cross-process file protocol under `~/.claude/channels/feishu/`.
 - [decision 0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md) — the doc-comment payload shape and SDK decode.

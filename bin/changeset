@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# changeset <plugin> <patch|minor|major> [summary] — record one pending change
+# for a plugin as a uniquely-named fragment under plugins/<plugin>/.changeset/.
+#
+# A feature commit adds a fragment instead of editing the manifest's `version`
+# field. The fragment's name is unique per invocation, so two branches never
+# write the same path — unlike the single shared `version` line, which every
+# branch would otherwise mutate and collide on. `bin/release` later consumes
+# every pending fragment for a plugin into one aggregate version bump and one
+# CHANGELOG entry.
+#
+# <plugin> is a directory name under plugins/. <patch|minor|major> is the
+# semantic-version level this change warrants on its own; `release` bumps by
+# the highest level among the fragments it consumes. The summary is one line —
+# pass it as the third argument, or edit the fragment afterwards.
+#
+# Echoes the repo-relative fragment path on success.
+
+set -euo pipefail
+
+die() { echo "changeset: $*" >&2; exit 1; }
+
+plugin="${1:-}"
+level="${2:-}"
+summary="${3:-}"
+
+[[ -n "$plugin" ]] || die "usage: bin/changeset <plugin> <patch|minor|major> [summary]"
+case "$level" in
+    patch|minor|major) ;;
+    "") die "usage: bin/changeset <plugin> <patch|minor|major> [summary]" ;;
+    *)  die "invalid level '$level' — must be patch, minor, or major" ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
+manifest="$root/plugins/$plugin/.claude-plugin/plugin.json"
+if [[ ! -f "$manifest" ]]; then
+    available=""
+    for dir in "$root"/plugins/*/; do
+        [[ -d "$dir" ]] || continue
+        name=${dir%/}
+        available+="${name##*/} "
+    done
+    die "unknown plugin '$plugin' — no manifest at" \
+        "plugins/$plugin/.claude-plugin/plugin.json (available: ${available:-none})"
+fi
+
+dir="$root/plugins/$plugin/.changeset"
+mkdir -p "$dir"
+
+# A unique fragment name so two branches never write the same path. The UTC
+# timestamp keeps fragments roughly ordered; the random suffix disambiguates
+# within a second. A name clash would surface as a git add/add conflict —
+# visible, never silent — but is not realistically reachable.
+name="$(date -u +%Y%m%d%H%M%S)-${RANDOM}${RANDOM}"
+fragment="$dir/$name.md"
+
+# Fragment format, owned by this script and read back by `bin/release`:
+#   line 1      — the level: patch, minor, or major
+#   lines 2+    — the one-line summary (leading blank lines are ignored)
+{
+    echo "$level"
+    echo
+    if [[ -n "$summary" ]]; then
+        echo "$summary"
+    else
+        echo "TODO: replace this line with a one-line summary of the change"
+    fi
+} > "$fragment"
+
+echo "${fragment#"$root"/}"
+[[ -n "$summary" ]] || echo "changeset: edit the fragment to replace the TODO summary" >&2

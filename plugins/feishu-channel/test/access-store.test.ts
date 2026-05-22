@@ -46,7 +46,13 @@ describe('loadAccess', () => {
     writeFileSync(file, JSON.stringify({ dmPolicy: 'allowlist' }))
     const r = loadAccess(file)
     expect(r.corrupt).toBe(false)
-    expect(r.access).toEqual({ dmPolicy: 'allowlist', allowFrom: [], groups: {}, pending: {} })
+    expect(r.access).toEqual({
+      dmPolicy: 'allowlist',
+      groupPolicy: 'allowlist',
+      allowFrom: [],
+      groups: {},
+      pending: {},
+    })
   })
 })
 
@@ -87,6 +93,30 @@ describe('normalizeAccess', () => {
 
   test('an invalid dmPolicy falls back to the default', () => {
     expect(normalizeAccess({ dmPolicy: 'bogus' }).dmPolicy).toBe('pairing')
+  })
+
+  test('a missing or invalid groupPolicy falls back to allowlist', () => {
+    expect(normalizeAccess({}).groupPolicy).toBe('allowlist')
+    expect(normalizeAccess({ groupPolicy: 'bogus' }).groupPolicy).toBe('allowlist')
+  })
+
+  test('a valid groupPolicy is kept', () => {
+    expect(normalizeAccess({ groupPolicy: 'block' }).groupPolicy).toBe('block')
+    expect(normalizeAccess({ groupPolicy: 'follow-user' }).groupPolicy).toBe('follow-user')
+  })
+
+  test('an access.json predating groupPolicy loads with the allowlist default', () => {
+    // A file written before this field existed keeps the decision-0010
+    // behavior: groups and any group-kind pending entry survive unchanged.
+    const a = normalizeAccess({
+      dmPolicy: 'pairing',
+      allowFrom: ['ou_a'],
+      groups: { oc_g: { requireMention: true, allowFrom: [] } },
+      pending: { code: { senderId: 'ou_b', kind: 'group', chatId: 'oc_g' } },
+    })
+    expect(a.groupPolicy).toBe('allowlist')
+    expect(a.groups['oc_g']).toEqual({ requireMention: true, allowFrom: [] })
+    expect(a.pending['code']?.kind).toBe('group')
   })
 
   test('non-string allowFrom entries are filtered out', () => {

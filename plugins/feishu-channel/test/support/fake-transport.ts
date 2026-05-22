@@ -15,13 +15,14 @@ export class FakeTransport implements FeishuTransport {
   botOpenId: string | undefined
   readonly sent: { chatId: string; text: string }[] = []
   readonly reactions: { messageId: string; emoji: string }[] = []
+  readonly reactionRemovals: { messageId: string; reactionId: string }[] = []
   readonly edits: { messageId: string; text: string }[] = []
   /** Records every `fetchDocComment` call. */
   readonly commentFetches: { fileToken: string; fileType: string; commentId: string }[] = []
   /** Records every `fetchDocMeta` call. */
   readonly metaFetches: { fileToken: string; fileType: string }[] = []
   /** When set, the named method throws — used to test outbound failure paths. */
-  failOn: 'sendText' | 'addReaction' | 'editText' | undefined
+  failOn: 'sendText' | 'addReaction' | 'removeReaction' | 'editText' | undefined
   /** Canned `fetchDocComment` result; `null` simulates a failed enrichment. */
   docComment: FeishuDocComment | null = null
   /** Canned `fetchDocMeta` result; `null` simulates a failed enrichment. */
@@ -39,9 +40,20 @@ export class FakeTransport implements FeishuTransport {
     return { messageId: 'om_sent' }
   }
 
-  async addReaction(messageId: string, emoji: string): Promise<void> {
+  /**
+   * Records the reaction and returns a reaction_id derived from the message_id,
+   * so a test can predict the id a later `removeReaction` should carry without
+   * threading the return value through the channel core.
+   */
+  async addReaction(messageId: string, emoji: string): Promise<string> {
     if (this.failOn === 'addReaction') throw new Error('feishu reaction failed')
     this.reactions.push({ messageId, emoji })
+    return `rk_${messageId}`
+  }
+
+  async removeReaction(messageId: string, reactionId: string): Promise<void> {
+    if (this.failOn === 'removeReaction') throw new Error('feishu reaction removal failed')
+    this.reactionRemovals.push({ messageId, reactionId })
   }
 
   async editText(messageId: string, text: string): Promise<void> {

@@ -8,8 +8,25 @@
 /** Access-control policy for direct (1:1) messages. */
 export type DmPolicy = 'pairing' | 'allowlist' | 'disabled'
 
-/** Per-group access policy, keyed in Access.groups by the group's chat_id. */
-export interface GroupPolicy {
+/**
+ * Access-control policy for group messages — the switch that selects one of
+ * three group-access modes:
+ *
+ *  - `block`       — every group message is dropped; the bot ignores groups.
+ *  - `allowlist`   — a group is authorized as a unit, by pairing: an @-mention
+ *                    in an unconfigured group posts a code the operator
+ *                    approves, adding the group to `Access.groups`.
+ *  - `follow-user` — no group is authorized; a group message is delivered when
+ *                    the bot is @-mentioned and the sender's open_id is on the
+ *                    top-level `allowFrom` allowlist.
+ */
+export type GroupPolicy = 'block' | 'allowlist' | 'follow-user'
+
+/**
+ * Per-group access settings, keyed in Access.groups by the group's chat_id.
+ * Consulted only under the `allowlist` group policy.
+ */
+export interface GroupEntry {
   /** Require the bot to be @-mentioned before a group message is delivered. */
   requireMention: boolean
   /** When non-empty, only these sender open_ids may trigger the bot here. */
@@ -47,10 +64,12 @@ export interface PendingEntry {
 /** The full access-control state — persisted verbatim as access.json. */
 export interface Access {
   dmPolicy: DmPolicy
-  /** Sender open_ids allowed to DM the bot directly. */
+  /** How group messages are gated — see `GroupPolicy`. */
+  groupPolicy: GroupPolicy
+  /** Sender open_ids allowed to reach the bot — in direct messages and groups. */
   allowFrom: string[]
-  /** Per-group policy, keyed by chat_id. */
-  groups: Record<string, GroupPolicy>
+  /** Per-group policy, keyed by chat_id. Consulted only under the `allowlist` group policy. */
+  groups: Record<string, GroupEntry>
   /** Pending pairing requests, keyed by pairing code. */
   pending: Record<string, PendingEntry>
 }

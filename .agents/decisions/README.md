@@ -20,7 +20,11 @@ future agent reads these to avoid re-litigating a settled question.
 | [0009](/.agents/decisions/0009-research-hazard-dispositions.md) | Every research hazard reaches a recorded disposition before it leaves the research layer | Accepted |
 | [0010](/.agents/decisions/0010-feishu-channel-group-pairing.md) | A Feishu group is authorized by pairing — an @-mention posts a code the operator approves | Accepted |
 | [0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md) | The Feishu doc-comment handler decodes via the SDK and enriches the event with fetched text and title | Accepted |
-| [0012](/.agents/decisions/0012-feishu-worker-scoped-subscription.md) | Feishu Worker-scoped subscription routes through a single-app co-hosted holder onto a pure-derived workspace identity | Accepted |
+| [0012](/.agents/decisions/0012-feishu-channel-group-policy-modes.md) | Feishu group access is a three-mode `groupPolicy` switch — block / allowlist (decision 0010) / follow-user | Accepted |
+| [0013](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md) | The Feishu channel marks an inbound chat message with a reaction when it reaches the session, and clears it on reply | Accepted |
+| [0014](/.agents/decisions/0014-changeset-release-versioning.md) | Versioning moves to changeset fragments consumed by a release step, so parallel PRs never collide on the version line | Accepted |
+| [0015](/.agents/decisions/0015-feishu-channel-orphan-detection-by-stdin-eof.md) | The Feishu channel detects an exited parent by stdin EOF, not by polling `process.ppid` | Accepted |
+| [0016](/.agents/decisions/0016-feishu-worker-scoped-subscription.md) | Feishu Worker-scoped subscription routes through a single-app co-hosted holder onto a pure-derived workspace identity | Accepted |
 
 ## When to add a record
 

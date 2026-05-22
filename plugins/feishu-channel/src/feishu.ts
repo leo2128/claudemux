@@ -25,7 +25,11 @@ import {
   reconnectingLogLine,
   startupTimeoutLogLine,
 } from './connection'
-import { acquireInstanceLock, releaseInstanceLock } from './instance-lock'
+import {
+  acquireInstanceLock,
+  acquireInstanceLockWithEviction,
+  releaseInstanceLock,
+} from './instance-lock'
 
 /** Cap on a single WebSocket handshake before it is aborted into a retry. */
 const WS_HANDSHAKE_TIMEOUT_MS = 15_000
@@ -166,8 +170,19 @@ export interface FeishuTransport {
    * unrelated conversation.
    */
   sendText(chatId: string, text: string): Promise<FeishuSendResult>
-  /** Add an emoji reaction to a message. */
-  addReaction(messageId: string, emoji: string): Promise<void>
+  /**
+   * Add an emoji reaction to a message and return the reaction_id Feishu
+   * assigned. That id is what `removeReaction` needs to take the same reaction
+   * back off; Feishu can omit it, in which case an empty string is returned.
+   */
+  addReaction(messageId: string, emoji: string): Promise<string>
+  /**
+   * Remove a reaction from a message, identified by the reaction_id that
+   * `addReaction` returned. Feishu only lets the app that added a reaction
+   * remove it, so this is always paired with a prior `addReaction` from the
+   * same channel.
+   */
+  removeReaction(messageId: string, reactionId: string): Promise<void>
   /** Replace the text of a message the bot previously sent. */
   editText(messageId: string, text: string): Promise<void>
   /**
@@ -285,12 +300,20 @@ export function createFeishuTransport(
     },
 
     async start(routes: InboundRoutes): Promise<void> {
-      // Exactly one process per machine opens the inbound WebSocket. The lock
-      // holder connects; every other instance stands by and polls, so a
-      // crashed holder is taken over rather than leaving the channel dark.
-      if (acquireInstanceLock(lockPath).acquired) {
+      // Exactly one process per machine opens the inbound WebSocket. A freshly
+      // started server takes the lock when it is free, and evicts an older
+      // channel server still holding it from a previous plugin version — so a
+      // plugin upgrade takes effect at once instead of waiting out the old
+      // server. Every other instance stands by and polls, so a crashed holder
+      // is taken over rather than leaving the channel dark.
+      const acquired = await acquireInstanceLockWithEviction(lockPath)
+      if (acquired.acquired) {
         holdsLock = true
-        logConnection('single-instance lock acquired — opening the inbound connection')
+        logConnection(
+          acquired.evicted
+            ? 'evicted an older channel server and took over the inbound connection'
+            : 'single-instance lock acquired — opening the inbound connection',
+        )
         await openInbound(routes)
         return
       }
@@ -320,10 +343,17 @@ export function createFeishuTransport(
       return { messageId: res.data?.message_id }
     },
 
-    async addReaction(messageId: string, emoji: string): Promise<void> {
-      await client.im.messageReaction.create({
+    async addReaction(messageId: string, emoji: string): Promise<string> {
+      const res = await client.im.messageReaction.create({
         path: { message_id: messageId },
         data: { reaction_type: { emoji_type: emoji } },
+      })
+      return res.data?.reaction_id ?? ''
+    },
+
+    async removeReaction(messageId: string, reactionId: string): Promise<void> {
+      await client.im.messageReaction.delete({
+        path: { message_id: messageId, reaction_id: reactionId },
       })
     },
 

@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   acquireInstanceLock,
+  acquireInstanceLockWithEviction,
   defaultLockDeps,
+  holderIsEvictable,
   releaseInstanceLock,
 } from '../src/instance-lock'
-import type { InstanceLockDeps } from '../src/instance-lock'
+import type { EvictionDeps, InstanceLockDeps } from '../src/instance-lock'
+import type { ProcessProbe } from '../src/holder-probe'
 
 /** Deps with a fixed PID and a liveness verdict the test controls. */
 function deps(pid: number, alive: boolean | ((pid: number) => boolean)): InstanceLockDeps {
@@ -94,5 +97,190 @@ describe('instance-lock', () => {
     // PID 0 and negatives are never live processes to claim a lock from.
     expect(d.isProcessAlive(0)).toBe(false)
     expect(d.isProcessAlive(-1)).toBe(false)
+  })
+})
+
+/** A probe describing a feishu-channel channel server in version directory `version`. */
+function serverProbe(version: string): ProcessProbe {
+  return {
+    command: '/path/to/bun run src/server.ts',
+    cwd: `/cache/claudemux/feishu-channel/${version}`,
+  }
+}
+
+describe('holderIsEvictable', () => {
+  const self = '/cache/claudemux/feishu-channel/0.9.0'
+
+  test('an unprobeable holder is never evictable', () => {
+    expect(holderIsEvictable(undefined, self)).toBe(false)
+  })
+
+  test('a process that is not running server.ts is never evictable', () => {
+    const probe: ProcessProbe = { command: 'node unrelated-app.js', cwd: self }
+    expect(holderIsEvictable(probe, self)).toBe(false)
+  })
+
+  test('a server.ts process outside a version directory is never evictable', () => {
+    const probe: ProcessProbe = { command: 'bun run src/server.ts', cwd: '/tmp/scratch' }
+    expect(holderIsEvictable(probe, self)).toBe(false)
+  })
+
+  test('a same-version channel server is a peer, not evictable', () => {
+    expect(holderIsEvictable(serverProbe('0.9.0'), self)).toBe(false)
+  })
+
+  test('a different-version channel server is evictable', () => {
+    expect(holderIsEvictable(serverProbe('0.5.0'), self)).toBe(true)
+  })
+
+  test('a trailing slash does not make a same-version holder look foreign', () => {
+    expect(holderIsEvictable(serverProbe('0.9.0'), `${self}/`)).toBe(false)
+  })
+})
+
+describe('acquireInstanceLockWithEviction', () => {
+  let dir: string
+  let lock: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'feishu-evict-'))
+    lock = join(dir, 'connection.lock')
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** Eviction deps with a self version directory and test-controlled effects. */
+  function evictionDeps(opts: {
+    pid: number
+    alive: (pid: number) => boolean
+    probe?: (pid: number) => ProcessProbe | undefined
+    onSignal?: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
+    selfDir?: string
+  }): EvictionDeps {
+    return {
+      pid: opts.pid,
+      isProcessAlive: opts.alive,
+      selfDir: opts.selfDir ?? '/cache/claudemux/feishu-channel/0.9.0',
+      probe: opts.probe ?? (() => undefined),
+      signal: opts.onSignal ?? (() => {}),
+      sleep: () => Promise.resolve(),
+    }
+  }
+
+  test('takes a free lock without evicting anything', async () => {
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({ pid: 1111, alive: () => true, onSignal: (_p, s) => signals.push(s) }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(false)
+    expect(signals).toEqual([])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('1111')
+  })
+
+  test('reclaims a stale (dead) holder without evicting', async () => {
+    writeFileSync(lock, '4444\n')
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({ pid: 5555, alive: () => false, onSignal: (_p, s) => signals.push(s) }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(false)
+    expect(signals).toEqual([])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('5555')
+  })
+
+  test('stands by — without signalling — when the holder cannot be probed', async () => {
+    writeFileSync(lock, '2222\n')
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({
+        pid: 3333,
+        alive: (p) => p === 2222,
+        probe: () => undefined,
+        onSignal: (_p, s) => signals.push(s),
+      }),
+    )
+    expect(result.acquired).toBe(false)
+    expect(result.evicted).toBe(false)
+    expect(signals).toEqual([])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('2222')
+  })
+
+  test('stands by — without signalling — for a same-version peer', async () => {
+    writeFileSync(lock, '2222\n')
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({
+        pid: 3333,
+        alive: (p) => p === 2222,
+        probe: () => serverProbe('0.9.0'),
+        onSignal: (_p, s) => signals.push(s),
+      }),
+    )
+    expect(result.acquired).toBe(false)
+    expect(result.evicted).toBe(false)
+    expect(signals).toEqual([])
+  })
+
+  test('evicts an older channel server that exits on SIGTERM', async () => {
+    writeFileSync(lock, '4242\n')
+    let holderAlive = true
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({
+        pid: 9999,
+        alive: (p) => (p === 4242 ? holderAlive : false),
+        probe: (p) => (p === 4242 ? serverProbe('0.5.0') : undefined),
+        onSignal: (_p, s) => {
+          signals.push(s)
+          if (s === 'SIGTERM') holderAlive = false
+        },
+      }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(true)
+    expect(signals).toEqual(['SIGTERM'])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('9999')
+  })
+
+  test('escalates to SIGKILL when an older server outlives the SIGTERM grace', async () => {
+    writeFileSync(lock, '4242\n')
+    let holderAlive = true
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({
+        pid: 9999,
+        alive: (p) => (p === 4242 ? holderAlive : false),
+        probe: (p) => (p === 4242 ? serverProbe('0.5.0') : undefined),
+        onSignal: (_p, s) => {
+          signals.push(s)
+          if (s === 'SIGKILL') holderAlive = false
+        },
+      }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(true)
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('9999')
+  })
+
+  test('reports the lock held when this process is already the holder', async () => {
+    writeFileSync(lock, '8888\n')
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({ pid: 8888, alive: () => true, onSignal: (_p, s) => signals.push(s) }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(false)
+    expect(signals).toEqual([])
   })
 })

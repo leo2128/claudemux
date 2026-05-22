@@ -1,4 +1,4 @@
-# 0012 — Feishu Worker-scoped subscription: single-app holder routing on a pure-derived identity
+# 0016 — Feishu Worker-scoped subscription: single-app holder routing on a pure-derived identity
 
 - **Status:** Accepted
 - **Date:** 2026-05-22

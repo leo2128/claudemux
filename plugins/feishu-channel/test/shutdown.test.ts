@@ -290,46 +290,55 @@ describe('shutdown — force-exit watchdog', () => {
   })
 })
 
-describe('shutdown — parent-death watchdog', () => {
-  test('a poll while still parented does not shut down', () => {
+describe('shutdown — orphan watchdog', () => {
+  test('subscribes to the parent-exit signal without shutting down', () => {
     const { coordinator } = harness()
-    let poll: (() => void) | undefined
+    let onExit: (() => void) | undefined
     coordinator.watchParent({
-      getParentPid: () => 4242,
-      schedule: (fn) => {
-        poll = fn
+      onParentExit: (handler) => {
+        onExit = handler
       },
     })
-    poll?.()
-    poll?.()
+    // The watchdog is armed, but the parent is still alive — no shutdown yet.
+    expect(onExit).toBeDefined()
     expect(coordinator.started).toBe(false)
   })
 
-  test('a poll once orphaned (parent PID 1) triggers the shutdown', async () => {
+  test('shuts down once the parent exits (stdin EOF)', async () => {
     const { coordinator, exitCodes } = harness()
-    let parentPid = 4242
-    let poll: (() => void) | undefined
+    let onExit: (() => void) | undefined
     let cleaned = false
     coordinator.register('cleanup', () => {
       cleaned = true
     })
     coordinator.watchParent({
-      getParentPid: () => parentPid,
-      schedule: (fn) => {
-        poll = fn
+      onParentExit: (handler) => {
+        onExit = handler
       },
     })
-
-    poll?.()
     expect(coordinator.started).toBe(false)
 
-    // The real parent has exited — the OS re-parented this process to init.
-    parentPid = 1
-    poll?.()
+    // The parent has exited — its end of the stdio pipe closed, ending stdin.
+    onExit?.()
     expect(coordinator.started).toBe(true)
 
     await coordinator.shutdown()
     expect(cleaned).toBe(true)
+    expect(exitCodes).toEqual([0])
+  })
+
+  test('a repeated parent-exit signal still exits exactly once', async () => {
+    const { coordinator, exitCodes } = harness()
+    let onExit: (() => void) | undefined
+    coordinator.watchParent({
+      onParentExit: (handler) => {
+        onExit = handler
+      },
+    })
+    // stdin can deliver both 'end' and 'close'; the shutdown must stay single.
+    onExit?.()
+    onExit?.()
+    await coordinator.shutdown()
     expect(exitCodes).toEqual([0])
   })
 })

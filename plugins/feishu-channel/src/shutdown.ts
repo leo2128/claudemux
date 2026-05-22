@@ -37,13 +37,14 @@ export interface ShutdownDeps {
   clearTimer: (handle: unknown) => void
 }
 
-/** External effects the parent-death watchdog needs, injectable for tests. */
-export interface ParentWatchDeps {
-  /** This process's current parent PID. */
-  getParentPid: () => number
-  /** Schedule a repeating poll. The handle is not retained — once the parent
-   *  is gone the process exits, so the poll never needs cancelling. */
-  schedule: (fn: () => void, ms: number) => void
+/** External effects the orphan watchdog needs, injectable for tests. */
+export interface OrphanWatchDeps {
+  /**
+   * Subscribe `handler` to the parent process's exit. The real implementation
+   * waits for EOF on this process's stdin — the stdio pipe whose write end the
+   * Claude Code parent holds — so `handler` runs the instant the parent goes.
+   */
+  onParentExit: (handler: () => void) => void
 }
 
 /** Signals that should drive a graceful shutdown. */
@@ -51,12 +52,6 @@ const SHUTDOWN_SIGNALS: readonly string[] = ['SIGTERM', 'SIGINT']
 
 /** Default cap on how long graceful cleanup may run before a forced exit. */
 const DEFAULT_FORCE_EXIT_MS = 10_000
-
-/** How often the parent-death watchdog samples this process's parent PID. */
-const PARENT_POLL_MS = 10_000
-
-/** PID a process is re-parented to once its real parent exits — `init`/`launchd`. */
-const ORPHAN_PARENT_PID = 1
 
 function defaultLogError(message: string, err?: unknown): void {
   if (err === undefined) console.error(message)
@@ -69,6 +64,27 @@ function defaultSetTimer(fn: () => void, ms: number): unknown {
   // the very leak it exists to prevent.
   handle.unref?.()
   return handle
+}
+
+/**
+ * Real `onParentExit`: run `handler` when this process's stdin reaches EOF.
+ *
+ * The channel server speaks MCP to its parent over a stdio pipe, and the
+ * parent holds that pipe's write end. When the parent exits, the write end
+ * closes and stdin ends. Reacting to that EOF is race-free and immune to PID
+ * reuse, unlike sampling a parent PID. Both `end` and `close` are wired
+ * because either may be the one delivered, and a guard keeps `handler` to a
+ * single call.
+ */
+function defaultOnParentExit(handler: () => void): void {
+  let fired = false
+  const fire = (): void => {
+    if (fired) return
+    fired = true
+    handler()
+  }
+  process.stdin.once('end', fire)
+  process.stdin.once('close', fire)
 }
 
 export class ShutdownCoordinator {
@@ -119,28 +135,25 @@ export class ShutdownCoordinator {
   }
 
   /**
-   * Trigger a shutdown once this process is orphaned. When a process's parent
-   * exits, the OS re-parents it to PID 1 (`init` / `launchd`); the watchdog
-   * polls for that and shuts down when it happens.
+   * Trigger a shutdown once the Claude Code parent process exits.
    *
-   * This is the backstop for the case the stdio-close path misses: a Claude
-   * Code parent that goes away without the MCP server's stdin reaching EOF
-   * (an indirect process tree, a hard kill). Without it the server keeps
-   * running orphaned, holding its Feishu connection slot — exactly the leak
-   * the single-instance lock then has to work around.
+   * The channel server speaks MCP to its parent over a stdio pipe. When the
+   * parent exits, the write end of that pipe closes and the server's stdin
+   * reaches EOF. That EOF is the signal: the OS delivers it the moment the
+   * parent is gone, it needs no polling, and it cannot be fooled by PID reuse.
+   * It also survives the indirect `bun run … start` → `bun run src/server.ts`
+   * process tree the server launches under, since the stdio pipe is inherited
+   * straight through to this process.
+   *
+   * Without this an orphaned server keeps running, holding its Feishu
+   * inbound-connection slot — exactly the leak the single-instance lock then
+   * has to work around.
    */
-  watchParent(deps: Partial<ParentWatchDeps> = {}): void {
-    const getParentPid = deps.getParentPid ?? (() => process.ppid)
-    const schedule =
-      deps.schedule ??
-      ((fn, ms) => {
-        const handle = setInterval(fn, ms)
-        // The poll must not by itself keep the event loop alive.
-        ;(handle as { unref?: () => void }).unref?.()
-      })
-    schedule(() => {
-      if (getParentPid() === ORPHAN_PARENT_PID) void this.shutdown(0)
-    }, PARENT_POLL_MS)
+  watchParent(deps: Partial<OrphanWatchDeps> = {}): void {
+    const onParentExit = deps.onParentExit ?? defaultOnParentExit
+    onParentExit(() => {
+      void this.shutdown(0)
+    })
   }
 
   /** True once a shutdown has been triggered — lets callers skip duplicated work. */

@@ -56,27 +56,31 @@ These rules cover the shared surfaces between `bin/tm`, the hooks, and the host 
 
 ## Versioning
 
-This repo ships more than one plugin under `plugins/`. Each plugin has its own manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version number — the plugins are versioned independently. Bump a plugin's version with `bin/bump-version <plugin> <patch|minor|major>` whenever you ship a change to one of *that plugin's* feature-class paths:
+This repo ships more than one plugin under `plugins/`. Each plugin has its own manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version number — the plugins are versioned independently.
+
+A feature commit does **not** edit the `version` field. Instead it declares the change with a **changeset**: run `bin/changeset <plugin> <patch|minor|major> "<one-line summary>"`, which writes a uniquely-named fragment under `plugins/<plugin>/.changeset/`, and commit that fragment alongside the change. The level you pick is what that change warrants on its own:
 
 - `patch` — bug fix, no behavior change visible to users
 - `minor` — new feature, backward-compatible
 - `major` — breaking change to a documented contract (CLI flag removal, file path change, on-disk format change)
+
+The version is bumped only at **release time**: `bin/release <plugin>` consumes every pending fragment for that plugin, bumps the manifest `version` by the highest level among them, prepends a dated section to `plugins/<plugin>/CHANGELOG.md`, and deletes the consumed fragments. `bin/release` is the only command that edits a `version` field. Because each feature commit adds a *new, uniquely-named* file rather than editing the one shared `version` line, two parallel branches never collide over versioning; the version line is touched only by serialized release commits. See [decision 0014](/.agents/decisions/0014-changeset-release-versioning.md).
 
 What counts as feature-class differs per plugin, because the plugins have different shapes:
 
 - `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any `skills/*/SKILL.md`.
 - `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and any `skills/*/SKILL.md`.
 
-A pre-commit hook at `.githooks/pre-commit` enforces this: staging a feature-class file for a plugin without bumping that plugin's manifest version in the same commit is rejected, with the exact `bin/bump-version` invocation printed to stderr. When several plugins are touched in one commit, each is checked independently. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords are exempt — the hook doesn't trigger on them. The per-plugin feature-class sets live in the `feature_class_globs` function in the hook; onboarding a new plugin means adding a case branch there.
+A pre-commit hook at `.githooks/pre-commit` enforces this: staging a feature-class file for a plugin without staging a changeset fragment for that plugin in the same commit is rejected, with the exact `bin/changeset` invocation printed to stderr. When several plugins are touched in one commit, each is checked independently. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords are exempt — the hook doesn't trigger on them. The per-plugin feature-class sets live in the `feature_class_globs` function in the hook; onboarding a new plugin means adding a case branch there.
 
 To enable the hook on a fresh clone, run once: `git config core.hooksPath .githooks`.
 
-The hook is a workflow nudge, not a security wall — `git commit --no-verify` bypasses it. Use that escape only when you've judged the change genuinely doesn't warrant a bump.
+The hook is a workflow nudge, not a security wall — `git commit --no-verify` bypasses it. Use that escape only when you've judged the change genuinely doesn't warrant a changeset.
 
 ## Commit Author
 
 Commit author email must be a real, well-formed address — not a machine-default identity (git's `whoami@hostname` guess, e.g. `dyzhu@MacBook.local`, which git fabricates when `user.email` is unset). Any valid public email passes; there is no per-person whitelist.
 
-The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`). Enabling the hook is the same one-time step as the versioning nudge: `git config core.hooksPath .githooks`. `.githooks/` itself is not a feature-class path, so changes to the hook don't trigger the version-bump rule.
+The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`). Enabling the hook is the same one-time step as the versioning nudge: `git config core.hooksPath .githooks`. `.githooks/` itself is not a feature-class path, so changes to the hook don't trigger the changeset rule.
 
 To stop machine-default identities at the root, set once per machine: `git config --global user.useConfigOnly true` — git then refuses to commit until `user.email` is explicitly configured, instead of silently guessing.

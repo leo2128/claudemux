@@ -49,10 +49,11 @@ script argument.
 
 ## Step 3 — run the factory script
 
-Run the script with the three values quoted:
+Install the channel's dependencies (which include its `tsx` TypeScript
+runner), then run the factory script with the three values quoted:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/configure.ts" "<app_id>" "<app_secret>" "<group_policy>"
+cd "${CLAUDE_PLUGIN_ROOT}" && npm install --silent && node_modules/.bin/tsx scripts/configure.ts "<app_id>" "<app_secret>" "<group_policy>"
 ```
 
 It writes `~/.claude/channels/feishu/.env` (owner-only), records the group

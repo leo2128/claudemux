@@ -14,7 +14,8 @@
  * core to a real MCP `Server`, a real transport, and graceful shutdown.
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -531,7 +532,11 @@ async function main(): Promise<void> {
   await transport.start(core.routes)
 }
 
-if (import.meta.main) {
+// Run `main` when invoked as the program entry, not when a test imports this
+// module. `realpathSync` canonicalizes the invocation path so it matches the
+// symlink-resolved module URL.
+const invokedPath = process.argv[1]
+if (invokedPath !== undefined && realpathSync(invokedPath) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error('[feishu-channel] failed to start:', err)
     process.exit(1)

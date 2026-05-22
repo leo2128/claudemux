@@ -8,8 +8,8 @@ all over a long-lived WebSocket connection, so no public webhook URL is needed.
 
 - [Claude Code](https://claude.com/claude-code) **v2.1.80 or later** — channels
   are a research-preview feature and are not available in earlier versions.
-- [Bun](https://bun.sh) — the channel server runtime. The plugin installs its
-  own dependencies on first launch.
+- [Node.js](https://nodejs.org) **v20 or later** — the channel server runtime.
+  The plugin installs its own dependencies on first launch.
 - A Feishu **self-built app** with the Bot capability (see below).
 
 ## Install
@@ -183,9 +183,9 @@ gated-out message to stderr with the reason it was dropped.
 
 ```bash
 cd plugins/feishu-channel
-bun install
-bun test          # run the unit suite
-bun run typecheck
+npm install
+npm test          # run the unit suite (vitest)
+npm run typecheck
 ```
 
 Core logic lives in `src/` as small, dependency-free modules so it can be unit
@@ -194,16 +194,16 @@ event type is a self-contained handler under `src/handlers/`, registered with
 the event registry in `src/server.ts` — adding support for a new event is a
 new handler module plus one registration line. `scripts/configure.ts` is the
 credential factory behind `/feishu-channel:configure`; its pure logic is
-type-checked and tested alongside `src/`. Tests are in `test/` and use
-`bun:test`; input-heavy functions are covered with property-based tests via
+type-checked and tested alongside `src/`. Tests are in `test/` and run on
+`vitest`; input-heavy functions are covered with property-based tests via
 `fast-check`. The same suite runs in CI under the `feishu-channel` job.
 
 `test/feishu-live.ts` is a separate integration test that talks to the real
-Feishu Open Platform. It is not a `*.test.ts` file, so `bun test` does not run
+Feishu Open Platform. It is not a `*.test.ts` file, so `npm test` does not run
 it by default; run it explicitly with credentials in the environment:
 
 ```bash
-FEISHU_APP_ID=... FEISHU_APP_SECRET=... bun test ./test/feishu-live.ts
+FEISHU_APP_ID=... FEISHU_APP_SECRET=... npx vitest run ./test/feishu-live.ts
 ```
 
 CI runs it on every commit using repository secrets. With no credentials it

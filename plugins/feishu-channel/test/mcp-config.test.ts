@@ -13,10 +13,11 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { describe, expect, test } from 'bun:test'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, test } from 'vitest'
 
-const mcpConfigPath = join(import.meta.dir, '..', '.mcp.json')
+const mcpConfigPath = join(dirname(fileURLToPath(import.meta.url)), '..', '.mcp.json')
 
 interface McpServerConfig {
   command?: string

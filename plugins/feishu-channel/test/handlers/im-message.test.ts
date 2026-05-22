@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadAccess, saveAccess } from '../../src/access-store'
@@ -361,7 +361,7 @@ describe('createImMessageHandler — drops', () => {
 
 describe('createImMessageHandler — resilience', () => {
   test('a corrupt access.json is reported and the event still processes', async () => {
-    await Bun.write(accessFile, '{ not json')
+    writeFileSync(accessFile, '{ not json')
     const logErrors: string[] = []
     const handler = createImMessageHandler()
 

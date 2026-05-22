@@ -2,11 +2,11 @@
  * Live Feishu integration test.
  *
  * Unlike the rest of the suite, this file talks to the real Feishu Open
- * Platform. It is deliberately NOT named `*.test.ts`, so `bun test` with no
+ * Platform. It is deliberately NOT named `*.test.ts`, so `npm test` with no
  * arguments does not discover it — a developer with no credentials, and a
  * fork pull request with no repository secrets, never run it. CI runs it
- * explicitly with `bun test test/feishu-live.ts` and the app credentials in
- * the environment (`FEISHU_APP_ID` / `FEISHU_APP_SECRET`).
+ * explicitly with `vitest run --config vitest.live.config.ts` and the app
+ * credentials in the environment (`FEISHU_APP_ID` / `FEISHU_APP_SECRET`).
  *
  * It covers the two checkpoints a healthy channel depends on:
  *   1. the credentials mint a `tenant_access_token`, and
@@ -20,7 +20,7 @@
  * than wedging the job.
  */
 
-import { expect, test } from 'bun:test'
+import { expect, test } from 'vitest'
 import * as lark from '@larksuiteoapi/node-sdk'
 
 const appId = process.env.FEISHU_APP_ID

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import fc from 'fast-check'
 import type { HandlerContext } from '../../src/events'
 import type { FeishuDocComment, FeishuDocMeta } from '../../src/feishu'

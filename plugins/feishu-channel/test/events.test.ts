@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import { EventRegistry } from '../src/events'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../src/events'
 

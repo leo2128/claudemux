@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import { ShutdownCoordinator } from '../src/shutdown'
 import type { ShutdownDeps } from '../src/shutdown'
 

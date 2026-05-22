@@ -1,7 +1,7 @@
 /**
  * Guards the plugin-local `.npmrc`.
  *
- * The MCP server's `start` script runs `bun install` on every launch. With no
+ * The MCP server's `start` script runs `npm install` on every launch. With no
  * plugin-local `.npmrc`, that install resolves against the user's `~/.npmrc`;
  * on a machine pointed at an internal mirror that lacks a pinned transitive
  * version, the install 404s and the MCP server never starts. The plugin-local
@@ -14,10 +14,11 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { describe, expect, test } from 'bun:test'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, test } from 'vitest'
 
-const npmrcPath = join(import.meta.dir, '..', '.npmrc')
+const npmrcPath = join(dirname(fileURLToPath(import.meta.url)), '..', '.npmrc')
 
 /** The registry the install must be pinned to — public npm. */
 const PINNED_REGISTRY = 'registry=https://registry.npmjs.org/'

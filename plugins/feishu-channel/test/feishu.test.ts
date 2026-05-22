@@ -6,7 +6,7 @@
  * on is pulled into pure functions so it can be covered here without one.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import { commentFromBatchQuery } from '../src/feishu'
 
 /**

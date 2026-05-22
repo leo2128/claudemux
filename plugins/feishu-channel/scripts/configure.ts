@@ -15,7 +15,8 @@
  * entry point that does the I/O and the network call.
  */
 
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { GROUP_POLICIES, loadAccess, saveAccess } from '../src/access-store'
 import { isRecord } from '../src/json'
 import { accessFile, envFile, stateDir } from '../src/paths'
@@ -199,7 +200,11 @@ async function main(): Promise<void> {
   process.exit(EXIT_CODE[result.verdict])
 }
 
-if (import.meta.main) {
+// Run `main` when invoked as the program entry, not when a test imports this
+// module. `realpathSync` canonicalizes the invocation path so it matches the
+// symlink-resolved module URL.
+const invokedPath = process.argv[1]
+if (invokedPath !== undefined && realpathSync(invokedPath) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error('configure: unexpected failure:', err)
     process.exit(1)

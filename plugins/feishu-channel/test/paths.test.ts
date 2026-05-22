@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import { join } from 'node:path'
 import { accessFile, envFile, lockFile, stateDir } from '../src/paths'
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 import { applyMentions, extractPostText, parseInbound } from '../src/content'
 import type { InboundMessage } from '../src/content'
 import type { Mention } from '../src/types'

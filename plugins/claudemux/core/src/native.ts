@@ -18,13 +18,22 @@
  * behavior is a separate change, never folded into the migration.
  *
  * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`, `history`, `status`,
- * `poll`.
+ * `poll`, `kill`.
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs'
+import { readdirSync, readFileSync, realpathSync, rmSync, statSync, type Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { busyMarkerFor, cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
+import {
+  busyMarkerFor,
+  cwdFile,
+  encodeProjectDir,
+  idleMarkerFor,
+  lastFileFor,
+  readyFile,
+  sendAtFile,
+  sidFile,
+} from './paths'
 import type { TmResult, TmRunOptions } from './tm'
 import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
@@ -1078,6 +1087,53 @@ const poll: NativeVerb = async (args, _options, env) => {
   }
 }
 
+/**
+ * `tm`'s `clear_idle`: drop a sid's three hook artifacts together — the idle
+ * marker, the `.last` text, and the `.busy` marker — so a later wait/last
+ * sees the next turn, not a stale one. A no-op for an empty sid, mirroring
+ * `clear_idle`'s `[[ -n "$1" ]]` guard.
+ */
+function clearIdle(sid: string): void {
+  if (sid === '') return
+  for (const file of [idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid)]) {
+    rmSync(file, { force: true })
+  }
+}
+
+/**
+ * `tm kill` — tear a teammate down: clear its hook artifacts, remove its four
+ * repo-keyed `/tmp` files, and kill its tmux session. Reports `killed:` when a
+ * session was running, `not running:` when none was — `cmd_kill` reproduced.
+ *
+ * `tm kill` removes the `/tmp` files unconditionally (its `rm -f` no-ops on an
+ * absent file), so the verb is the same whether or not the teammate was live.
+ */
+const kill: NativeVerb = async (args, _options, env) => {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) return die('usage: tm kill <repo>')
+  const name = `${SESSION_PREFIX}${repo}`
+
+  // A recorded sid means there are hook artifacts to clear first.
+  const sid = resolveSid(repo)
+  if (sid !== null) clearIdle(sid)
+
+  for (const file of [sidFile(repo), sendAtFile(repo), readyFile(repo), cwdFile(repo)]) {
+    rmSync(file, { force: true })
+  }
+
+  let running = false
+  try {
+    running = (await env.runTmux(['has-session', '-t', `=${name}`])).code === 0
+  } catch {
+    running = false
+  }
+  if (running) {
+    await env.runTmux(['kill-session', '-t', `=${name}`])
+    return { code: 0, stdout: `killed: ${repo} (tmux=${name})\n`, stderr: '' }
+  }
+  return { code: 0, stdout: `not running: ${repo} (tmux=${name})\n`, stderr: '' }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
 export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   ls,
@@ -1088,6 +1144,7 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   history,
   status,
   poll,
+  kill,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

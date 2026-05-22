@@ -47,6 +47,16 @@ export function cwdFile(repo: string): string {
   return `/tmp/teammate-${repo}.cwd`
 }
 
+/** The repo-keyed `.send-at` file — the epoch-seconds of the last `tm send`. */
+export function sendAtFile(repo: string): string {
+  return `/tmp/teammate-${repo}.send-at`
+}
+
+/** The repo-keyed `.ready` file — touched by the SessionStart hook once spawned. */
+export function readyFile(repo: string): string {
+  return `/tmp/teammate-${repo}.ready`
+}
+
 /**
  * Encode a filesystem path into Claude Code's project-dir segment — the name
  * of the directory under `~/.claude/projects/` that holds a cwd's transcripts.

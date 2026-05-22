@@ -238,6 +238,18 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('__coretest_poll_probe__')
   })
+
+  test('kill is served natively, and its repo argument reaches the handler', async () => {
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
+    // `kill` is a registry verb — its repo rides the structured `repo` field.
+    // `fakeTmux` reports the session exists, so the native handler returns
+    // `killed: <repo> ...`, echoing the repo, and never reaches `runTm`.
+    const result = await core.handleTool('kill', { repo: '__coretest_kill_probe__' })
+    expect(runner.calls).toHaveLength(0)
+    expect(result.isError).toBe(false)
+    expect(textOf(result)).toContain('__coretest_kill_probe__')
+  })
 })
 
 describe('a --help invocation shells out even for a migrated verb', () => {

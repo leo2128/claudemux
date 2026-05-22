@@ -5,7 +5,8 @@
 #
 # Two files back it, so a test controls exactly what tmux "sees":
 #   FAKE_TMUX_SESSIONS  the session list, in `tmux ls` format — one
-#                       `<name>: ...` line per session.
+#                       `<name>: ...` line per session. `kill-session`
+#                       rewrites it, so the fake has a little state.
 #   FAKE_TMUX_CAPTURE   the pane buffer `capture-pane` prints.
 # Both sides of the conformance check reach this same script: the real
 # `bin/tm` finds it on PATH, the native core finds it through CLAUDEMUX_TMUX
@@ -72,6 +73,24 @@ case "${1:-}" in
     capture_file="${FAKE_TMUX_CAPTURE:-}"
     if [ -n "$capture_file" ] && [ -f "$capture_file" ]; then
       cat "$capture_file"
+    fi
+    exit 0
+    ;;
+  kill-session)
+    # `cmd_kill` calls `kill-session -t "=<name>"`. Drop that session's line
+    # from the list so the kill is observable as a session-list effect.
+    target=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-t" ]; then
+        target="${2:-}"
+      fi
+      shift
+    done
+    target="${target#=}"
+    if [ -n "$sessions_file" ] && [ -f "$sessions_file" ]; then
+      kept="$(mktemp)"
+      awk -F: -v n="$target" '$1 != n' "$sessions_file" > "$kept"
+      mv "$kept" "$sessions_file"
     fi
     exit 0
     ;;

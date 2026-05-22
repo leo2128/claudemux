@@ -44,6 +44,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   utimesSync,
@@ -55,7 +56,17 @@ import { dirname, join } from 'node:path'
 import { runColumn } from '../src/column'
 import { runGrep } from '../src/grep'
 import { NATIVE_VERBS } from '../src/native'
-import { busyMarkerFor, cwdFile, encodeProjectDir, idleDir, lastFileFor, sidFile } from '../src/paths'
+import {
+  busyMarkerFor,
+  cwdFile,
+  encodeProjectDir,
+  idleDir,
+  idleMarkerFor,
+  lastFileFor,
+  readyFile,
+  sendAtFile,
+  sidFile,
+} from '../src/paths'
 import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
@@ -311,10 +322,65 @@ function assistantTextLine(text: string): string {
   return JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 }
 
+/**
+ * The files `tm kill` can touch — its four repo-keyed `/tmp` files, the fake
+ * `tmux`'s session list (`kill-session` rewrites it), and, when there is a
+ * sid, that sid's three idle markers. A `kill` scenario snapshots this set.
+ */
+function killWorld(repo: string, sid?: string): string[] {
+  const paths = [sidFile(repo), sendAtFile(repo), readyFile(repo), cwdFile(repo), sessionsFile]
+  if (sid !== undefined) {
+    paths.push(idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid))
+  }
+  return paths
+}
+
+/**
+ * A filesystem snapshot — each path mapped to its content, or `null` when the
+ * path is absent. A mutating verb (`kill`, `archive`) cannot be conformance-
+ * checked by running the oracle and native against the *same* fixture: the
+ * oracle changes the world the native run would then see. Such a scenario
+ * instead supplies a `snapshot` closure; the harness snapshots the world,
+ * runs the oracle, snapshots its effect, resets the world, runs native, and
+ * asserts the two post-states match (as well as the two `TmResult`s).
+ */
+type FsSnapshot = Record<string, string | null>
+
+/** Snapshot an explicit set of file paths — for a verb with a fixed world. */
+function snapshotPaths(paths: readonly string[]): FsSnapshot {
+  const snap: FsSnapshot = {}
+  for (const path of paths) {
+    snap[path] = existsSync(path) ? readFileSync(path, 'utf8') : null
+  }
+  return snap
+}
+
+/**
+ * Restore the world to `base`: every path `base` records is written back (or
+ * deleted when it was absent), and any path present only in `touched` — one
+ * the run being undone created — is deleted.
+ */
+function resetSnapshot(base: FsSnapshot, touched: FsSnapshot): void {
+  for (const path of new Set([...Object.keys(base), ...Object.keys(touched)])) {
+    const content = base[path] ?? null
+    if (content === null) {
+      rmSync(path, { force: true })
+    } else {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, content)
+    }
+  }
+}
+
 /** One conformance scenario: prepare the fixture, return the verb args. */
 interface Scenario {
   name: string
-  setup: () => { args: string[]; stdin?: string }
+  /**
+   * Prepare the fixture and return the verb's arguments. A mutating verb also
+   * returns a `snapshot` closure capturing its world — its presence switches
+   * the harness to the snapshot / reset / effects-diff path.
+   */
+  setup: () => { args: string[]; stdin?: string; snapshot?: () => FsSnapshot }
   /**
    * Run this scenario only on macOS. `tm history`'s detail-mode success path
    * formats a timestamp with BSD `date -r <epoch>`; on GNU `date -r` means
@@ -1101,6 +1167,63 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
       },
     ],
   },
+  {
+    verb: 'kill',
+    scenarios: [
+      {
+        name: 'no repo argument → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a running teammate with every marker → killed, all markers removed',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          marker(sendAtFile(repo), '1747900000\n')
+          marker(readyFile(repo), '')
+          marker(cwdFile(repo), '/some/teammate/cwd\n')
+          marker(idleMarkerFor(sid), '')
+          marker(lastFileFor(sid), 'the last reply\n')
+          marker(busyMarkerFor(sid), '')
+          return { args: [repo], snapshot: () => snapshotPaths(killWorld(repo, sid)) }
+        },
+      },
+      {
+        name: 'a teammate that is not running, with no markers → "not running", no effects',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions('')
+          return { args: [repo], snapshot: () => snapshotPaths(killWorld(repo)) }
+        },
+      },
+      {
+        name: 'a sid file present but the session gone → idle markers cleared, "not running"',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions('')
+          marker(sidFile(repo), `${sid}\n`)
+          marker(idleMarkerFor(sid), '')
+          marker(lastFileFor(sid), 'a stale reply\n')
+          marker(busyMarkerFor(sid), '')
+          return { args: [repo], snapshot: () => snapshotPaths(killWorld(repo, sid)) }
+        },
+      },
+      {
+        name: 'a running teammate with only a sid and cwd → killed, the present files removed',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          marker(cwdFile(repo), '/some/teammate/cwd\n')
+          return { args: [repo], snapshot: () => snapshotPaths(killWorld(repo, sid)) }
+        },
+      },
+    ],
+  },
 ]
 
 for (const { verb, scenarios } of CONFORMANCE) {
@@ -1108,10 +1231,24 @@ for (const { verb, scenarios } of CONFORMANCE) {
     for (const scenario of scenarios) {
       const run = scenario.darwinOnly && process.platform !== 'darwin' ? test.skip : test
       run(scenario.name, async () => {
-        const { args, stdin } = scenario.setup()
+        const { args, stdin, snapshot } = scenario.setup()
+        if (snapshot === undefined) {
+          // A read-only verb: oracle and native see the same untouched fixture.
+          const oracle = await realTm(verb, args, stdin)
+          const native = await runNative(verb, args, stdin)
+          expect(native).toEqual(oracle)
+          return
+        }
+        // A mutating verb: the oracle changes the world, so snapshot its
+        // effect, reset the world, and run native from the same start state.
+        const before = snapshot()
         const oracle = await realTm(verb, args, stdin)
+        const afterOracle = snapshot()
+        resetSnapshot(before, afterOracle)
         const native = await runNative(verb, args, stdin)
+        const afterNative = snapshot()
         expect(native).toEqual(oracle)
+        expect(afterNative).toEqual(afterOracle)
       })
     }
   })

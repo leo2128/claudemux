@@ -79,6 +79,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | Working on | Read |
 |---|---|
 | Anything that reads or writes a `/tmp` protocol file, or a `tm`↔hook seam | [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) |
+| The Feishu Worker-scoped subscription design — holder/endpoint split, the `routes/`+`inbox/` protocol | [domains/feishu-worker-routing.md](/.agents/domains/feishu-worker-routing.md) |
 
 **Decisions** — why the system is shaped the way it is:
 

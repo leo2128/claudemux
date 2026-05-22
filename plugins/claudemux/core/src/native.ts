@@ -17,11 +17,11 @@
  * today, bug for bug, down to the exact text of an error line. Fixing a `tm`
  * behavior is a separate change, never folded into the migration.
  *
- * Migrated so far: `ls`, `last`, `ctx`, `states`.
+ * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`.
  */
 
-import { readFileSync, statSync, type Stats } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, realpathSync, statSync, type Stats } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { busyMarkerFor, cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
 import type { TmResult, TmRunOptions } from './tm'
@@ -273,6 +273,15 @@ function isRegularFile(path: string): boolean {
   }
 }
 
+/** Whether a path exists and is a directory — `tm`'s `[[ -d ]]` test. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /**
  * One teammate's `ctx` line. Soft-fails to a `? (...)` diagnostic line — like
  * `tm`'s `ctx_one` — so `ctx --all` keeps going across teammates with no
@@ -466,8 +475,79 @@ const states: NativeVerb = async (_args, _options, env) => {
   return env.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
 }
 
+/**
+ * `tm`'s `die_repo_not_found` — the shared "`<repo>` is not under the
+ * dispatcher dir" failure for the repo-keyed verbs. When the dispatcher dir is
+ * itself a git working tree, `tm` assumes the user pointed at a single repo
+ * instead of the parent of sibling repos and steers them to `cd` up;
+ * otherwise it prints the generic "repo not found" line. Both are a `die`.
+ */
+function dieRepoNotFound(
+  verb: string,
+  repo: string,
+  path: string,
+  dispatcherDir: string,
+): TmResult {
+  if (isDirectory(join(dispatcherDir, '.git'))) {
+    return die(
+      `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.\n` +
+        '    The dispatcher dir should be the PARENT of your sibling repos.\n' +
+        `    Try:  cd "${dirname(dispatcherDir)}" && tm ${verb} ${repo}\n` +
+        "    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json\n" +
+        '    — run /claudemux:setup to wire it up automatically.)',
+    )
+  }
+  return die(
+    `repo not found at ${path} — <repo> must be a direct subdirectory of the ` +
+      `dispatcher dir (${dispatcherDir}). Dispatcher dir is read from ` +
+      "TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or " +
+      'run tm from the right place.',
+  )
+}
+
+/**
+ * The Claude Code project directory for a teammate repo — `tm`'s
+ * `project_dir_for_repo`. The repo's *physical* path (symlinks resolved, as
+ * `cd && pwd -P` does) is encoded, so a symlinked dispatcher tree still
+ * addresses the directory Claude Code actually wrote on disk. The caller must
+ * have already confirmed `<dispatcherDir>/<repo>` exists — `realpathSync`
+ * needs a real path — which `tm`'s callers likewise check up front.
+ */
+function projectDirForRepo(repo: string, env: NativeEnv): string {
+  const phys = realpathSync(join(env.dispatcherDir, repo))
+  return join(env.projectsDir, encodeProjectDir(phys))
+}
+
+/**
+ * `tm mem` — print a sibling repo's auto-memory index.
+ *
+ * Reads the repo's `~/.claude/projects/<dir>/memory/MEMORY.md`. A repo that
+ * never ran Claude Code — or whose project dir was pruned — has no such file;
+ * that is a normal "no sibling memory" case, reported on stderr with exit 0
+ * (not an error) so a dispatcher composing a spawn prompt can call `mem`
+ * opportunistically. An empty `MEMORY.md` is still a file, so it prints as
+ * empty output with exit 0 — `tm`'s `[[ -f ]]` then `cat`, reproduced.
+ */
+const mem: NativeVerb = async (args, _options, env) => {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) return die('usage: tm mem <repo>')
+
+  const path = join(env.dispatcherDir, repo)
+  if (!isDirectory(path)) return dieRepoNotFound('mem', repo, path, env.dispatcherDir)
+
+  const mfile = join(projectDirForRepo(repo, env), 'memory', 'MEMORY.md')
+  if (!isRegularFile(mfile)) {
+    return {
+      code: 0,
+      stdout: '',
+      stderr: `tm mem: no auto-memory recorded for ${repo} (looked at ${mfile})\n`,
+    }
+  }
+  return { code: 0, stdout: readFileSync(mfile, 'utf8'), stderr: '' }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
-export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last, ctx, states }
+export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last, ctx, states, mem }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */
 export function isNativeVerb(name: string): boolean {

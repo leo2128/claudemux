@@ -40,9 +40,17 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { runColumn } from '../src/column'
 import { NATIVE_VERBS } from '../src/native'
@@ -195,16 +203,40 @@ function writeTranscript(cwd: string, sid: string, lines: string[]): void {
 }
 
 /**
- * Write a teammate's `.last` marker, pinning its mtime ~10000s in the past.
- * `states` reports the file's age via `fmt_age`; 10000s sits solidly mid-bucket
- * (`2h`), so the ≤1s skew between the `tm` and native `now` samplings cannot
- * cross a bucket boundary and flake the conformance check.
+ * Write a teammate's `.last` marker, pinning its mtime `ageSeconds` in the
+ * past. `states` reports the file's age via `fmt_age`; the default 10000s
+ * sits solidly mid-bucket (`2h`), so the ≤1s skew between the `tm` and native
+ * `now` samplings cannot cross a bucket boundary and flake the check. A caller
+ * exercising a different `fmt_age` bucket passes an age that is likewise clear
+ * of its bucket edges.
  */
-function writeLastMarker(sid: string, content: string): void {
+function writeLastMarker(sid: string, content: string, ageSeconds = 10000): void {
   const file = lastFileFor(sid)
   marker(file, content)
-  const pinned = Math.floor(Date.now() / 1000) - 10000
+  const pinned = Math.floor(Date.now() / 1000) - ageSeconds
   utimesSync(file, pinned, pinned)
+}
+
+/**
+ * The auto-memory `MEMORY.md` path for a teammate repo — mirrors `tm`'s
+ * `project_dir_for_repo`. The repo directory must already exist on disk, so
+ * the physical-path resolution matches `tm`'s `cd && pwd -P`.
+ */
+function memoryFile(repo: string): string {
+  const phys = realpathSync(join(dispatcherDir, repo))
+  return join(projectsDir, encodeProjectDir(phys), 'memory', 'MEMORY.md')
+}
+
+/** Create a teammate repo directory under the sandbox dispatcher dir. */
+function makeRepoDir(repo: string): void {
+  mkdirSync(join(dispatcherDir, repo), { recursive: true })
+}
+
+/** Write a teammate's auto-memory `MEMORY.md`; the repo dir must exist first. */
+function writeMemory(repo: string, content: string): void {
+  const file = memoryFile(repo)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, content)
 }
 
 /** One conformance scenario: prepare the fixture, return the verb args. */
@@ -611,14 +643,77 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
       {
         name: 'a non-ASCII teammate name is aligned by the real column',
         setup: () => {
-          // A CJK repo name aligns by display width, not code-unit count —
-          // both sides pipe through the real `column`, so they must agree.
+          // A CJK repo name's column width is whatever the real `column`
+          // measures, not its code-unit count — both sides pipe through that
+          // same `column`, so they must agree.
           const repo = `${uniqueName()}-中文目录`
           const sid = uniqueName()
           setSessions(`${sessionLine(repo)}\n`)
           marker(sidFile(repo), `${sid}\n`)
           writeLastMarker(sid, 'a reply for the cjk-named teammate\n')
           return { args: [] }
+        },
+      },
+      {
+        name: 'a .last age in the minutes bucket → fmt_age renders the m form',
+        setup: () => {
+          // The other rows pin `.last` 10000s back (the `h` bucket); 1830s
+          // exercises `fmt_age`'s `m` branch. 1830 mod 60 = 30, so the ≤1s
+          // skew between the tm and native `now` samplings stays inside `30m`.
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          writeLastMarker(sid, 'a reply in the minutes bucket\n', 1830)
+          return { args: [] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'mem',
+    scenarios: [
+      {
+        name: 'no repo argument → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'repo present, MEMORY.md present → the index is printed verbatim',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeMemory(repo, '# Memory Index\n\n- [a fact](a.md) — a hook\n')
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'repo present, no MEMORY.md → the "no auto-memory" notice, exit 0',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'an empty MEMORY.md → empty output, exit 0 (a file is still a file)',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeMemory(repo, '')
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a MEMORY.md with CJK / multibyte content survives both paths intact',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeMemory(repo, '# 记忆索引\n\n- 第一条:emoji 🚀 也要原样回来\n')
+          return { args: [repo] }
         },
       },
     ],

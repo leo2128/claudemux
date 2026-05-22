@@ -94,6 +94,21 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(result.stdout).toContain('teammate-x')
   })
 
+  test('ls masks a tmux that cannot be spawned, like `tmux ls || true`', async () => {
+    const runner = fakeRunner()
+    // A `runTmux` that rejects stands in for a missing or unspawnable tmux;
+    // native `ls` tolerates it and reports an empty fleet, never the shell-out.
+    const result = await runVerb(
+      'ls',
+      [],
+      undefined,
+      fakeEnv(runner.run, { runTmux: () => Promise.reject(new Error('tmux not found')) }),
+    )
+    expect(runner.calls).toHaveLength(0)
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('no teammate sessions')
+  })
+
   test("a native verb's arguments reach its handler", async () => {
     const runner = fakeRunner()
     // No marker files exist for this repo, so the native `last` handler returns

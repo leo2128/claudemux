@@ -15,6 +15,7 @@ import { runGrep } from './grep'
 import type { NativeEnv } from './native'
 import { type RawTmRunner, type TmResult, runTm, runTmRaw } from './tm'
 import { runTmux } from './tmux'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -80,7 +81,11 @@ async function main(): Promise<void> {
   process.exitCode = result.code
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Run `main` when invoked as a script, not when imported (a test imports
+// `runCli`). `realpathSync` canonicalizes the invocation path so a symlinked
+// launcher still matches the symlink-resolved module path.
+const invokedPath = process.argv[1]
+if (invokedPath !== undefined && realpathSync(invokedPath) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error(`[tm] ${err instanceof Error ? err.message : String(err)}`)
     process.exitCode = 1

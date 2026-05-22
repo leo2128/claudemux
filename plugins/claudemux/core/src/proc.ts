@@ -24,7 +24,7 @@ export interface ProcResult {
  * Spawn `argv[0]` with the rest as its arguments, optionally feeding `stdin`,
  * and resolve with its exit code and captured streams. `env` and `cwd`
  * override the inherited process environment and working directory. Rejects
- * only when the process cannot be spawned at all (a missing binary) — a
+ * if the child fails to spawn (a missing or non-executable binary); a
  * non-zero exit is a resolved result, since `tm` verbs exit non-zero as
  * ordinary behavior.
  */

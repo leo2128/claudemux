@@ -128,7 +128,7 @@ On-disk layout under `~/.claude/channels/feishu/`:
 routes/
   doc/<file_token>      route file — JSON, see below
   chat/<chat_id>        route file — JSON, see below
-  default-sink          JSON: { schema, ownerId, ownerWorkspace }
+  default-sink          JSON: { schema, ownerId, ownerWorkspace } — coordination file, not a tombstone-able route (§10.5)
   .gc/<kind>/<resource>.<nonce>   holder-private — a route mid-GC (§7); endpoints never watch this subtree
 inbox/
   doc/<file_token>/     <ts_ns>-<event_id>.json   one raw event per file
@@ -137,22 +137,33 @@ inbox/
   _deadletter/          <ts_ns>-<event_id>.json   events with no route and no default sink
 ```
 
-Route file content — small JSON, with the liveness fields in a fixed layout so
-an update is a single write (§6, route-file write discipline). **Single-writer =
-the owning endpoint**, except the holder's GC tombstone `rename` (§7); owner
-updates are in-place modifications, never path-creating writes (§6):
+**Resource** route file content (`routes/doc/*`, `routes/chat/*`) — small JSON,
+the liveness fields fixed-width so an update is a single write (§6, route-file
+write discipline). **Single-writer = the owning endpoint**, except the holder's
+GC tombstone `rename` (§7); owner updates are in-place modifications, never
+path-creating writes (§6). `routes/default-sink` is **not** a resource route —
+it is a coordination file, holds no liveness, is never tombstoned, and is exempt
+from this discipline (§10.5).
 
 ```jsonc
 { "schema": 1,
-  "ownerId": "<endpointId>",            // pure-derived identity; equality key
-  "ownerWorkspace": "<canonical path>", // operability + rename anchor (§9)
-  "attachedPid": 12345,                 // liveness probe target — kill(pid, 0)
-  "attachedNonce": "a1b2c3",            // re-attach detector / GC-abort CAS (§6, §7)
-  "attachedAt": 1747900000,             // when this generation attached
-  "lastSeenAt": 1747900600,             // heartbeat — the GC dormancy clock (§6)
+  "ownerId": "<endpointId>",            // pure-derived identity; equality key — fixed-width
+  "attachedPid": 12345,                 // ┐ liveness region — all fixed-width, at
+  "attachedNonce": "a1b2c3",            // │ stable byte offsets, so a §6 liveness
+  "attachedAt": 1747900000,             // │ update rewrites a fixed byte range
+  "lastSeenAt": 1747900600,             // ┘ (kill probe / GC-abort CAS / dormancy clock)
+  "claimedAt": 1747900000,              // first-claim time
   "selfSubscribed": true,               // did we enable the Feishu doc subscribe
-  "claimedAt": 1747900000 }
+  "ownerWorkspace": "<canonical path>" }// operability + rename anchor (§9) — variable-length, serialized last
 ```
+
+**Field order is part of the contract.** `schema`, `ownerId`, and the four
+liveness fields are all fixed-width and serialized **first**, so the liveness
+region sits at byte offsets that do not depend on any later field. The
+variable-length `ownerWorkspace` is serialized **last**. This is what lets a §6
+liveness update overwrite a fixed byte range in place at a known offset; an
+identity rewrite that changes `ownerWorkspace`'s length rewrites the whole file
+instead (§6, identity rewrite).
 
 - **Route files are keyed by Feishu resource**, `wx`-created so the first
   creator is the sole owner (§10.1).
@@ -209,10 +220,12 @@ the holder's hot path.
    resources, a GC begun while the Worker was down. Self-heal and tombstone
    re-claim during the scan: §8.
 3. Refresh `attachedPid` / `attachedNonce` (fresh per process) / `attachedAt` /
-   `lastSeenAt` in each owned route — an in-place update under the §6 write
-   discipline — and start the periodic `lastSeenAt` heartbeat (§6). The endpoint
-   whose `endpointId == routes/default-sink`'s `ownerId` **additionally** owns
-   `inbox/_unrouted/`.
+   `lastSeenAt` in each owned **resource route** (`doc/*`, `chat/*`) — an
+   in-place update under the §6 write discipline — and start the periodic
+   `lastSeenAt` heartbeat (§6). The endpoint whose `endpointId ==
+   routes/default-sink`'s `ownerId` **additionally** owns `inbox/_unrouted/`;
+   `default-sink` carries no liveness fields and is neither liveness-refreshed
+   nor heartbeated (§10.5).
 4. For each owned resource inbox: **register the `fs.watch` first, then drain
    the existing backlog** — watch-before-drain, so an event arriving during the
    drain still produces a callback rather than being missed until the next poll
@@ -285,8 +298,8 @@ event and never crosstalks. It is a named low-probability residual (§10.7).
 ### Route-file write discipline
 
 The heartbeat — and every other owner update of a route file (the §5 reattach
-refresh, the §8 reconciliation rewrite) — must not be able to **resurrect a
-tombstoned route**. An update that created `routes/<kind>/<res>` as a side
+refresh, the §8 reconciliation rewrite, the §9 `rebind`, the §10.1 `takeover`) —
+must not be able to **resurrect a tombstoned route**. An update that created `routes/<kind>/<res>` as a side
 effect would let the route re-appear after §7 step 2 tombstoned it; GC would
 then finalize against a route a live owner believes it still holds, and delete
 that owner's inbox. So every owner update obeys:
@@ -300,9 +313,19 @@ that owner's inbox. So every owner update obeys:
   diverts to the §7 re-claim, which itself no-ops if no tombstone is found (the
   resource was legitimately abandoned, §8).
 - The liveness fields are **fixed-width** — zero-padded integers, a
-  fixed-length nonce — so every update writes the same byte count at the same
-  offsets. A shorter new value can never leave trailing bytes of the old one,
-  and the update needs no `ftruncate`.
+  fixed-length nonce — and serialized in a leading region ahead of the
+  variable-length `ownerWorkspace` (the §4 field-order contract), so every
+  liveness update writes the same byte count at the same offsets. A shorter new
+  value can never leave trailing bytes of the old one, and the update needs no
+  `ftruncate`.
+- An **identity rewrite** — `ownerId` / `ownerWorkspace`, performed by
+  reconciliation (§8), `rebind` (§9), or `takeover` (§10.1) — is an in-place
+  *full* rewrite rather than a fixed-width field update (`ownerWorkspace` is a
+  variable-length path, so it `ftruncate`s to the new length). It obeys the
+  same `open`-without-`O_CREAT` rule — an absent route diverts to the §7
+  re-claim — and the same post-write device+inode verify; a concurrent reader
+  is covered by the torn-read backstop below. Identity rewrites are rare,
+  explicit operations — not a hot path.
 - A concurrent or crash-interrupted read may still observe a torn field, so the
   **reader is the torn-read backstop**: GC's step-1 re-read (and the §8 scan)
   treat unparseable or implausible content as indeterminate, retry a bounded
@@ -471,10 +494,17 @@ implicit gap:**
   process heartbeats the old-path route, so `lastSeenAt` freezes exactly as on a
   crash. Same abandonment notice.
 - A `rebind` maintenance operation is provided: given an old→new workspace
-  pair, it scans routes whose `ownerWorkspace` matches the old path and
-  rewrites `ownerId` + `ownerWorkspace` to the new Worker. It is O(N) in the
-  Worker's subscription count (typically 1–3) and uses the same atomic
-  `.tmp`→`rename` as §8.
+  pair, it scans `routes/` for route files whose `ownerWorkspace` matches the
+  old path and rewrites `ownerId` + `ownerWorkspace` to the new Worker. It is
+  O(N) in the Worker's subscription count (typically 1–3). Each rewrite is an
+  **identity rewrite under the §6 route-file write discipline**: in-place,
+  `open` without `O_CREAT`, with the device+inode verify after writing. This is
+  load-bearing here — the bullet above makes a stale-owned route GC-eligible, so
+  a route `rebind` reaches may be tombstoned mid-operation; the `open`-without-
+  `O_CREAT` then returns `ENOENT` and `rebind` diverts that route to the §7
+  re-claim instead of resurrecting it. `rebind` is therefore **not** a third
+  route-path creator — the §7 two-creator invariant (`wx` first-claim,
+  re-claim `rename`-back) holds.
 - Until `rebind` or GC, events for the renamed Worker's resources keep
   buffering in the resource inboxes — a rename followed by a `rebind` within
   the grace window loses nothing.
@@ -506,6 +536,15 @@ route file **nor** a tombstone exists — and since a tombstone is produced only
 by renaming an *existing* route away (§7 step 2), no tombstone can appear for a
 resource whose route file was already absent, so the check-then-`wx` is not
 itself racy.
+
+A **`takeover`** (`watch_doc(X, takeover:true)`) does not `wx`-create — the
+route file already exists, owned by another endpoint. It is an **identity
+rewrite** of that route (`ownerId` / `ownerWorkspace` → the new owner) under the
+§6 write discipline: in-place, `open` without `O_CREAT`, post-write verify. If
+the route was tombstoned between the caller's read and its rewrite, the
+`open`-without-`O_CREAT` returns `ENOENT` and the `takeover` diverts to the §7
+re-claim — so a `takeover` racing a GC of the same resource also resolves
+through the single tombstone, never beside it.
 
 ### 10.2 Stale-claimant detection
 
@@ -551,7 +590,10 @@ If the default-sink owner dies, `inbox/_unrouted/` keeps buffering, bounded
 is absent entirely, unrouted events go to `inbox/_deadletter/` with a loud log
 (§5 step 2). The default sink is not subject to the §7 abandonment GC — it holds
 no Feishu subscription; a stale `default-sink` file is simply overwritten by the
-next `claim_default_sink`.
+next `claim_default_sink`. Because `default-sink` is never tombstoned, a
+path-creating `.tmp`→`rename` write of it can resurrect nothing — it is
+**exempt from the §6 route-file write discipline**, which governs only the
+tombstone-able resource routes (`doc/*`, `chat/*`).
 
 ### 10.6 Holder handoff event-loss window
 
@@ -674,11 +716,10 @@ No finding was rejected; the review surfaced four genuine event-loss or
 incoherence gaps (`_unrouted` mechanism, GC race, holder-handoff window,
 drain/watch ordering) that the pre-review draft did not close.
 
-A **second review round** — the PR #30 cross-review, then `Plan` advisor
-stand-in re-reviews of the fixes that cross-review prompted — surfaced the gaps
-below. The advisor's first re-review caught the last row (a race in the B2 fix
-as first drafted); a further pass tightened the tombstone protocol's edge cases,
-recorded in the dispositions. All are folded in:
+A **second review round** — iterated PR #30 cross-reviews and `Plan` advisor
+stand-in re-reviews of the fixes each one prompted — surfaced the gaps below.
+Several were caught only after the fix for the previous one landed; the
+dispositions record where each was closed. All are folded in:
 
 | Review finding | Disposition |
 |---|---|
@@ -686,6 +727,7 @@ recorded in the dispositions. All are folded in:
 | The GC tombstone protocol left the abort and holder-crash paths undefined: an aborted GC leaked its tombstone, and a holder crash mid-GC had no recovery rule | **Accepted** — §7 makes the tombstone the single atomically-contended object (rename-back re-claim, `unlink`-as-finalize-commit), names the at-most-one-tombstone-per-resource invariant, and adds the holder-takeover `routes/.gc/` recovery scan; §8 adds the restart-time tombstone re-claim. A follow-up advisor pass added: a first-claim of a mid-GC resource is itself routed through the tombstone (§10.1), so no fresh `wx` route can coexist with it and have its inbox destroyed by finalize; the re-claim refreshes liveness *before* the rename-back (§7 step 3), leaving no stale-liveness window; and §7 states the `detection latency < quiesce ≪ grace TTL` timing constraint the no-loss guarantee rests on. |
 | §3 "case-fold on a case-insensitive filesystem" did not say which casing is authoritative, nor which fold variant — both feed the identity hash | **Accepted** — §3 specifies full, non-Turkic Unicode case-folding of the `realpath` string, independent of on-disk and launch-input casing. |
 | The B2 fix itself: a route-file owner update written by a path-creating `.tmp`→`rename` (the reattach refresh, or the heartbeat) could resurrect a route GC had tombstoned, letting GC finalize against a live owner and delete its inbox | **Accepted** — §6 adds the route-file write discipline: owner updates are in-place (`open` without `O_CREAT`), never create the route path, are a single fixed-**width** write, and verify by device+inode after writing, diverting to the §7 re-claim on any mismatch; the torn-read backstop is placed on the reader (bounded retry, conservative abort). §7's exclusivity claim is now grounded on it. |
+| The write-discipline fix moved §8 reconciliation to an in-place write but left §9 `rebind` citing the old `.tmp`→`rename` — a path-creating write that could resurrect a tombstoned stale-owned route (the same resurrection class, on the one route-update path the fix missed) | **Accepted** — §9 `rebind` is now an identity rewrite under the §6 write discipline (in-place, `open` without `O_CREAT`, `ENOENT`→§7 re-claim, post-write verify); the stale cross-reference is removed. §6 names the identity-rewrite class (reconciliation, `rebind`, `takeover`) explicitly. §4 / §5 step 3 / §10.5 mark `routes/default-sink` exempt — it is never tombstoned, so a path-creating write of it resurrects nothing, and it carries no liveness to refresh or heartbeat. A further advisor pass added the §4 field-order contract: the fixed-width liveness fields are serialized ahead of the variable-length `ownerWorkspace`, so §6's fixed-offset liveness update is actually achievable. |
 
 No finding was rejected.
 

@@ -525,7 +525,9 @@ what `next`-line v1 loses if V2 fails.
 Spec-phase design tasks that must be resolved before the code they shape
 (distinct from the verification gates above):
 
-- The teammate-registry schema + crash recovery (Phase A1, §4, §12).
+- The teammate-registry schema + crash recovery (Phase A1, §4, §12) —
+  **resolved and built in Phase A**; the on-disk contract is
+  [components/claudemux-core.md](/.agents/components/claudemux-core.md).
 - The core↔Codex-driver internal contract; the `app-server` method subset
   (~8–10 methods) pinned to a generated schema with a CI conformance check.
 - The §10 failure-semantics mechanisms: the timeout SLA value, the

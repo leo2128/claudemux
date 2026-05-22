@@ -72,6 +72,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | The `dispatcher` skill, its references, the dispatcher template, `/claudemux:setup` | [components/dispatcher-skill.md](/.agents/components/dispatcher-skill.md) |
 | The `optimize` skill — periodic dispatcher self-review | [components/optimize-skill.md](/.agents/components/optimize-skill.md) |
 | The `feishu-channel` plugin (WIP) | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
+| The orchestration core that replaces `tm` on the `next` branch — modules, the teammate registry, the resident subscription | [components/claudemux-core.md](/.agents/components/claudemux-core.md) |
 | Repo tooling — versioning, lint, CI, tests | [components/repo-tooling.md](/.agents/components/repo-tooling.md) |
 
 **Domains** — cross-cutting contracts that span more than one component:

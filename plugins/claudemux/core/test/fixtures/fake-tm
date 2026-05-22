@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Test double for `bin/tm`. It echoes the verb, each argument, and any stdin
+# so a test can assert the core forwarded them faithfully — the shell-out
+# layer's job in Phase A is a faithful pass-through, and this is what pins it.
+#
+# The verb `__fail__` exits non-zero with stderr output, to drive the
+# failure path; every other verb succeeds.
+set -u
+verb="${1:-}"
+shift || true
+case "$verb" in
+  __fail__)
+    echo "fake-tm: boom" >&2
+    exit 3
+    ;;
+esac
+printf 'VERB:%s\n' "$verb"
+for a in "$@"; do printf 'ARG:%s\n' "$a"; done
+stdin="$(cat)"
+[ -n "$stdin" ] && printf 'STDIN:%s\n' "$stdin"
+printf 'fake-tm: %s ok\n' "$verb" >&2

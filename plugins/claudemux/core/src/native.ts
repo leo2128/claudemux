@@ -17,14 +17,15 @@
  * today, bug for bug, down to the exact text of an error line. Fixing a `tm`
  * behavior is a separate change, never folded into the migration.
  *
- * Migrated so far: `ls`, `last`, `ctx`.
+ * Migrated so far: `ls`, `last`, `ctx`, `states`.
  */
 
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
 
-import { cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
+import { busyMarkerFor, cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
 import type { TmResult, TmRunOptions } from './tm'
+import type { ColumnRunner } from './column'
 import type { TmuxRunner } from './tmux'
 
 /** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
@@ -34,6 +35,8 @@ const SESSION_PREFIX = 'teammate-'
 export interface NativeEnv {
   /** Runs `tmux` — injected so a conformance fixture can supply a fake. */
   runTmux: TmuxRunner
+  /** Aligns tab-separated rows via `column -t` — for table-rendering verbs. */
+  runColumn: ColumnRunner
   /** The dispatcher directory — the parent of the sibling teammate repos. */
   dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
@@ -383,8 +386,88 @@ const ctx: NativeVerb = async (args, _options, env) => {
   return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
 }
 
+/** Format a second-count as a short relative age — `tm`'s `fmt_age`. */
+function fmtAge(age: number): string {
+  if (age < 60) return `${age}s`
+  if (age < 3600) return `${Math.floor(age / 60)}m`
+  if (age < 86400) return `${Math.floor(age / 3600)}h`
+  return `${Math.floor(age / 86400)}d`
+}
+
+/**
+ * The `PREVIEW` cell for one teammate — the first line of its `.last`, with
+ * control characters stripped, truncated to 50 characters (code points, as
+ * `tm`'s `perl -CSD substr` counts them). Empty after stripping, or the file
+ * unreadable, → `(no first line)`.
+ */
+function lastPreview(lastFile: string): string {
+  let content: string
+  try {
+    content = readFileSync(lastFile, 'utf8')
+  } catch {
+    return '(no first line)'
+  }
+  // Strip control characters (code point <= 0x1f), then take the first 50
+  // characters — `tr -d` then `perl -CSD substr` in `tm`. Iterate code
+  // points so the count matches perl's `-CSD` character count.
+  const preview = [...(content.split('\n')[0] ?? '')]
+    .filter((ch) => (ch.codePointAt(0) ?? 0) > 0x1f)
+    .slice(0, 50)
+    .join('')
+  return preview.length > 0 ? preview : '(no first line)'
+}
+
+/** One `states` table row for a teammate: REPO, SID, BUSY, LAST, PREVIEW. */
+function statesRow(repo: string, now: number): string[] {
+  const sid = resolveSid(repo)
+  const sidShort = sid === null ? '?' : sid.slice(0, 8)
+  // `pane_busy`: a teammate is busy iff its `.busy` marker file exists.
+  const busy = sid !== null && isRegularFile(busyMarkerFor(sid)) ? 'yes' : 'no'
+  let last = '-'
+  let preview = '-'
+  if (sid !== null && sid.length > 0) {
+    const lf = lastFileFor(sid)
+    let stat: Stats | null
+    try {
+      stat = statSync(lf)
+    } catch {
+      stat = null
+    }
+    // `[[ -s "$lf" ]]` — present and non-empty.
+    if (stat !== null && stat.size > 0) {
+      const age = now - Math.floor(stat.mtimeMs / 1000)
+      last = `${stat.size}B/${fmtAge(age)}`
+      preview = lastPreview(lf)
+    }
+  }
+  return [repo, sidShort, busy, last, preview]
+}
+
+/**
+ * `tm states` — a one-line fleet snapshot of every teammate: its sid, whether
+ * it is mid-turn, and the size / age / preview of its last reply.
+ *
+ * The per-teammate row logic is native; the table is aligned by piping the
+ * tab-separated rows through `column -t`, exactly as `cmd_states` does.
+ */
+const states: NativeVerb = async (_args, _options, env) => {
+  const repos = await iterRepos(env.runTmux)
+  if (repos.length === 0) return { code: 0, stdout: '(no teammate sessions)\n', stderr: '' }
+
+  // `now` is sampled once, before the loop — `tm`'s `cmd_states` does the same.
+  const now = Math.floor(Date.now() / 1000)
+  const rows = [
+    ['REPO', 'SID', 'BUSY', 'LAST', 'PREVIEW'],
+    ...repos.map((repo) => statesRow(repo, now)),
+  ]
+  // The `column` result *is* the verb's result — `tm`'s `cmd_states` likewise
+  // ends in `| column`, so `column`'s exit code, stdout, and stderr are what
+  // `tm states` produces.
+  return env.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
-export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last, ctx }
+export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last, ctx, states }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */
 export function isNativeVerb(name: string): boolean {

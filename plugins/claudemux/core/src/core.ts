@@ -21,6 +21,7 @@ import { isNativeVerb, NATIVE_VERBS, triggersTmHelp } from './native'
 import { cwdFile, sidFile } from './paths'
 import type { Registry } from './registry'
 import type { SignalSource } from './subscription'
+import type { ColumnRunner } from './column'
 import type { TmResult, TmRunOptions, TmRunner } from './tm'
 import type { TmuxRunner } from './tmux'
 import { TM_VERBS } from './verbs'
@@ -34,6 +35,8 @@ export interface CoreDeps {
   runTm: TmRunner
   /** Runs `tmux` — for natively-migrated verbs that still query tmux. */
   runTmux: TmuxRunner
+  /** Runs `column -t` — for natively-migrated verbs that render tables. */
+  runColumn: ColumnRunner
   /** The teammate registry, already loaded. */
   registry: Registry
   /** The resident idle subscription (or any signal source), already started. */
@@ -102,6 +105,7 @@ export function createCore(deps: CoreDeps): Core {
       result = native
         ? await native(argv, options, {
             runTmux: deps.runTmux,
+            runColumn: deps.runColumn,
             dispatcherDir: deps.dispatcherDir,
             projectsDir: deps.projectsDir,
           })

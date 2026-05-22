@@ -25,6 +25,7 @@ import { type Server as NetServer, connect, createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { runColumn } from './column'
 import { type Core, createCore } from './core'
 import { coreSocketPath, registryFile, sidFile } from './paths'
 import { Registry } from './registry'
@@ -162,7 +163,15 @@ async function main(): Promise<void> {
   const projectsDir = join(process.env.HOME ?? homedir(), '.claude', 'projects')
   // `createCore` only assembles the tool list and a dispatcher closure over
   // these objects; it touches no shared state, so it is safe before the bind.
-  const core = createCore({ runTm, runTmux, registry, subscription, dispatcherDir, projectsDir })
+  const core = createCore({
+    runTm,
+    runTmux,
+    runColumn,
+    registry,
+    subscription,
+    dispatcherDir,
+    projectsDir,
+  })
   const net = createCoreNetServer(core)
 
   const shutdown = (signal: string): void => {

@@ -15,8 +15,9 @@ contracts they hold.
 > resident MCP server, holds the teammate registry and a resident idle
 > subscription, and serves the `tm` verb set. Phase A shelled every verb out
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
-> a time, read-only verbs first — `ls`, `last`, and `ctx` run natively, the
-> rest still shell out. `tm` is unchanged and remains fully usable on its own.
+> a time, read-only verbs first — `ls`, `last`, `ctx`, and `states` run
+> natively, the rest still shell out. `tm` is unchanged and remains fully
+> usable on its own.
 
 ## Module layout
 
@@ -27,7 +28,8 @@ single-purpose; the testable logic is separated from the process wiring.
 |---|---|
 | `paths.ts` | Path builders for every `/tmp` protocol file and the core's own state — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) applied to the TypeScript side. |
 | `tm.ts` | The `tm` shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. Fronts every verb not yet migrated to native code. |
-| `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`). |
+| `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`, `states`, `ctx --all`). |
+| `column.ts` | The `column` shell-out layer — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs (`states`). |
 | `verbs.ts` | The catalog of `tm` verbs the core re-exposes as MCP tools. |
 | `native.ts` | Native verb implementations — Phase B reimplements verbs here, one at a time, replacing their `tm` shell-out. |
 | `registry.ts` | The teammate registry — see below. |
@@ -124,11 +126,21 @@ at a time — read-only verbs first, the racy hot path (`spawn`, `send`, `wait`)
 last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
-migrated. `ls`, `last`, and `ctx` are native; some native verbs still need a
-backend — `ls` and `ctx --all` run `tmux` through
+migrated. `ls`, `last`, `ctx`, and `states` are native; some native verbs
+still need a backend — `ls`, `states`, and `ctx --all` run `tmux` through
 [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx` reads Claude Code
 transcript files under the dispatcher dir and `~/.claude/projects` (both
 resolved once at boot and injected, so a test can sandbox them).
+
+A native verb keeps the *logic* in the core but may still shell out to a
+presentation or session backend. `states` builds its rows natively, then pipes
+them through the real `column -t` ([`column.ts`](/plugins/claudemux/core/src/column.ts))
+rather than reimplementing it: `column` aligns by display width — a CJK
+teammate name occupies two columns, not two code units — and that exact
+output *is* the behavior the migration must preserve, so a hand-written
+aligner could not stay faithful across platforms. `column` is a presentation
+backend here, the way `tmux` is the session backend; `history`'s table will
+shell out to it on the same reasoning.
 
 A `NativeVerb` returns the same `{code, stdout, stderr}` `TmResult` a shell-out
 returns — not a shaped MCP result. That keeps `verbResult` the single

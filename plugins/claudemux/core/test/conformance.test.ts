@@ -26,7 +26,8 @@
  *  - the dispatcher dir and `~/.claude/projects` — sandboxed under a scratch
  *    dir. `tm` is pointed at them with `TM_DISPATCHER_DIR` / `HOME` in its
  *    spawn env; the native side with the injected `dispatcherDir` /
- *    `projectsDir`. (`ctx` needs `jq` for the `tm` side; CI installs it.)
+ *    `projectsDir`. (`tm ctx` needs `jq` and `tm states` needs `column`;
+ *    the native `states` pipes through `column` too. CI installs both.)
  *
  * Scope: this pins a *verb handler*'s logic against the matching `cmd_<verb>`
  * in `tm`. The dispatch around it — `tm`'s `main` help pre-scan, the core's
@@ -39,12 +40,13 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { runColumn } from '../src/column'
 import { NATIVE_VERBS } from '../src/native'
-import { cwdFile, encodeProjectDir, idleDir, lastFileFor, sidFile } from '../src/paths'
+import { busyMarkerFor, cwdFile, encodeProjectDir, idleDir, lastFileFor, sidFile } from '../src/paths'
 import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
@@ -135,6 +137,7 @@ function runNative(verb: string, args: readonly string[], stdin?: string): Promi
   if (!handler) throw new Error(`no native handler for ${verb}`)
   return handler(args, stdin != null ? { stdin } : undefined, {
     runTmux,
+    runColumn,
     dispatcherDir,
     projectsDir,
   })
@@ -176,11 +179,32 @@ function usageLine(input: number, cacheCreation: number, cacheRead: number, outp
   })
 }
 
+/** An assistant usage line with no cache fields — a non-cached / older turn. */
+function usageLineNoCache(input: number, output: number): string {
+  return JSON.stringify({
+    type: 'assistant',
+    message: { usage: { input_tokens: input, output_tokens: output } },
+  })
+}
+
 /** Write a teammate's transcript jsonl under the sandbox projects dir. */
 function writeTranscript(cwd: string, sid: string, lines: string[]): void {
   const dir = join(projectsDir, encodeProjectDir(cwd))
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${sid}.jsonl`), lines.length > 0 ? `${lines.join('\n')}\n` : '')
+}
+
+/**
+ * Write a teammate's `.last` marker, pinning its mtime ~10000s in the past.
+ * `states` reports the file's age via `fmt_age`; 10000s sits solidly mid-bucket
+ * (`2h`), so the ≤1s skew between the `tm` and native `now` samplings cannot
+ * cross a bucket boundary and flake the conformance check.
+ */
+function writeLastMarker(sid: string, content: string): void {
+  const file = lastFileFor(sid)
+  marker(file, content)
+  const pinned = Math.floor(Date.now() / 1000) - 10000
+  utimesSync(file, pinned, pinned)
 }
 
 /** One conformance scenario: prepare the fixture, return the verb args. */
@@ -404,6 +428,19 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         },
       },
       {
+        name: 'a usage object with no cache fields → cache tokens count as zero',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          // The common shape of a non-cached / older turn: `input_tokens` and
+          // `output_tokens` only. `jq`'s `number + null` is `number`; native's
+          // missing-field-as-zero must agree.
+          writeTranscript(defaultCwd(repo), sid, [usageLineNoCache(7000, 200)])
+          return { args: [repo] }
+        },
+      },
+      {
         name: 'a non-object transcript line fails the file, as jq does',
         setup: () => {
           const repo = uniqueName()
@@ -412,6 +449,18 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           // A bare `42` line: `jq -s` errors indexing it, failing the whole
           // pass — the native parse must fail the file too, not skip the line.
           writeTranscript(defaultCwd(repo), sid, ['42', usageLine(5000, 0, 0, 100)])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a syntactically invalid JSON line fails the file, as jq does',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          // `{not json` is not parseable: `jq -s` syntax-errors the whole pass,
+          // and the native `JSON.parse` throws — both must fail the file.
+          writeTranscript(defaultCwd(repo), sid, ['{not json', usageLine(5000, 0, 0, 100)])
           return { args: [repo] }
         },
       },
@@ -451,6 +500,125 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             writeTranscript(defaultCwd(repo), sid, [usageLine(6000, 1000, 2000, 90)])
           }
           return { args: [repoA, repoB] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'states',
+    scenarios: [
+      {
+        name: 'no running teammates → the "no teammate sessions" line',
+        setup: () => {
+          setSessions('')
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a teammate with a sid and a .last → a full row',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          writeLastMarker(sid, 'the last reply line\nand a second line\n')
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a teammate with a sid but no .last → the LAST/PREVIEW dashes',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${uniqueName()}\n`)
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a teammate with no sid file → the "?" SID',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a teammate mid-turn → BUSY is yes',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          marker(busyMarkerFor(sid), '')
+          writeLastMarker(sid, 'a reply\n')
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a CJK preview is truncated by character, not byte',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          writeLastMarker(
+            sid,
+            '已完成任务这是一段足够长的中文回复预览内容用来验证按字符而不是按字节截断到五十个字符的行为再多写些文字凑长度\n',
+          )
+          return { args: [] }
+        },
+      },
+      {
+        name: 'control characters in the preview are stripped',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          // TAB (9), SOH (1), BEL (7), built here so no control character
+          // is ever a literal byte in this source file.
+          const ctrls = `vis${String.fromCharCode(9)}ible${String.fromCharCode(1, 7)}text`
+          writeLastMarker(sid, `${ctrls}\nsecond line\n`)
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a preview that is all control characters → "(no first line)"',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          const onlyCtrls = String.fromCharCode(1, 2, 3, 7)
+          writeLastMarker(sid, `${onlyCtrls}\nreal second line\n`)
+          return { args: [] }
+        },
+      },
+      {
+        name: 'multiple teammates of differing name length → aligned columns',
+        setup: () => {
+          const short = uniqueName()
+          const long = `${uniqueName()}-and-a-considerably-longer-name`
+          setSessions(`${sessionLine(short)}\n${sessionLine(long)}\n`)
+          for (const repo of [short, long]) {
+            const sid = uniqueName()
+            marker(sidFile(repo), `${sid}\n`)
+            writeLastMarker(sid, `reply for ${repo}\n`)
+          }
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a non-ASCII teammate name is aligned by the real column',
+        setup: () => {
+          // A CJK repo name aligns by display width, not code-unit count —
+          // both sides pipe through the real `column`, so they must agree.
+          const repo = `${uniqueName()}-中文目录`
+          const sid = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          writeLastMarker(sid, 'a reply for the cjk-named teammate\n')
+          return { args: [] }
         },
       },
     ],

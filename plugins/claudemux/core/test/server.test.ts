@@ -16,6 +16,7 @@ import { type Server as NetServer, connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import type { ColumnRunner } from '../src/column'
 import { createCore } from '../src/core'
 import { Registry } from '../src/registry'
 import { createCoreNetServer, listenOnSocket } from '../src/server'
@@ -36,11 +37,15 @@ const echoRunner: TmRunner = async (verb, args) => ({
 /** A fake `tmux` runner — the socket tests drive non-native verbs only. */
 const quietTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 
+/** A fake `column` runner — echoes its input; the socket tests render no tables. */
+const quietColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
+
 /** Build a core over fakes, on a throwaway registry file. */
 function fakeCore(dir: string): ReturnType<typeof createCore> {
   return createCore({
     runTm: echoRunner,
     runTmux: quietTmux,
+    runColumn: quietColumn,
     registry: new Registry(join(dir, 'registry.json')),
     subscription: fakeSignals,
     dispatcherDir: dir,
@@ -166,7 +171,7 @@ describe('the socket server', () => {
     net = createCoreNetServer(fakeCore(freshDir()))
     await bind(net, socketPath) // rejects if it stood down instead of recovering
 
-    const result = await callTool(socketPath, 'states', { args: [] })
-    expect(result.text).toContain('VERB:states')
+    const result = await callTool(socketPath, 'ls', { args: [] })
+    expect(result.text).toContain('no teammate sessions')
   })
 })

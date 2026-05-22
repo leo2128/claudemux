@@ -64,6 +64,15 @@ const TM_BIN = join(import.meta.dir, '..', '..', 'bin', 'tm')
 const FAKE_TMUX_DIR = join(import.meta.dir, 'fixtures', 'fake-tmux-bin')
 const FAKE_TMUX = join(FAKE_TMUX_DIR, 'tmux')
 
+/**
+ * The timezone the harness pins for the `tm` subprocess. `tm history`'s
+ * detail view renders a timestamp with `date -r`, which uses the process
+ * timezone; `bun test` forces the JS runtime to UTC, so the native verb's
+ * `Date` does too. Pinning the oracle to the runtime's resolved zone keeps
+ * the two date renderings in agreement on any machine.
+ */
+const HARNESS_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
+
 /** Where the fake `tmux` reads its session list — one file, rewritten per test. */
 let sessionsFile = ''
 /** A scratch dir for the harness's own files. */
@@ -126,6 +135,7 @@ async function realTm(verb: string, args: readonly string[], stdin?: string): Pr
       PATH: `${FAKE_TMUX_DIR}:${process.env.PATH ?? ''}`,
       HOME: sandboxHome,
       TM_DISPATCHER_DIR: dispatcherDir,
+      TZ: HARNESS_TZ,
     },
     stdin: stdin != null ? new TextEncoder().encode(stdin) : 'ignore',
     stdout: 'pipe',
@@ -239,10 +249,64 @@ function writeMemory(repo: string, content: string): void {
   writeFileSync(file, content)
 }
 
+/** The Claude Code project directory for a repo — mirrors `tm`'s `project_dir_for_repo`. */
+function historyProjectDir(repo: string): string {
+  const phys = realpathSync(join(dispatcherDir, repo))
+  return join(projectsDir, encodeProjectDir(phys))
+}
+
+/**
+ * Write a past-session transcript jsonl for a repo, pinning its mtime
+ * `ageSeconds` in the past — `tm history`'s `AGE` column and `ls -t` ordering
+ * both read mtime, so a scenario with several sessions passes distinct,
+ * bucket-stable ages. The repo directory must already exist on disk.
+ */
+function writeHistoryTranscript(
+  repo: string,
+  sidName: string,
+  lines: string[],
+  ageSeconds = 10000,
+): void {
+  const dir = historyProjectDir(repo)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${sidName}.jsonl`)
+  writeFileSync(file, lines.length > 0 ? `${lines.join('\n')}\n` : '')
+  const pinned = Math.floor(Date.now() / 1000) - ageSeconds
+  utimesSync(file, pinned, pinned)
+}
+
+/**
+ * A `user` transcript line carrying a plain-string prompt, optionally
+ * timestamped. Real Claude Code entries always carry a `.timestamp`, so a
+ * `history`-detail fixture passes one to stay realistic — see the note on
+ * `readHistoryData` for why a timestamp-less transcript is a degenerate case.
+ */
+function userLine(text: string, timestamp?: string): string {
+  const entry: Record<string, unknown> = {
+    type: 'user',
+    message: { role: 'user', content: text },
+  }
+  if (timestamp !== undefined) entry.timestamp = timestamp
+  return JSON.stringify(entry)
+}
+
+/** An `assistant` transcript line carrying one `text` content block. */
+function assistantTextLine(text: string): string {
+  return JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+}
+
 /** One conformance scenario: prepare the fixture, return the verb args. */
 interface Scenario {
   name: string
   setup: () => { args: string[]; stdin?: string }
+  /**
+   * Run this scenario only on macOS. `tm history`'s detail-mode success path
+   * formats a timestamp with BSD `date -r <epoch>`; on GNU `date -r` means
+   * "reference file", so under `tm`'s `set -e` the whole invocation crashes.
+   * The native verb is correct on either OS — but the differential oracle is
+   * only sane where `tm` itself is, so those scenarios are pinned to macOS.
+   */
+  darwinOnly?: boolean
 }
 
 /** An `ls`/`ctx`-style teammate session line for the fake `tmux ls`. */
@@ -718,12 +782,215 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
       },
     ],
   },
+  {
+    verb: 'history',
+    scenarios: [
+      {
+        name: 'no repo argument → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'repo present, no project dir → the "no past sessions" line',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'project dir present but holding no transcripts → the "no past sessions" line',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          mkdirSync(historyProjectDir(repo), { recursive: true })
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'one past session → a single-row table',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, uniqueName(), [
+            userLine('review the auth refactor'),
+            assistantTextLine('looked it over'),
+          ])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'multiple sessions → listed newest-first, columns aligned by column',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          // Distinct, bucket-stable ages: `ls -t` orders them newest-first.
+          writeHistoryTranscript(repo, uniqueName(), [userLine('the newest task')], 4000)
+          writeHistoryTranscript(repo, uniqueName(), [userLine('the middle task')], 40000)
+          writeHistoryTranscript(repo, uniqueName(), [userLine('the oldest task')], 100000)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a session with no user prompt → the "(no user prompt)" topic',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, uniqueName(), [assistantTextLine('only an assistant turn')])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'the live session is flagged with * in the mark column',
+        setup: () => {
+          const repo = uniqueName()
+          const liveSid = uniqueName()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, liveSid, [userLine('the live session')], 5000)
+          writeHistoryTranscript(repo, uniqueName(), [userLine('an older session')], 50000)
+          marker(sidFile(repo), `${liveSid}\n`)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a control-char / CJK first prompt → stripped and char-truncated topic',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          // SOH (1) and BEL (7) are stripped; the CJK run is truncated to 60
+          // code points, not 60 bytes — built so no control char is a literal.
+          const prompt = `${String.fromCharCode(1, 7)}诊断这个上下文窗口使用问题这是一段足够长的中文首条提示用来验证按字符截断到六十个字符的行为再补一些文字`
+          writeHistoryTranscript(repo, uniqueName(), [userLine(prompt)])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'detail: an invalid sid prefix → the validation error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo, 'XYZ-not-hex'] }
+        },
+      },
+      {
+        name: 'detail: no project dir → the "no project dir" error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo, 'abcdef'] }
+        },
+      },
+      {
+        name: 'detail: a prefix matching no session → the not-found error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, uniqueName(), [userLine('a session that will not match')])
+          return { args: [repo, 'bbbbbbbb'] }
+        },
+      },
+      {
+        name: 'detail: a prefix matching multiple sessions → the ambiguity error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          const shared = randomUUID().slice(0, 8)
+          writeHistoryTranscript(repo, `${shared}-1111`, [userLine('first')])
+          writeHistoryTranscript(repo, `${shared}-2222`, [userLine('second')])
+          return { args: [repo, shared] }
+        },
+      },
+      {
+        name: 'detail: a resolved session → the full detail block',
+        darwinOnly: true,
+        setup: () => {
+          const repo = uniqueName()
+          const sid = randomUUID()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, sid, [
+            JSON.stringify({
+              type: 'user',
+              message: { role: 'user', content: 'review the auth flow' },
+              timestamp: '2026-05-12T14:21:33.000Z',
+            }),
+            assistantTextLine('here is the review of the auth flow'),
+            usageLine(8000, 1000, 2000, 150),
+          ])
+          return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+      {
+        name: 'detail: a transcript whose peak exceeds 210k → the detected-1M ctx line',
+        darwinOnly: true,
+        setup: () => {
+          const repo = uniqueName()
+          const sid = randomUUID()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, sid, [
+            userLine('a long-running session', '2026-05-12T09:15:00.000Z'),
+            assistantTextLine('working on it'),
+            usageLine(250000, 0, 0, 100),
+          ])
+          return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+      {
+        name: 'detail: a transcript with no usage → the "(no usage data)" ctx line',
+        darwinOnly: true,
+        setup: () => {
+          const repo = uniqueName()
+          const sid = randomUUID()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, sid, [
+            userLine('a question', '2026-05-12T09:15:00.000Z'),
+            assistantTextLine('an answer'),
+          ])
+          return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+      {
+        name: 'detail: an unparseable transcript line → the jq-failure sentinel rendering',
+        darwinOnly: true,
+        setup: () => {
+          const repo = uniqueName()
+          const sid = randomUUID()
+          makeRepoDir(repo)
+          // `{not json` syntax-errors `jq -s`, failing the whole pass — `tm`
+          // falls back to six empty fields, and native's `JSON.parse` throws.
+          writeHistoryTranscript(repo, sid, [
+            '{not json',
+            userLine('a question'),
+            assistantTextLine('an answer'),
+          ])
+          return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+      {
+        name: 'detail: a last-assistant text past 1500 chars is truncated',
+        darwinOnly: true,
+        setup: () => {
+          const repo = uniqueName()
+          const sid = randomUUID()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, sid, [
+            userLine('produce a long answer', '2026-05-12T09:15:00.000Z'),
+            assistantTextLine('x'.repeat(2000)),
+          ])
+          return { args: [repo, sid.slice(0, 8)] }
+        },
+      },
+    ],
+  },
 ]
 
 for (const { verb, scenarios } of CONFORMANCE) {
   describe(`${verb} — native conforms to tm`, () => {
     for (const scenario of scenarios) {
-      test(scenario.name, async () => {
+      const run = scenario.darwinOnly && process.platform !== 'darwin' ? test.skip : test
+      run(scenario.name, async () => {
         const { args, stdin } = scenario.setup()
         const oracle = await realTm(verb, args, stdin)
         const native = await runNative(verb, args, stdin)

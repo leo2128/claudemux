@@ -198,6 +198,17 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('__coretest_mem_probe__')
   })
+
+  test('history is served natively, and its repo argument reaches the handler', async () => {
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, dispatcherDir: '/tmp', projectsDir: '/tmp' })
+    // No such repo under the dispatcher dir → the native handler's
+    // repo-not-found error, echoing the repo, never reaching `runTm`.
+    const result = await core.handleTool('history', { args: ['__coretest_history_probe__'] })
+    expect(runner.calls).toHaveLength(0)
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('__coretest_history_probe__')
+  })
 })
 
 describe('a --help invocation shells out even for a migrated verb', () => {

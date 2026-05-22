@@ -15,9 +15,9 @@ contracts they hold.
 > resident MCP server, holds the teammate registry and a resident idle
 > subscription, and serves the `tm` verb set. Phase A shelled every verb out
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
-> a time, read-only verbs first — `ls`, `last`, `ctx`, `states`, and `mem` run
-> natively, the rest still shell out. `tm` is unchanged and remains fully
-> usable on its own.
+> a time, read-only verbs first — the read-only set (`ls`, `last`, `ctx`,
+> `states`, `mem`, `history`) runs natively, the rest still shell out. `tm`
+> is unchanged and remains fully usable on its own.
 
 ## Module layout
 
@@ -126,23 +126,23 @@ at a time — read-only verbs first, the racy hot path (`spawn`, `send`, `wait`)
 last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
-migrated. `ls`, `last`, `ctx`, `states`, and `mem` are native; some native
-verbs still need a backend — `ls`, `states`, and `ctx --all` run `tmux`
-through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx` (Claude
-Code transcripts) and `mem` (a repo's auto-memory index) resolve a teammate's
-files under the dispatcher dir and `~/.claude/projects` (both resolved once at
-boot and injected, so a test can sandbox them).
+migrated. The read-only set — `ls`, `last`, `ctx`, `states`, `mem`, `history`
+— is native; some native verbs still need a backend — `ls`, `states`, and
+`ctx --all` run `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts),
+and `ctx`, `mem`, and `history` resolve a teammate's transcripts and
+auto-memory under the dispatcher dir and `~/.claude/projects` (both resolved
+once at boot and injected, so a test can sandbox them).
 
 A native verb keeps the *logic* in the core but may still shell out to a
-presentation or session backend. `states` builds its rows natively, then pipes
-them through the real `column -t` ([`column.ts`](/plugins/claudemux/core/src/column.ts))
-rather than reimplementing it: how `column` measures a field's width — bytes,
-characters, or display columns — is implementation- and locale-dependent and
-differs between the BSD and GNU builds, yet `column`'s exact output *is* the
-behavior the migration must preserve, so a hand-written aligner counting code
-units could not stay faithful across platforms. `column` is a presentation
-backend here, the way `tmux` is the session backend; `history`'s table will
-shell out to it on the same reasoning.
+presentation or session backend. `states` and `history` build their rows
+natively, then pipe them through the real `column -t`
+([`column.ts`](/plugins/claudemux/core/src/column.ts)) rather than
+reimplementing it: how `column` measures a field's width — bytes, characters,
+or display columns — is implementation- and locale-dependent and differs
+between the BSD and GNU builds, yet `column`'s exact output *is* the behavior
+the migration must preserve, so a hand-written aligner counting code units
+could not stay faithful across platforms. `column` is a presentation backend
+here, the way `tmux` is the session backend.
 
 A `NativeVerb` returns the same `{code, stdout, stderr}` `TmResult` a shell-out
 returns — not a shaped MCP result. That keeps `verbResult` the single
@@ -162,6 +162,12 @@ file. tmux is faked — a script both sides reach (`tm` through `PATH`, the core
 through `CLAUDEMUX_TMUX`) — so the harness needs no real tmux; the `/tmp`
 marker files are written under their real paths with
 collision-proof unique names.
+
+Most scenarios are OS-agnostic, but not all: `tm history`'s detail view
+formats a timestamp with BSD `date -r`, which is not portable to GNU, so those
+scenarios are macOS-gated. The `claudemux-core` CI job therefore runs on both
+Linux and macOS — the conformance harness shells out to `tm`, whose
+cross-platform behavior is itself what it pins.
 
 ## See also
 

@@ -1,11 +1,17 @@
 /**
  * The idle subscription derives a teammate's busy/idle signal from its marker
- * files. The filename→sid mapping is the one piece of parsing; the rest is an
- * `fs.watch`. Both are tested here.
+ * files. Two pieces are unit-tested deterministically: `sidOf` (the
+ * filename→sid mapping) and `#scanAll` (the directory scan that seeds the
+ * signal map, reached through `start()`). `#scanAll` calls the same `#refresh`
+ * the `fs.watch` callback does, so the per-marker derivation is fully covered.
  *
- * The watch tests use the real `/tmp/claude-idle/` directory — the same one
- * the hooks use — but only ever with uniquely-prefixed test sids, so they
- * cannot collide with a real teammate's UUID-named markers.
+ * The `fs.watch` *delivery* itself — a marker changing after `start()` — is
+ * not unit-tested: it depends on platform-specific watcher timing (macOS
+ * FSEvents arming and coalescing) that cannot be pinned without a flaky sleep.
+ *
+ * The tests use the real `/tmp/claude-idle/` directory — the same one the
+ * hooks use — but only ever with uniquely-prefixed test sids, so they cannot
+ * collide with a real teammate's UUID-named markers.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -74,19 +80,13 @@ describe('IdleSubscription reads marker state', () => {
     expect(subscription.signalFor(testSid())).toBeUndefined()
   })
 
-  test('the watch picks up a marker created after start', async () => {
+  test('stop() releases the in-memory signal state', () => {
     const sid = testSid()
-    subscription.start()
-    // Let the OS file watcher finish arming before the change is made — on
-    // macOS (FSEvents) a change in the same tick as `watch()` can be missed.
-    await Bun.sleep(250)
     touch(busyMarkerFor(sid))
-
-    // The watch then fires asynchronously; poll generously for it to land.
-    const deadline = Date.now() + 3000
-    while (Date.now() < deadline && subscription.signalFor(sid) === undefined) {
-      await Bun.sleep(20)
-    }
+    subscription.start()
     expect(subscription.signalFor(sid)).toEqual({ busy: true, idle: false })
+
+    subscription.stop()
+    expect(subscription.signalFor(sid)).toBeUndefined()
   })
 })

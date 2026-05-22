@@ -1,15 +1,21 @@
 /**
  * Process entry point for the resident orchestration core.
  *
- * Responsibilities, in order: load and reconcile the teammate registry, start
- * the resident idle subscription, then listen on the unix-domain socket and
- * give every accepted connection its own MCP `Server` bound to the one shared
- * core. The core's registry and subscription outlive individual connections —
- * that residency is the whole point of the `next` line (see
- * `.agents/domains/mcp-native-orchestrator.md` §4).
+ * It listens on the unix-domain socket and gives every accepted connection
+ * its own MCP `Server` bound to the one shared core. The core's registry and
+ * subscription outlive individual connections — that residency is the whole
+ * point of the `next` line (see `.agents/domains/mcp-native-orchestrator.md`
+ * §4).
  *
- * The testable logic lives in `core.ts`, `registry.ts`, and `subscription.ts`;
- * this file is the thin wiring that a unit test does not exercise.
+ * Startup ordering matters: shared and persistent state — the registry file,
+ * the idle watch — is touched **only after this process wins the socket
+ * bind** (`listenOnSocket`'s `onListening`). A second core that loses the race
+ * stands down having written nothing, so it cannot clobber the winner's
+ * registry.
+ *
+ * `createCoreNetServer` and `listenOnSocket` are exported so an integration
+ * test can drive the socket server on a temporary path; `main` is the thin
+ * process wiring a unit test does not exercise.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -17,7 +23,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { existsSync, unlinkSync } from 'node:fs'
 import { type Server as NetServer, connect, createServer } from 'node:net'
 
-import { createCore } from './core'
+import { type Core, createCore } from './core'
 import { coreSocketPath, registryFile, sidFile } from './paths'
 import { Registry } from './registry'
 import { SocketServerTransport } from './socket-transport'
@@ -49,8 +55,13 @@ function teammateIsAlive(repo: string): boolean {
   return existsSync(sidFile(repo))
 }
 
+/** Timestamped stderr log line. */
+function log(message: string): void {
+  console.error(`[claudemux-core] ${new Date().toISOString()} ${message}`)
+}
+
 /** Build one MCP `Server` for an accepted connection, bound to the shared core. */
-function connectionServer(core: ReturnType<typeof createCore>): Server {
+function connectionServer(core: Core): Server {
   const server = new Server(
     { name: 'claudemux-core', version: SERVER_VERSION },
     { capabilities: { tools: {} }, instructions: CORE_INSTRUCTIONS },
@@ -62,20 +73,53 @@ function connectionServer(core: ReturnType<typeof createCore>): Server {
   return server
 }
 
-/** Timestamped stderr log line. */
-function log(message: string): void {
-  console.error(`[claudemux-core] ${new Date().toISOString()} ${message}`)
+/**
+ * Build the net server that accepts core connections — each socket gets its
+ * own MCP `Server` bound to the one shared `core`. Exported for integration
+ * tests, which drive it on a temporary socket path.
+ */
+export function createCoreNetServer(core: Core): NetServer {
+  return createServer((socket) => {
+    const transport = new SocketServerTransport(socket)
+    transport.onerror = (err) => log(`connection error: ${err.message}`)
+    connectionServer(core)
+      .connect(transport)
+      .catch((err) => {
+        // The MCP handshake failed — close the socket so the connection and
+        // its listeners do not leak for the life of the resident core.
+        log(`failed to serve a connection: ${String(err)}`)
+        socket.destroy()
+      })
+  })
+}
+
+/** Callbacks `listenOnSocket` fires once the bind outcome is known. */
+export interface ListenCallbacks {
+  /** The bind succeeded — this process owns the socket and may init state. */
+  onListening: () => void
+  /** Another core already owns the socket — this process should stand down. */
+  onLive: () => void
 }
 
 /**
  * Listen on the core socket. If the path is already bound, probe it: a live
- * core means this process should stand down (the core is meant to be a
- * singleton); a refused probe means a stale socket file, which is removed
- * before one retry.
+ * core means this process should stand down (the core is a singleton); a
+ * refused probe means a stale socket file, removed before one retry.
+ *
+ * `onListening` fires exactly once, only when this process wins the bind, so
+ * callers init shared and persistent state there and nowhere earlier — a
+ * process destined to stand down then never writes it.
  */
-function listenOnSocket(net: NetServer, socketPath: string, onLive: () => void): void {
+export function listenOnSocket(
+  net: NetServer,
+  socketPath: string,
+  callbacks: ListenCallbacks,
+): void {
   let retried = false
-  net.on('listening', () => log(`listening on ${socketPath}`))
+  net.on('listening', () => {
+    log(`listening on ${socketPath}`)
+    callbacks.onListening()
+  })
   // A persistent error handler, not `once`: the stale-socket recovery below
   // retries `listen`, and that retry can itself fail — the handler must stay
   // armed for it, or a second failure becomes an uncaught exception.
@@ -84,14 +128,14 @@ function listenOnSocket(net: NetServer, socketPath: string, onLive: () => void):
     if (retried) {
       // The stale-socket retry already ran; a fresh EADDRINUSE means another
       // core won the bind race. Stand down rather than crash.
-      onLive()
+      callbacks.onLive()
       return
     }
     retried = true
     const probe = connect(socketPath)
     probe.once('connect', () => {
       probe.destroy()
-      onLive()
+      callbacks.onLive()
     })
     probe.once('error', () => {
       // Nothing is listening — the socket file is stale. Remove it and retry.
@@ -104,31 +148,12 @@ function listenOnSocket(net: NetServer, socketPath: string, onLive: () => void):
 
 async function main(): Promise<void> {
   const socketPath = coreSocketPath()
-
   const registry = new Registry(registryFile())
-  registry.load()
   const subscription = new IdleSubscription()
-  subscription.start()
-
-  const dropped = registry.reconcile((entry) => teammateIsAlive(entry.repo))
-  if (dropped.length > 0) {
-    log(`reconciled out ${dropped.length} dead teammate(s): ${dropped.map((d) => d.repo).join(', ')}`)
-  }
-
+  // `createCore` only assembles the tool list and a dispatcher closure over
+  // these objects; it touches no shared state, so it is safe before the bind.
   const core = createCore({ runTm, registry, subscription })
-
-  const net = createServer((socket) => {
-    const transport = new SocketServerTransport(socket)
-    transport.onerror = (err) => log(`connection error: ${err.message}`)
-    connectionServer(core)
-      .connect(transport)
-      .catch((err) => {
-        // The MCP handshake failed — close the socket so the connection and
-        // its listeners do not leak for the life of the resident core.
-        log(`failed to serve a connection: ${String(err)}`)
-        socket.destroy()
-      })
-  })
+  const net = createCoreNetServer(core)
 
   const shutdown = (signal: string): void => {
     log(`${signal} — shutting down`)
@@ -140,10 +165,25 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
 
-  listenOnSocket(net, socketPath, () => {
-    log(`another core is already listening on ${socketPath} — standing down`)
-    subscription.stop()
-    process.exit(0)
+  listenOnSocket(net, socketPath, {
+    onListening: () => {
+      // The bind is won — only now touch shared and persistent state. A second
+      // core that raced this one stands down via `onLive` having written
+      // nothing, so it cannot clobber this winner's registry.
+      registry.load()
+      subscription.start()
+      const dropped = registry.reconcile((entry) => teammateIsAlive(entry.repo))
+      if (dropped.length > 0) {
+        log(
+          `reconciled out ${dropped.length} dead teammate(s): ` +
+            dropped.map((d) => d.repo).join(', '),
+        )
+      }
+    },
+    onLive: () => {
+      log(`another core is already listening on ${socketPath} — standing down`)
+      process.exit(0)
+    },
   })
 }
 

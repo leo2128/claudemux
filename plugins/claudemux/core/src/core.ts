@@ -58,9 +58,21 @@ export function createCore(deps: CoreDeps): Core {
 
     let argv: string[]
     let stdin: string | undefined
+    let repo: string | undefined
     try {
-      argv = readArgv(args)
+      const rest = readArgv(args)
       stdin = readStdin(args)
+      if (verb.registry === 'none') {
+        argv = rest
+      } else {
+        // `spawn`/`resume`/`kill` carry the repo as a structured field, not
+        // buried in the argument vector: the core needs the teammate identity
+        // as data to key the registry, and a named field is robust to `tm`'s
+        // per-verb flag ordering (`tm resume` accepts flags before the repo).
+        // The repo is passed to `tm` as the first argument.
+        repo = readRepo(args)
+        argv = [repo, ...rest]
+      }
     } catch (err) {
       return errorResult(err instanceof Error ? err.message : String(err))
     }
@@ -78,9 +90,8 @@ export function createCore(deps: CoreDeps): Core {
 
     // Reconcile the registry only after a verb that changed the teammate set
     // actually succeeded — a failed `tm spawn` did not create a teammate.
-    if (result.code === 0 && verb.registry !== 'none') {
-      const repo = repoArg(argv)
-      if (repo) applyRegistryEffect(deps.registry, verb.registry, repo)
+    if (result.code === 0 && repo && verb.registry !== 'none') {
+      applyRegistryEffect(deps.registry, verb.registry, repo)
     }
 
     return verbResult(verb.name, result)
@@ -89,24 +100,56 @@ export function createCore(deps: CoreDeps): Core {
   return { tools, handleTool }
 }
 
-/** The MCP tool for one `tm` verb: an opaque argument vector plus stdin. */
+/**
+ * The MCP tool for one `tm` verb. A plain verb takes an opaque argument
+ * vector; a registry-affecting verb (`spawn`/`resume`/`kill`) also takes a
+ * required structured `repo`, because the core needs the teammate identity as
+ * data — a named field is robust to `tm`'s per-verb flag ordering, where a
+ * positional heuristic is not.
+ */
 function verbTool(verb: (typeof TM_VERBS)[number]): Tool {
+  const stdin = {
+    type: 'string' as const,
+    description: 'Text fed to the verb on stdin. Only `archive` reads stdin.',
+  }
+  const description = `${verb.summary} Phase A: shells out to \`tm ${verb.name}\`.`
+  if (verb.registry === 'none') {
+    return {
+      name: verb.name,
+      description,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: `Arguments passed verbatim to \`tm ${verb.name}\`, in order.`,
+          },
+          stdin,
+        },
+      },
+    }
+  }
   return {
     name: verb.name,
-    description: `${verb.summary} Phase A: shells out to \`tm ${verb.name}\`.`,
+    description,
     inputSchema: {
       type: 'object',
       properties: {
+        repo: {
+          type: 'string',
+          description:
+            'The teammate repo — the sibling directory name. Passed to `tm` ' +
+            'as the first argument; the core keys the teammate registry on it.',
+        },
         args: {
           type: 'array',
           items: { type: 'string' },
-          description: `Arguments passed verbatim to \`tm ${verb.name}\`, in order.`,
+          description: `Arguments after \`<repo>\`, passed verbatim to \`tm ${verb.name}\`.`,
         },
-        stdin: {
-          type: 'string',
-          description: 'Text fed to the verb on stdin. Only `archive` reads stdin.',
-        },
+        stdin,
       },
+      required: ['repo'],
     },
   }
 }
@@ -151,16 +194,13 @@ function applyRegistryEffect(
   })
 }
 
-/**
- * The `<repo>` a registry-affecting verb operates on. `tm spawn`, `tm resume`,
- * and `tm kill` all take the repo as their first argument, ahead of any
- * option flag, so the repo is `argv[0]`. A first argument that is missing or
- * is itself a flag (e.g. `spawn --help`) is not a repo — skip the registry
- * update.
- */
-function repoArg(argv: readonly string[]): string | undefined {
-  const first = argv[0]
-  return first && !first.startsWith('-') ? first : undefined
+/** Read and validate the required `repo` argument of a registry-affecting verb. */
+function readRepo(args: Record<string, unknown>): string {
+  const raw = args.repo
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error('`repo` is required and must be a non-empty string')
+  }
+  return raw
 }
 
 /** Read and validate the `args` argument as a string vector; default empty. */

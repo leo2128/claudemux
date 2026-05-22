@@ -74,7 +74,13 @@ describe('every verb forwards faithfully to tm', () => {
     test(`${verb.name} reaches tm with its verb name and arguments`, async () => {
       const runner = fakeRunner()
       const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals })
-      await core.handleTool(verb.name, { args: ['alpha', '--flag', 'beta'] })
+      if (verb.registry === 'none') {
+        await core.handleTool(verb.name, { args: ['alpha', '--flag', 'beta'] })
+      } else {
+        // A registry verb takes the repo as a structured field; the core
+        // prepends it to the argument vector handed to `tm`.
+        await core.handleTool(verb.name, { repo: 'alpha', args: ['--flag', 'beta'] })
+      }
       expect(runner.calls).toHaveLength(1)
       expect(runner.calls[0]?.verb).toBe(verb.name)
       expect(runner.calls[0]?.args).toEqual(['alpha', '--flag', 'beta'])
@@ -156,10 +162,10 @@ describe('result shaping', () => {
 })
 
 describe('the registry tracks the mutating verbs', () => {
-  test('a successful spawn records the teammate', async () => {
+  test('a successful spawn records the teammate from its structured repo', async () => {
     const registry = freshRegistry()
     const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals })
-    await core.handleTool('spawn', { args: ['__coretest_spawn__'] })
+    await core.handleTool('spawn', { repo: '__coretest_spawn__' })
     expect(registry.get('__coretest_spawn__')?.repo).toBe('__coretest_spawn__')
   })
 
@@ -167,7 +173,7 @@ describe('the registry tracks the mutating verbs', () => {
     const registry = freshRegistry()
     const runner = fakeRunner({ code: 1, stderr: 'spawn failed' })
     const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals })
-    await core.handleTool('spawn', { args: ['__coretest_failed__'] })
+    await core.handleTool('spawn', { repo: '__coretest_failed__' })
     expect(registry.get('__coretest_failed__')).toBeUndefined()
   })
 
@@ -175,21 +181,29 @@ describe('the registry tracks the mutating verbs', () => {
     const registry = freshRegistry()
     registry.record({ repo: '__coretest_kill__', sid: null, cwd: null })
     const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals })
-    await core.handleTool('kill', { args: ['__coretest_kill__'] })
+    await core.handleTool('kill', { repo: '__coretest_kill__' })
     expect(registry.get('__coretest_kill__')).toBeUndefined()
   })
 
-  test('the repo is the first argument, ahead of any option flag', async () => {
+  test('resume records the teammate even when its args carry leading flags', async () => {
+    // `tm resume` accepts flags before the repo; the structured `repo` field
+    // means the core records the right teammate regardless of `args` order.
     const registry = freshRegistry()
-    const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals })
-    await core.handleTool('spawn', { args: ['__coretest_repofirst__', '--prompt', 'hi'] })
-    expect(registry.get('__coretest_repofirst__')?.repo).toBe('__coretest_repofirst__')
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals })
+    await core.handleTool('resume', { repo: '__coretest_resume__', args: ['--task', 'slug'] })
+    expect(registry.get('__coretest_resume__')?.repo).toBe('__coretest_resume__')
+    // The repo is still passed to `tm` as the first argument.
+    expect(runner.calls[0]?.args).toEqual(['__coretest_resume__', '--task', 'slug'])
   })
 
-  test('a spawn whose first argument is a flag records nothing', async () => {
+  test('a registry verb with no repo is rejected before any shell-out', async () => {
     const registry = freshRegistry()
-    const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals })
-    await core.handleTool('spawn', { args: ['--help'] })
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals })
+    const result = await core.handleTool('spawn', { args: ['--prompt', 'hi'] })
+    expect(result.isError).toBe(true)
+    expect(runner.calls).toHaveLength(0)
     expect(registry.list()).toEqual([])
   })
 })

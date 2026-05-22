@@ -5,12 +5,13 @@
  * (`fixtures/fake-tm`) selected through the `CLAUDEMUX_TM` override.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { runTm } from '../src/tm'
 
-const FAKE_TM = join(import.meta.dir, 'fixtures', 'fake-tm')
+const FAKE_TM = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-tm')
 let savedOverride: string | undefined
 
 beforeEach(() => {

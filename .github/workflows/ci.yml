@@ -124,9 +124,9 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: bun test ./test/feishu-live.ts
 
-  # The orchestration core (the `next` line, 1.0.0-beta.0) is a Bun/TypeScript
+  # The orchestration core (the `next` line, 1.0.0-beta.0) is a Node/TypeScript
   # project with its own unit suite. Like feishu-channel it runs in a separate
-  # job so the Bun toolchain stays off the bats + shellcheck lane above. It
+  # job so its toolchain stays off the bats + shellcheck lane above. It
   # runs on both OSes — unlike a pure-TypeScript suite — because the Phase B
   # conformance harness shells out to the real `bin/tm`, whose cross-platform
   # behavior is itself what the harness pins. `tm history`'s detail view in
@@ -144,10 +144,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Install Node
+        uses: actions/setup-node@v4
         with:
-          bun-version: 1.3.14
+          node-version: 22
 
       # The conformance harness runs the real `bin/tm` as its oracle: `tm ctx`
       # and `tm history` shell out to `jq`; `tm states` and `tm history` to
@@ -159,13 +159,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq bsdextrautils
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Versions
-        run: bun --version
+        run: node --version
 
       - name: Type-check
-        run: bun run typecheck
+        run: npm run typecheck
 
       - name: Unit tests
-        run: bun test
+        run: npm test

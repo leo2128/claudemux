@@ -38,7 +38,7 @@
  * `CONFORMANCE` below.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import {
   existsSync,
@@ -53,10 +53,12 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { runColumn } from '../src/column'
 import { runGrep } from '../src/grep'
 import { NATIVE_VERBS } from '../src/native'
+import { spawnCapture } from '../src/proc'
 import {
   busyMarkerFor,
   cwdFile,
@@ -71,18 +73,20 @@ import {
 import type { TmResult, TmRunner } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
+/** This test file's directory — `core/test`. */
+const HARNESS_DIR = dirname(fileURLToPath(import.meta.url))
 /** The real `tm` — `core/test` → `core` → `claudemux` → `bin/tm`. */
-const TM_BIN = join(import.meta.dir, '..', '..', 'bin', 'tm')
+const TM_BIN = join(HARNESS_DIR, '..', '..', 'bin', 'tm')
 /** The fake `tmux` dir — prepended to `PATH` it shadows any real tmux. */
-const FAKE_TMUX_DIR = join(import.meta.dir, 'fixtures', 'fake-tmux-bin')
+const FAKE_TMUX_DIR = join(HARNESS_DIR, 'fixtures', 'fake-tmux-bin')
 const FAKE_TMUX = join(FAKE_TMUX_DIR, 'tmux')
 
 /**
  * The timezone the harness pins for the `tm` subprocess. `tm history`'s
  * detail view renders a timestamp with `date -r`, which uses the process
- * timezone; `bun test` forces the JS runtime to UTC, so the native verb's
- * `Date` does too. Pinning the oracle to the runtime's resolved zone keeps
- * the two date renderings in agreement on any machine.
+ * timezone; the native verb renders the same timestamp through the JS
+ * runtime's zone. Pinning the `tm` oracle to the runtime's resolved zone
+ * keeps the two date renderings in agreement on any machine.
  */
 const HARNESS_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -106,9 +110,8 @@ let savedSessions: string | undefined
 let savedCapture: string | undefined
 
 beforeAll(() => {
-  // Save the env first, before anything that can throw — `bun test` shares
-  // one process across files, so `afterAll` must restore the real values
-  // even if setup fails partway, or a stale `delete` leaks to later files.
+  // Save the env first, before anything that can throw, so `afterAll` can
+  // restore the real values even if setup fails partway.
   savedTmux = process.env.CLAUDEMUX_TMUX
   savedSessions = process.env.FAKE_TMUX_SESSIONS
   savedCapture = process.env.FAKE_TMUX_CAPTURE
@@ -149,9 +152,10 @@ afterEach(() => {
 })
 
 /** Run the real `tm` against the fixture; capture its faithful `TmResult`. */
-async function realTm(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
-  const proc = Bun.spawn([TM_BIN, verb, ...args], {
-    cwd: import.meta.dir,
+function realTm(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
+  return spawnCapture([TM_BIN, verb, ...args], {
+    stdin,
+    cwd: HARNESS_DIR,
     env: {
       ...process.env,
       PATH: `${FAKE_TMUX_DIR}:${process.env.PATH ?? ''}`,
@@ -159,16 +163,7 @@ async function realTm(verb: string, args: readonly string[], stdin?: string): Pr
       TM_DISPATCHER_DIR: dispatcherDir,
       TZ: HARNESS_TZ,
     },
-    stdin: stdin != null ? new TextEncoder().encode(stdin) : 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
   })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
 }
 
 /**

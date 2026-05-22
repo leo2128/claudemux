@@ -6,7 +6,7 @@
  * by `conformance.test.ts`; this file tests the front end's wiring.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 
 import { type CliDeps, runCli } from '../src/cli'
 import type { ColumnRunner } from '../src/column'

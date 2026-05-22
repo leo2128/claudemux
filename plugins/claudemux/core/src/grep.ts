@@ -14,6 +14,8 @@
  * itself.
  */
 
+import { spawnCapture } from './proc'
+
 /**
  * Runs `grep -qE <pattern>` over `input` and resolves with its exit code:
  * `0` a match, `1` no match, `2` a `grep` error (an invalid pattern). `poll`
@@ -32,11 +34,6 @@ export type GrepRunner = (pattern: string, input: string) => Promise<number>
  * under `tm`.
  */
 export const runGrep: GrepRunner = async (pattern, input) => {
-  const proc = Bun.spawn(['grep', '-qE', pattern], {
-    stdin: new TextEncoder().encode(input),
-    stdout: 'ignore',
-    stderr: 'ignore',
-    env: process.env,
-  })
-  return proc.exited
+  const { code } = await spawnCapture(['grep', '-qE', pattern], { stdin: input })
+  return code
 }

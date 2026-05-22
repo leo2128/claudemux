@@ -5,7 +5,7 @@
  * separately by `conformance.test.ts`; this file tests the dispatch wiring.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 
 import type { ColumnRunner } from '../src/column'
 import { runVerb } from '../src/core'

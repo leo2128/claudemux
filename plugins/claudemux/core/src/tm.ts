@@ -12,7 +12,10 @@
  * the conformance harness pinning it to the behavior captured here.
  */
 
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { spawnCapture } from './proc'
 
 /** The outcome of one `tm` invocation: a faithful exit-code + stream capture. */
 export interface TmResult {
@@ -49,7 +52,7 @@ export function resolveTmBinary(): string {
   const override = process.env.CLAUDEMUX_TM
   if (override && override.length > 0) return override
   // core/src/tm.ts → plugins/claudemux/bin/tm
-  return join(import.meta.dir, '..', '..', 'bin', 'tm')
+  return join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'tm')
 }
 
 /**
@@ -69,20 +72,8 @@ export type RawTmRunner = (
  * interpretation — a faithful pass-through; interpreting `tm`'s output is a
  * per-verb migration task.
  */
-export const runTmRaw: RawTmRunner = async (args, options) => {
-  const proc = Bun.spawn([resolveTmBinary(), ...args], {
-    stdin: options?.stdin != null ? new TextEncoder().encode(options.stdin) : 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
-  })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
-}
+export const runTmRaw: RawTmRunner = (args, options) =>
+  spawnCapture([resolveTmBinary(), ...args], options)
 
 /**
  * The production `TmRunner`: a verb invocation of `tm`, which is `runTmRaw`

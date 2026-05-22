@@ -17,6 +17,7 @@ import { type RawTmRunner, type TmResult, runTm, runTmRaw } from './tm'
 import { runTmux } from './tmux'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** Backends the CLI front end runs a verb against. */
 export interface CliDeps extends NativeEnv {
@@ -79,7 +80,7 @@ async function main(): Promise<void> {
   process.exitCode = result.code
 }
 
-if (import.meta.main) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error(`[tm] ${err instanceof Error ? err.message : String(err)}`)
     process.exitCode = 1

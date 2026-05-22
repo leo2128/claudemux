@@ -16,6 +16,8 @@
  * backend.
  */
 
+import { spawnCapture } from './proc'
+
 /** The outcome of one `column` invocation — the same shape `runTmux` returns. */
 export interface ColumnResult {
   /** Process exit code. */
@@ -38,17 +40,5 @@ export type ColumnRunner = (input: string) => Promise<ColumnResult>
  * stderr. The caller propagates a non-zero exit; `tm`'s `cmd_states` does the
  * same, its `column` pipeline running under `set -o pipefail`.
  */
-export const runColumn: ColumnRunner = async (input) => {
-  const proc = Bun.spawn(['column', '-t', '-s', '\t'], {
-    stdin: new TextEncoder().encode(input),
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
-  })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
-}
+export const runColumn: ColumnRunner = (input) =>
+  spawnCapture(['column', '-t', '-s', '\t'], { stdin: input })

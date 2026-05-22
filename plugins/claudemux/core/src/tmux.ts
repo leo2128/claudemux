@@ -13,6 +13,8 @@
  * treats as the ordinary "no sessions" case.
  */
 
+import { spawnCapture } from './proc'
+
 /** The outcome of one `tmux` invocation: a faithful exit-code + stream capture. */
 export interface TmuxResult {
   /** Process exit code. */
@@ -45,17 +47,5 @@ export function resolveTmuxBinary(): string {
  * The production `TmuxRunner`: spawn `tmux`, forward the argument vector
  * verbatim, and capture exit code, stdout, and stderr without interpretation.
  */
-export const runTmux: TmuxRunner = async (args) => {
-  const proc = Bun.spawn([resolveTmuxBinary(), ...args], {
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
-  })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
-}
+export const runTmux: TmuxRunner = (args) =>
+  spawnCapture([resolveTmuxBinary(), ...args])

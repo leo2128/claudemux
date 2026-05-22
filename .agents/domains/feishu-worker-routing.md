@@ -4,7 +4,7 @@
 > debate and one independent architecture review, **not yet implemented**. The
 > contract below is what an implementation must satisfy. The settled
 > trade-offs and the two residual rulings are recorded in
-> [decision 0016](/.agents/decisions/0016-feishu-worker-scoped-subscription.md).
+> [decision 0017](/.agents/decisions/0017-feishu-worker-scoped-subscription.md).
 
 This document specifies how a Feishu event reaches **only** the one Claude Code
 Worker that subscribed to its resource — a document's comments to the Worker
@@ -45,7 +45,7 @@ on the data path.
   carries a `role`; a dispatcher-role server preempts a teammate-role holder).
   A standalone long-lived daemon was rejected: a process that outlives session
   cycling becomes a version-upgrade liability with no offsetting gain (decision
-  0016, §Consequences).
+  0017, §Consequences).
 - **The router is pure process-level code — zero Claude turns.** In the WS
   callback it does only: extract the routing key, look it up in the route
   table, append the raw event to the resource inbox, then let the SDK ACK
@@ -72,8 +72,8 @@ Worker's working directory:
 
 ```
 canonicalWorkspaceDir = realpath(anchor), then normalized:
-    resolve symlinks · strip trailing slash · NFC · case-fold on a
-    case-insensitive filesystem
+    resolve symlinks · strip trailing slash · NFC · on a case-insensitive
+    filesystem, apply full (non-Turkic) Unicode case-folding to the string
 endpointId = "v1:" + sha256(canonicalWorkspaceDir).hex[:16]
 ```
 
@@ -82,6 +82,15 @@ endpointId = "v1:" + sha256(canonicalWorkspaceDir).hex[:16]
   persistent identity state** — nothing to migrate across a plugin upgrade.
 - **Scheme version `v1:`.** A future change to the hashing or normalization is
   an explicit `v2:` migration, never a silent re-identification.
+- **Case-fold is deterministic — no on-disk lookup.** On a case-insensitive
+  filesystem the canonical path is the `realpath` output with **full,
+  non-Turkic** Unicode case-folding (the Unicode `C`+`F` fold mappings — *full*,
+  not *simple*, so codepoints such as `ß` fold to one deterministic form)
+  applied to the entire string. The fold is what makes the identity
+  authoritative: the result depends on neither the directory's on-disk stored
+  casing nor the casing the Worker process was launched with — both collapse to
+  one folded string — and no per-component `stat` is consulted. The exact fold
+  variant is fixed into scheme `v1:`; changing it is a `v2:` migration.
 - **The anchor is a single source.** Before implementation, verify whether
   `CLAUDE_PROJECT_DIR` is reliably exported to a plugin stdio MCP server
   process (§13). If it is, use it; otherwise use `process.cwd()`. Either way it
@@ -120,7 +129,7 @@ routes/
   doc/<file_token>      route file — JSON, see below
   chat/<chat_id>        route file — JSON, see below
   default-sink          JSON: { schema, ownerId, ownerWorkspace }
-  .gc/<kind>/<resource>.<nonce>   tombstone — a route mid-GC (§7)
+  .gc/<kind>/<resource>.<nonce>   holder-private — a route mid-GC (§7); endpoints never watch this subtree
 inbox/
   doc/<file_token>/     <ts_ns>-<event_id>.json   one raw event per file
   chat/<chat_id>/       <ts_ns>-<event_id>.json
@@ -128,16 +137,19 @@ inbox/
   _deadletter/          <ts_ns>-<event_id>.json   events with no route and no default sink
 ```
 
-Route file content (small JSON; **single-writer = the owning endpoint**, except
-the holder's GC tombstone rename, §7):
+Route file content — small JSON, with the liveness fields in a fixed layout so
+an update is a single write (§6, route-file write discipline). **Single-writer =
+the owning endpoint**, except the holder's GC tombstone `rename` (§7); owner
+updates are in-place modifications, never path-creating writes (§6):
 
 ```jsonc
 { "schema": 1,
   "ownerId": "<endpointId>",            // pure-derived identity; equality key
   "ownerWorkspace": "<canonical path>", // operability + rename anchor (§9)
-  "attachedPid": 12345,                 // liveness — refreshed on (re)attach
-  "attachedNonce": "a1b2c3",            // attach generation token (§6, §7)
-  "attachedAt": 1747900000,
+  "attachedPid": 12345,                 // liveness probe target — kill(pid, 0)
+  "attachedNonce": "a1b2c3",            // re-attach detector / GC-abort CAS (§6, §7)
+  "attachedAt": 1747900000,             // when this generation attached
+  "lastSeenAt": 1747900600,             // heartbeat — the GC dormancy clock (§6)
   "selfSubscribed": true,               // did we enable the Feishu doc subscribe
   "claimedAt": 1747900000 }
 ```
@@ -193,16 +205,25 @@ the holder's hot path.
 
 1. Compute `endpointId` (§3).
 2. Scan `routes/` for route files whose `ownerId == endpointId` — those are
-   this Worker's. Self-heal during the scan: §8.
-3. Refresh `attachedPid` / `attachedNonce` (fresh per process) / `attachedAt`
-   in each owned route. The endpoint whose `endpointId == routes/default-sink`'s
-   `ownerId` **additionally** owns `inbox/_unrouted/`.
+   this Worker's — and `routes/.gc/` for a tombstone of one of this Worker's
+   resources, a GC begun while the Worker was down. Self-heal and tombstone
+   re-claim during the scan: §8.
+3. Refresh `attachedPid` / `attachedNonce` (fresh per process) / `attachedAt` /
+   `lastSeenAt` in each owned route — an in-place update under the §6 write
+   discipline — and start the periodic `lastSeenAt` heartbeat (§6). The endpoint
+   whose `endpointId == routes/default-sink`'s `ownerId` **additionally** owns
+   `inbox/_unrouted/`.
 4. For each owned resource inbox: **register the `fs.watch` first, then drain
    the existing backlog** — watch-before-drain, so an event arriving during the
    drain still produces a callback rather than being missed until the next poll
    tick. Keep a poll fallback (`fs.watch` is not reliable on every platform).
-5. Also `fs.watch` the `routes/` tree — to notice a `takeover` (an owned
-   route's `ownerId` changed) and a GC tombstone of an owned route (§7).
+5. Also `fs.watch` the `routes/` tree, keyed on this endpoint's **own live
+   route paths** `routes/<kind>/<res>`: a `takeover` rewrites a route's
+   `ownerId`, and a GC tombstone (§7) makes an owned live path vanish — both are
+   re-evaluated against `endpointId`, and a vanished owned path triggers the §7
+   re-claim. The `routes/.gc/` subtree is holder-private; the watch never treats
+   an entry appearing there as a route, so a leftover or in-flight tombstone
+   cannot trigger a spurious re-claim.
 6. Per event file: existing handler pipeline (decode + enrich + access gate) →
    `notifications/claude/channel` into this session's `<channel>` block →
    delete the event file. Dedup by `event_id` / `message_id`.
@@ -217,19 +238,85 @@ strict causal ordering is **not** a guarantee this protocol makes.
 
 ## 6. Liveness
 
-Liveness is **embedded in the route file** — `attachedPid`, `attachedNonce`,
-`attachedAt` — refreshed by the owning endpoint on every (re)attach. There is no
-separate `endpoints/<endpointId>/heartbeat` directory; folding liveness into the
-route file removes a state class and keeps `endpointId` purely route-file
-content (which is what makes ruling #1 clean).
+Liveness is **embedded in the route file** — refreshed by the owning endpoint,
+with no separate `endpoints/<endpointId>/heartbeat` directory. Folding liveness
+into the route file removes a state class and keeps `endpointId` purely
+route-file content (which is what makes ruling #1 clean). Four fields carry it,
+and they do **two distinct jobs** — conflating them was the bug fixed below:
 
-The holder's GC probes liveness with `kill(attachedPid, 0)`. `attachedNonce`
-distinguishes process generations (a fresh attach writes a fresh nonce) and is
-the compare-and-swap token GC uses to avoid destroying a just-reattached route
-(§7). A PID-reuse false positive — a dead Worker's PID reused by an unrelated
-process, read as "alive" — only **delays** GC of an abandoned route; it never
-loses an event and never crosstalks. It is a named low-probability residual
-(§10.7).
+| Field | Job | Refreshed |
+|---|---|---|
+| `attachedPid` | liveness probe — `kill(attachedPid, 0)` | on every (re)attach |
+| `attachedNonce` | **re-attach detector** — process-generation token; the compare-and-swap token GC uses to abort on a concurrent reattach (§7) | on every (re)attach — a fresh value per process |
+| `attachedAt` | when the current generation attached — operability timestamp, paired with `attachedNonce` | on every (re)attach |
+| `lastSeenAt` | **the GC dormancy clock** — the one field that advances while the Worker is healthy | periodically, by a heartbeat, while the endpoint runs |
+
+**Why `lastSeenAt` is a separate field.** `attachedPid` / `attachedNonce` /
+`attachedAt` change *only* on (re)attach. If GC measured dormancy as
+`now - attachedAt`, that quantity would track a Worker's **uptime**, not its
+**abandonment**: a Worker that attaches once and runs healthy for days carries
+an `attachedAt` from days ago, so the instant it crashes `now - attachedAt`
+already exceeds any grace TTL — the §7 grace window would collapse to zero for
+exactly the longest-lived Workers, and a crashed long-running Worker could be
+GC'd before its operator runs `/resume`. That would break the promise at the
+head of §7. `lastSeenAt` is the fix: the owning endpoint rewrites it on a
+periodic heartbeat (interval ≪ grace TTL), so it tracks "last confirmed alive".
+When the process dies the heartbeat stops, `lastSeenAt` freezes, and
+`now - lastSeenAt` then measures **time since the Worker was last alive** — the
+real dormancy. The grace TTL is measured from that, so the full window applies
+from the moment of the crash, for every Worker regardless of uptime.
+
+**GC needs both signals.** A route is GC-eligible (§7) only when
+`kill(attachedPid, 0)` reports the process dead **and** `now - lastSeenAt`
+exceeds the grace TTL. `kill` is the primary liveness check; `lastSeenAt` dates
+the grace window. A healthy long-running Worker is never GC-eligible — `kill`
+reports it alive — whatever the heartbeat cadence; the heartbeat matters only
+for a *dead* process, as the timestamp that dates the window.
+
+The heartbeat is an owner update of an already-owned route file. It writes only
+to a route the endpoint still owns, under the write discipline below — an owner
+update can never resurrect a route GC has tombstoned.
+
+A **PID-reuse false positive** — a dead Worker's PID reused by an unrelated
+process and read as "alive" — only **delays** GC of an abandoned route (the
+`kill` probe never clears, though `lastSeenAt` is long stale); it never loses an
+event and never crosstalks. It is a named low-probability residual (§10.7).
+
+### Route-file write discipline
+
+The heartbeat — and every other owner update of a route file (the §5 reattach
+refresh, the §8 reconciliation rewrite) — must not be able to **resurrect a
+tombstoned route**. An update that created `routes/<kind>/<res>` as a side
+effect would let the route re-appear after §7 step 2 tombstoned it; GC would
+then finalize against a route a live owner believes it still holds, and delete
+that owner's inbox. So every owner update obeys:
+
+- A route file is **brought into existence by exactly two operations** — the
+  first-claim `wx` (§10.1) and the §7 re-claim (`rename` the tombstone back).
+  Nothing else creates the path.
+- An owner update is an **in-place modification of an existing route file** —
+  `open` **without** `O_CREAT`. If the file is absent (`ENOENT`) the route was
+  tombstoned, or already GC-finalized; the owner does **not** recreate it — it
+  diverts to the §7 re-claim, which itself no-ops if no tombstone is found (the
+  resource was legitimately abandoned, §8).
+- The liveness fields are **fixed-width** — zero-padded integers, a
+  fixed-length nonce — so every update writes the same byte count at the same
+  offsets. A shorter new value can never leave trailing bytes of the old one,
+  and the update needs no `ftruncate`.
+- A concurrent or crash-interrupted read may still observe a torn field, so the
+  **reader is the torn-read backstop**: GC's step-1 re-read (and the §8 scan)
+  treat unparseable or implausible content as indeterminate, retry a bounded
+  number of times, and on persistent failure **abort conservatively** — an
+  abort only delays reclamation, never loses an event.
+- After the write the owner re-`stat`s `routes/<kind>/<res>` and confirms it
+  still resolves to the file just written (same device + inode). A mismatch or
+  `ENOENT` means a tombstone `rename` slipped in mid-update — the write landed
+  in a now-detached file — and the owner diverts to the §7 re-claim.
+
+This is what makes the tombstone the **sole** arbiter of a route's fate: with no
+owner write able to create the route path, GC's `rename`-to-tombstone cannot be
+silently undone, and the re-claim `rename`-back versus the finalize `unlink`
+(§7) are the only operations that decide the outcome.
 
 ## 7. Lifecycle — process death never unsubscribes
 
@@ -240,31 +327,86 @@ and never unsubscribe from Feishu.
 | Event | What happens | Route / subscription |
 |---|---|---|
 | `/clear`, `/resume` | The `claude` process does not restart; the MCP server does not restart; `endpointId` in memory is unchanged | Non-event. Routes untouched. |
-| Real restart (crash + `claude --resume`, reboot) | New MCP server, same cwd → same `endpointId` | New process rescans `routes/`, reattaches, drains inbox backlog. Zero Claude involvement, zero re-subscription. |
+| Real restart (crash + `claude --resume`, reboot) | New MCP server, same cwd → same `endpointId` | New process rescans `routes/` + `routes/.gc/`, reattaches or re-claims, drains inbox backlog. Zero Claude involvement, zero re-subscription. |
 | Explicit `unwatch_doc(X)` | Worker's Claude calls the tool | Delete `routes/doc/X` + `inbox/doc/X/`. If `selfSubscribed`, call Feishu `delete_subscribe`. |
 | `takeover` | Another Worker calls `watch_doc(X, takeover:true)` | `routes/doc/X` `ownerId`/`ownerWorkspace` rewritten; old owner's `routes/` watch sees the change and drops X; new owner watches `inbox/doc/X/` (directory continuous). |
-| Abandoned (Worker never returns) | `attachedPid` dead **and** route dormant past a long grace TTL | Holder lazy GC, tombstone protocol below. On final delete: emit a "resource X abandoned, N unread" notice to the default sink — never a silent drop (§12). |
+| Abandoned (Worker never returns) | `attachedPid` dead **and** `lastSeenAt` (§6) older than a long grace TTL | Holder lazy GC, tombstone protocol below. On final delete: emit a "resource X abandoned, N unread" notice to the default sink — never a silent drop (§12). |
 
-### GC tombstone protocol (resolves the GC-vs-reattach race)
+### GC tombstone protocol
 
 A naive "GC decides, then `unlink`s the route + inbox" races a concurrent Worker
 restart: the endpoint reattaches and refreshes liveness between the decision and
 the delete, and GC then destroys a freshly-live route and an undrained backlog.
-GC therefore runs as a tombstone sequence, not an unlink:
+GC therefore runs as a tombstone sequence. The tombstone
+`routes/.gc/<kind>/<res>.<nonce>` — `<nonce>` being the `attachedNonce` the GC
+decision was taken on — is the **single atomically-contended object**: a
+re-claim and a finalize each commit by an atomic operation on it, so exactly one
+wins and no leftover tombstone is possible. **At most one tombstone exists per
+resource at any time:** step 2's `rename` consumes the single route file, and a
+resource absent from `routes/` cannot be tombstoned again until it is
+re-created — so a tombstone's `<res>` names exactly one in-flight GC.
 
-1. **Re-read** the route file immediately before acting. If `attachedNonce` or
-   `attachedAt` differs from the value the GC decision was taken on, **abort** —
-   the owner reattached.
+1. **Re-read** the route file immediately before acting. If `attachedNonce`
+   advanced (a new generation reattached) or `lastSeenAt` advanced (the owner is
+   still heartbeating, §6), **abort** — no tombstone exists yet, nothing to
+   clean up.
 2. **Tombstone:** atomically `rename` `routes/<kind>/<res>` →
-   `routes/.gc/<kind>/<res>.<nonce>`. The rename is the commit point.
-3. **Quiesce:** wait a quiesce interval. The owning endpoint's `routes/` watch
-   (§5 step 5) sees its route vanish; it treats a tombstoned-or-missing route it
-   believed it owned as a re-claim trigger and re-`wx`-creates `routes/<kind>/<res>`.
-   A re-claim during quiesce aborts the GC (step 4 finds the route present).
-4. **Finalize:** if after the quiesce interval `routes/<kind>/<res>` was not
-   re-created, delete the tombstone and `inbox/<kind>/<res>/`, and emit the
-   abandonment notice. The inbox is **not** deleted before this point, so events
-   survive the whole window.
+   `routes/.gc/<kind>/<res>.<nonce>`. This rename is the commit point and the
+   durable record that a GC is in progress for this resource.
+3. **Quiesce:** wait a quiesce interval. The owning endpoint, if it returns,
+   finds its live route path `routes/<kind>/<res>` gone — via the §5 watch while
+   running, or the §8 scan on restart — and **re-claims**: it first refreshes
+   liveness *in the tombstone file in place* (an existing file — the §6 write
+   discipline applies), then atomically `rename`s the tombstone back,
+   `routes/.gc/<kind>/<res>.<nonce>` → `routes/<kind>/<res>`. Refreshing before
+   the rename means the route **reappears already carrying current liveness** —
+   there is no stale-liveness window in which a fresh GC pass could re-tombstone
+   a route a live owner just re-claimed. The re-claim consumes the tombstone, so
+   a successful re-claim leaves nothing behind.
+4. **Finalize:** after the quiesce interval, `unlink` the tombstone
+   `routes/.gc/<kind>/<res>.<nonce>` — this `unlink` is the finalize commit
+   point. If it **succeeds**, the GC owns the outcome: delete
+   `inbox/<kind>/<res>/` and emit the abandonment notice. If it **fails**
+   (`ENOENT`), the owner re-claimed in step 3 and the finalize **aborts** — the
+   route and its inbox are left intact for the re-claimed owner. The inbox is
+   never deleted before a successful tombstone `unlink`, so events survive the
+   whole window.
+
+Re-claim (step 3) and finalize (step 4) both commit through the one tombstone:
+the endpoint's `rename`-back and the holder's `unlink` cannot both succeed, so a
+route is never both re-claimed and destroyed, and an aborted GC never orphans a
+tombstone. This holds only because the route path is reachable by exactly two
+creators — no owner route-file write can create it (§6, route-file write
+discipline), and a first-claim `watch_doc` of a resource that is mid-GC is
+itself routed through the tombstone (§10.1) rather than `wx`-creating a fresh
+route beside it. The tombstone is then the one object whose fate decides the
+route's.
+
+### Holder crash mid-GC — the `routes/.gc/` recovery scan
+
+If the holder crashes between step 2 and step 4, the route exists only as a
+tombstone, with no live `routes/<kind>/<res>` entry. The tombstone is the
+durable GC-in-progress record, so the next holder recovers it. **On winning
+`connection.lock`, before routing any event, a new holder scans `routes/.gc/`**
+and for each tombstone:
+
+- If a live `routes/<kind>/<res>` exists — the owner re-claimed while no holder
+  was running — the tombstone is an orphan; `unlink` it.
+- Otherwise, resume the GC from step 3: re-run the quiesce wait — which gives a
+  late-returning owner a fresh re-claim window — then finalize (step 4).
+
+So `routes/.gc/` is bounded by the number of GCs in flight, and every tombstone
+is terminated: by the finalize that created it, by a re-claim, or by the next
+holder's recovery scan. It never accumulates.
+
+**Timing constraint.** For a returning owner to always re-claim before finalize
+deletes its inbox, the **quiesce interval must exceed the worst-case re-claim
+detection latency** — the time for the §5 watch (a running owner) or the §8
+startup scan (a restarting owner) to notice the vanished route and issue the
+rename-back. The **grace TTL must in turn be much larger than the quiesce
+interval**, so an ordinary slow restart never reaches finalize at all. These two
+orderings — re-claim detection latency `<` quiesce interval `≪` grace TTL — are
+a required property of the chosen intervals, not a free implementation choice.
 
 GC **does not** call Feishu `delete_subscribe`. A Feishu app-level subscription
 has no reference count; auto-unsubscribing on GC could silence a subscriber
@@ -290,13 +432,22 @@ the drifted `ownerId` to its current value.
 This is the one write path unique to the pure-derived design and it must not
 corrupt a route file:
 
-- Every route-file rewrite goes through `<file>.tmp` → `rename` (atomic
-  replace). A crash mid-write leaves only a `.tmp` file, never a half-written
-  route file.
+- The reconciliation rewrite is an in-place update under the §6 route-file
+  write discipline: it modifies an existing route file in a single write, never
+  creates the path, and diverts to the §7 re-claim if the route was tombstoned.
+  It therefore cannot resurrect a tombstoned route.
 - Only the owner reconciles its own routes (matched by `ownerWorkspace`).
 - Two `claude` sessions in the same cwd (a named pathology, §10.4) could both
-  reconcile the same route — last-writer-wins via `rename` is still consistent
-  because both write the same `ownerId`.
+  reconcile the same route — last-writer-wins is still consistent because both
+  write the same `ownerId`.
+
+**Tombstone re-claim.** The startup scan also covers `routes/.gc/`: a tombstone
+whose content matches this Worker — by `ownerId`, or by `ownerWorkspace` for the
+scheme-drift case — means the Worker returned while a GC of one of its resources
+was in progress. The endpoint re-claims it per §7 step 3 — refresh liveness in
+the tombstone, then `rename` it back to `routes/<kind>/<res>` — rolling the GC
+back. A tombstone the holder already finalized is simply gone: that resource was
+legitimately abandoned, and the endpoint starts with no route for it.
 
 Self-heal handles **scheme drift only**; path drift is §9. A route that suffers
 both at once is a named residual (§10.7).
@@ -315,8 +466,10 @@ implicit gap:**
 
 - A route whose `ownerWorkspace` no longer `realpath`-resolves to an existing
   directory (or resolves to a different canonical path) is **stale-owned**.
-- A stale-owned route is GC-eligible by the same dormancy TTL as any abandoned
-  route (§7), with the same abandonment notice.
+- A stale-owned route is GC-eligible by the same `lastSeenAt` dormancy TTL as
+  any abandoned route (§7, §6): once the Worker restarts under its new path no
+  process heartbeats the old-path route, so `lastSeenAt` freezes exactly as on a
+  crash. Same abandonment notice.
 - A `rebind` maintenance operation is provided: given an old→new workspace
   pair, it scans routes whose `ownerWorkspace` matches the old path and
   rewrites `ownerId` + `ownerWorkspace` to the new Worker. It is O(N) in the
@@ -339,21 +492,38 @@ event the holder routes in the instant before the route file lands goes to
 `inbox/_unrouted/`; no loss — the dispatcher drains the default sink and the new
 owner drains its resource inbox from then on.
 
+**A first-claim of a resource that is mid-GC routes through the tombstone.**
+Before the `wx` create, `watch_doc` / `watch_chat` checks `routes/.gc/<kind>/<res>.*`
+for an in-flight GC tombstone (§7). If one exists the resource is mid-GC, and
+the claim proceeds as a **re-claim** — refresh-and-`rename` the tombstone back
+(§7 step 3), then rewrite `ownerId` / `ownerWorkspace` to the new owner — rather
+than `wx`-creating a fresh route beside the tombstone. The new owner inherits
+the existing `inbox/<kind>/<res>/`. This keeps the tombstone the single
+contended object: a fresh claimer and a finalizing GC contend on the same
+`rename`-back / `unlink`, so GC can never delete the inbox of a route a new
+owner just claimed. A plain `wx` create is correct only when **neither** the
+route file **nor** a tombstone exists — and since a tombstone is produced only
+by renaming an *existing* route away (§7 step 2), no tombstone can appear for a
+resource whose route file was already absent, so the check-then-`wx` is not
+itself racy.
+
 ### 10.2 Stale-claimant detection
 
 The route-embedded `attachedPid` is the liveness probe (§6). Holder GC reclaims
-a route only when `attachedPid` is dead **and** the route is dormant past the
-grace TTL, via the tombstone protocol (§7) that re-checks `attachedNonce` so a
-concurrent reattach aborts the GC. The buffering inbox means a slow restart
-never loses events inside the window.
+a route only when `attachedPid` is dead **and** `lastSeenAt` — the heartbeat
+dormancy clock (§6) — is older than the grace TTL, via the tombstone protocol
+(§7); the protocol re-checks `attachedNonce` and `lastSeenAt` so a concurrent
+reattach or a fresh heartbeat aborts the GC. The buffering inbox means a slow
+restart never loses events inside the window.
 
 ### 10.3 Holder / Worker startup ordering and backlog bounds
 
 Events can arrive before the target Worker's MCP server exists. The resource
 inbox is a durable mailbox that absorbs this. Every inbox directory —
 `inbox/doc/*`, `inbox/chat/*`, and `inbox/_unrouted/` — is **bounded**: an inbox
-event has a maximum age (the grace TTL) and each inbox has a maximum event
-count. On overflow the oldest events are dropped **with a logged and surfaced
+event has a maximum age (sized to the grace TTL, but an inbox timer of its own —
+independent of any route's `lastSeenAt` dormancy clock, §6) and each inbox has a
+maximum event count. On overflow the oldest events are dropped **with a logged and surfaced
 notice** — never silently. A reattaching Worker drains whatever backlog its
 resource inboxes hold. `inbox/_deadletter/` is operator-facing: bounded by age,
 not auto-drained, and every write to it is logged loudly.
@@ -402,7 +572,7 @@ the no-holder gap.
   replay window; whether that window covers a realistic handoff gap is an open
   item (§13). The handoff window is a **known exposure**, not a solved problem;
   shrinking it (clean-handoff signalling, faster standby detection) is the
-  follow-up named in decision 0016.
+  follow-up named in decision 0017.
 
 ### 10.7 Named residuals
 
@@ -441,6 +611,19 @@ a small pure function; that unit-test surface is the guarantee's enforcement.
   and the cwd-anchored identity must pass it.
 - **GC-vs-reattach test.** Tombstone a route, reattach concurrently, assert the
   re-claim aborts GC and no inbox event is lost (§7).
+- **Dormancy-clock test.** A Worker that has run healthy well past the grace TTL
+  and then crashes must still get the full grace TTL — measured from the crash,
+  not from attach — before its route becomes GC-eligible (§6). A clock keyed on
+  `attachedAt` instead of `lastSeenAt` would fail this.
+- **Holder-crash-mid-GC test.** Crash the holder between tombstone and finalize;
+  assert the next holder's `routes/.gc/` recovery scan either rolls the GC
+  forward or, if the owner re-claimed, removes the orphan tombstone — with no
+  route and no inbox lost either way (§7).
+- **Heartbeat-vs-tombstone test.** Tombstone a route while its owner is mid
+  liveness update; assert the update does not resurrect the route path, the
+  owner's post-write device+inode check diverts it to the §7 re-claim, and GC
+  never finalizes (deletes the inbox) against the live owner (§6, write
+  discipline).
 - **TTL GC abandonment notice.** GC reclaiming a dormant route must emit a
   "resource X abandoned, N unread events" notice to the default sink (§7).
 - **Comment-reply meta contract.** The doc-comment `<channel>` block's `meta`
@@ -491,9 +674,24 @@ No finding was rejected; the review surfaced four genuine event-loss or
 incoherence gaps (`_unrouted` mechanism, GC race, holder-handoff window,
 drain/watch ordering) that the pre-review draft did not close.
 
+A **second review round** — the PR #30 cross-review, then `Plan` advisor
+stand-in re-reviews of the fixes that cross-review prompted — surfaced the gaps
+below. The advisor's first re-review caught the last row (a race in the B2 fix
+as first drafted); a further pass tightened the tombstone protocol's edge cases,
+recorded in the dispositions. All are folded in:
+
+| Review finding | Disposition |
+|---|---|
+| GC dormancy was measured off `attachedAt`, which advances only on attach — so it tracked Worker uptime, not abandonment, and the §7 grace window collapsed to zero for the longest-lived Workers | **Accepted** — §6 adds the periodic `lastSeenAt` heartbeat as the dormancy clock; §7 / §9 / §10.2–§10.3 reworded onto it. |
+| The GC tombstone protocol left the abort and holder-crash paths undefined: an aborted GC leaked its tombstone, and a holder crash mid-GC had no recovery rule | **Accepted** — §7 makes the tombstone the single atomically-contended object (rename-back re-claim, `unlink`-as-finalize-commit), names the at-most-one-tombstone-per-resource invariant, and adds the holder-takeover `routes/.gc/` recovery scan; §8 adds the restart-time tombstone re-claim. A follow-up advisor pass added: a first-claim of a mid-GC resource is itself routed through the tombstone (§10.1), so no fresh `wx` route can coexist with it and have its inbox destroyed by finalize; the re-claim refreshes liveness *before* the rename-back (§7 step 3), leaving no stale-liveness window; and §7 states the `detection latency < quiesce ≪ grace TTL` timing constraint the no-loss guarantee rests on. |
+| §3 "case-fold on a case-insensitive filesystem" did not say which casing is authoritative, nor which fold variant — both feed the identity hash | **Accepted** — §3 specifies full, non-Turkic Unicode case-folding of the `realpath` string, independent of on-disk and launch-input casing. |
+| The B2 fix itself: a route-file owner update written by a path-creating `.tmp`→`rename` (the reattach refresh, or the heartbeat) could resurrect a route GC had tombstoned, letting GC finalize against a live owner and delete its inbox | **Accepted** — §6 adds the route-file write discipline: owner updates are in-place (`open` without `O_CREAT`), never create the route path, are a single fixed-**width** write, and verify by device+inode after writing, diverting to the §7 re-claim on any mismatch; the torn-read backstop is placed on the reader (bounded retry, conservative abort). §7's exclusivity claim is now grounded on it. |
+
+No finding was rejected.
+
 ## See also
 
-- [decision 0016](/.agents/decisions/0016-feishu-worker-scoped-subscription.md) — the decision record: trade-offs, the two rulings, consequences.
+- [decision 0017](/.agents/decisions/0017-feishu-worker-scoped-subscription.md) — the decision record: trade-offs, the two rulings, consequences.
 - [components/feishu-channel.md](/.agents/components/feishu-channel.md) — the current feishu-channel plugin this feature extends.
 - [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `tm`↔hook `/tmp` protocol; the routes/inbox protocol here is a second, independent cross-process file protocol under `~/.claude/channels/feishu/`.
 - [decision 0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md) — the doc-comment payload shape and SDK decode.

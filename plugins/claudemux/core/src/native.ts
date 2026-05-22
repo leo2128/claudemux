@@ -18,7 +18,11 @@
  * behavior is a separate change, never folded into the migration.
  *
  * Migrated so far: `ls`, `last`, `ctx`, `states`, `mem`, `history`, `status`,
- * `poll`, `kill`, `archive`.
+ * `poll`, `kill`, `archive`, `reload`.
+ *
+ * `reload` is the one native verb that itself shells out to `tm`: it is sugar
+ * over `tm send --no-wait`, and `send` is not yet migrated, so `reload` fans
+ * out natively but delegates each teammate's send to a `tm send` subprocess.
  */
 
 import {
@@ -42,7 +46,7 @@ import {
   sendAtFile,
   sidFile,
 } from './paths'
-import type { TmResult, TmRunOptions } from './tm'
+import type { TmResult, TmRunOptions, TmRunner } from './tm'
 import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
@@ -58,6 +62,8 @@ export interface NativeEnv {
   runColumn: ColumnRunner
   /** Matches input against a regex via `grep -qE` — for the `poll` verb. */
   runGrep: GrepRunner
+  /** Shells out to `tm` — for `reload`, which fans out over `tm send`. */
+  runTm: TmRunner
   /** The dispatcher directory — the parent of the sibling teammate repos. */
   dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
@@ -1338,6 +1344,56 @@ const archive: NativeVerb = async (args, options, env) => {
   }
 }
 
+/**
+ * `tm reload` — fan `/reload-plugins` out to one, many, or all teammates.
+ *
+ * The verb is sugar over `tm send --no-wait <repo> --prompt /reload-plugins`.
+ * Argument parsing and the repo fan-out are native; each teammate's send is
+ * delegated to a `tm send` subprocess, because `send` is not yet migrated.
+ *
+ * `cmd_reload`'s `(failed — ...)` line and keep-iterating `rc` are dead code:
+ * `cmd_send`'s `_send_keys` `die`s (`exit 1`) for a non-running teammate
+ * rather than returning non-zero, which terminates `tm reload` outright. So
+ * `reload` reproduces what `tm reload` *does* — stop at the first send that
+ * exits non-zero, and propagate that exit code — not the unreachable intent.
+ */
+const reload: NativeVerb = async (args, _options, env) => {
+  let all = false
+  const repos: string[] = []
+  for (const arg of args) {
+    if (arg === '--all') all = true
+    else if (arg === '-h' || arg === '--help') return die('usage: tm reload <repo>... | --all')
+    else if (arg.startsWith('-')) return die(`tm reload: unknown flag: ${arg}`)
+    else repos.push(arg)
+  }
+
+  if (all) {
+    if (repos.length > 0) return die('tm reload: --all conflicts with explicit repos')
+    repos.push(...(await iterRepos(env.runTmux)))
+    if (repos.length === 0) {
+      return { code: 0, stdout: '(no teammate sessions to reload)\n', stderr: '' }
+    }
+  } else if (repos.length === 0) {
+    return die('usage: tm reload <repo>... | --all')
+  }
+
+  let stdout = ''
+  for (const repo of repos) {
+    stdout += `→ ${repo}: /reload-plugins\n`
+    let sent: TmResult
+    try {
+      sent = await env.runTm('send', ['--no-wait', repo, '--prompt', '/reload-plugins'])
+    } catch {
+      // A `tm send` that cannot even start is the same as a non-zero exit.
+      sent = { code: 1, stdout: '', stderr: '' }
+    }
+    // A non-zero `tm send` is the `_send_keys` `die` that ends `tm reload`;
+    // its own stderr went to `cmd_reload`'s `>/dev/null`, so it is dropped.
+    if (sent.code !== 0) return { code: sent.code, stdout, stderr: '' }
+  }
+  return { code: 0, stdout, stderr: '' }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
 export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   ls,
@@ -1350,6 +1406,7 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   poll,
   kill,
   archive,
+  reload,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

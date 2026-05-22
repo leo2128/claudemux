@@ -110,9 +110,10 @@ describe('every not-yet-migrated verb forwards faithfully to tm', () => {
   test('stdin is forwarded to the runner', async () => {
     const runner = fakeRunner()
     const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // `reload` still shells out — it exercises the core's stdin plumbing into
-    // `runTm`; the one verb that actually reads stdin, `archive`, is native.
-    await core.handleTool('reload', { stdin: 'task-9' })
+    // `compact` still shells out — it exercises the core's stdin plumbing
+    // into `runTm`; the one verb that actually reads stdin, `archive`, is
+    // native, and `reload` (also native) shells out only its own `tm send`.
+    await core.handleTool('compact', { stdin: 'task-9' })
     expect(runner.calls[0]?.stdin).toBe('task-9')
   })
 })
@@ -263,6 +264,30 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('--coretest-probe')
   })
+
+  test('reload runs natively, fanning out over `tm send`, not `tm reload`', async () => {
+    const runner = fakeRunner()
+    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
+    // The native `reload` shells out, but to `tm send` per repo — never to
+    // `tm reload`; the call shape is what pins the fan-out as correct.
+    const result = await core.handleTool('reload', { args: ['repo-x'] })
+    expect(runner.calls).toHaveLength(1)
+    expect(runner.calls[0]?.verb).toBe('send')
+    expect(runner.calls[0]?.args).toEqual(['--no-wait', 'repo-x', '--prompt', '/reload-plugins'])
+    expect(result.isError).toBe(false)
+    expect(textOf(result)).toContain('→ repo-x: /reload-plugins')
+  })
+
+  test('reload stops and exits non-zero when a tm send fails', async () => {
+    const runner = fakeRunner({ code: 1 })
+    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
+    // A non-zero `tm send` is the `_send_keys` `die` that ends `tm reload`;
+    // `reload` propagates the exit code and prints no `(failed)` line.
+    const result = await core.handleTool('reload', { args: ['repo-x'] })
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('→ repo-x: /reload-plugins')
+    expect(textOf(result)).not.toContain('failed')
+  })
 })
 
 describe('a --help invocation shells out even for a migrated verb', () => {
@@ -352,7 +377,7 @@ describe('result shaping', () => {
     // `tm spawn` succeeds (exit 0) while printing `spawned:`/`ready:` to stderr.
     const runner = fakeRunner({ code: 0, stdout: '', stderr: 'spawned: acme\n' })
     const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('reload', {})
+    const result = await core.handleTool('compact', {})
     expect(result.isError).toBe(false)
     expect(textOf(result)).toBe('spawned: acme')
     expect(textOf(result)).not.toContain('--- stderr ---')
@@ -361,17 +386,17 @@ describe('result shaping', () => {
   test('both streams are kept distinguishable under a divider', async () => {
     const runner = fakeRunner({ code: 0, stdout: 'the reply', stderr: 'a diagnostic' })
     const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await core.handleTool('reload', {}))).toBe('the reply\n--- stderr ---\na diagnostic')
+    expect(textOf(await core.handleTool('compact', {}))).toBe('the reply\n--- stderr ---\na diagnostic')
   })
 
   test('trailing newlines are trimmed and empty output reports the exit code', async () => {
     const blank = fakeRunner({ code: 0, stdout: '\n\n', stderr: '' })
     const blankCore = createCore({ runTm: blank.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await blankCore.handleTool('reload', {}))).toContain('exited 0 with no output')
+    expect(textOf(await blankCore.handleTool('compact', {}))).toContain('exited 0 with no output')
 
     const trailing = fakeRunner({ code: 0, stdout: 'line\n\n', stderr: '' })
     const trailingCore = createCore({ runTm: trailing.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await trailingCore.handleTool('reload', {}))).toBe('line')
+    expect(textOf(await trailingCore.handleTool('compact', {}))).toBe('line')
   })
 })
 

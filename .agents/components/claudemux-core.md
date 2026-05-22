@@ -16,9 +16,10 @@ contracts they hold.
 > subscription, and serves the `tm` verb set. Phase A shelled every verb out
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
 > a time, read-only verbs first — the read-only set (`ls`, `last`, `ctx`,
-> `states`, `mem`, `history`), the diagnostic verbs (`status`, `poll`), and
-> the mutating verbs (`kill`, `archive`) run natively, the rest still shell
-> out. `tm` is unchanged and remains fully usable on its own.
+> `states`, `mem`, `history`), the diagnostic verbs (`status`, `poll`), the
+> mutating verbs (`kill`, `archive`), and `reload` run natively; the racy
+> hot path (`spawn`, `send`, `wait`, `compact`, `resume`) still shells out.
+> `tm` is unchanged and remains fully usable on its own.
 
 ## Module layout
 
@@ -28,7 +29,7 @@ single-purpose; the testable logic is separated from the process wiring.
 | Module | Role |
 |---|---|
 | `paths.ts` | Path builders for every `/tmp` protocol file and the core's own state — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) applied to the TypeScript side. |
-| `tm.ts` | The `tm` shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. Fronts every verb not yet migrated to native code. |
+| `tm.ts` | The `tm` shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. Fronts every verb not yet migrated to native code, and is also the backend the native `reload` fans out over. |
 | `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`, `states`, `ctx --all`, `status`, `poll`). |
 | `column.ts` | The `column` shell-out layer — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs (`states`, `history`). |
 | `grep.ts` | The `grep` shell-out layer — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
@@ -129,13 +130,18 @@ last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
 migrated. The read-only set — `ls`, `last`, `ctx`, `states`, `mem`, `history`
-— the diagnostic verbs `status` and `poll`, and the mutating verbs `kill` and
-`archive` are native; several still need a backend — `ls`, `states`,
-`ctx --all`, `status`, `poll`, and `kill` run `tmux` through
-[`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx`, `mem`, `history`,
-and `archive` resolve a teammate's transcripts, auto-memory, or task ledgers
-under the dispatcher dir and `~/.claude/projects` (both resolved once at boot
-and injected, so a test can sandbox them).
+— the diagnostic verbs `status` and `poll`, the mutating verbs `kill` and
+`archive`, and `reload` are native; several still need a backend — `ls`,
+`states`, `ctx --all`, `status`, `poll`, `kill`, and `reload` run `tmux`
+through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx`, `mem`,
+`history`, and `archive` resolve a teammate's transcripts, auto-memory, or
+task ledgers under the dispatcher dir and `~/.claude/projects` (both resolved
+once at boot and injected, so a test can sandbox them).
+
+`reload` is the one native verb that itself shells out to `tm`: it is sugar
+over `tm send --no-wait`, and `send` is in the unmigrated hot path, so
+`reload` parses and fans out natively but delegates each teammate's send to a
+`tm send` subprocess (`runTm`, injected like the other backends).
 
 A native verb keeps the *logic* in the core but may still shell out to a
 presentation, session, or matching backend. `states` and `history` build

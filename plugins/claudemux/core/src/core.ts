@@ -110,6 +110,7 @@ export function createCore(deps: CoreDeps): Core {
             runTmux: deps.runTmux,
             runColumn: deps.runColumn,
             runGrep: deps.runGrep,
+            runTm: deps.runTm,
             dispatcherDir: deps.dispatcherDir,
             projectsDir: deps.projectsDir,
           })

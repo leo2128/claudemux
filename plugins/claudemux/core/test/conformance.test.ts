@@ -68,7 +68,7 @@ import {
   sendAtFile,
   sidFile,
 } from '../src/paths'
-import type { TmResult } from '../src/tm'
+import type { TmResult, TmRunner } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
 /** The real `tm` — `core/test` → `core` → `claudemux` → `bin/tm`. */
@@ -171,6 +171,14 @@ async function realTm(verb: string, args: readonly string[], stdin?: string): Pr
   return { code, stdout, stderr }
 }
 
+/**
+ * A `TmRunner` that spawns the real `tm` with the harness sandbox env — the
+ * native `reload` verb fans out over it. It wraps `realTm` so a `tm send`
+ * subprocess sees the same fake tmux, sandbox `HOME`, and dispatcher dir the
+ * oracle does; otherwise native `reload`'s sends would escape the sandbox.
+ */
+const harnessRunTm: TmRunner = (verb, args, options) => realTm(verb, args, options?.stdin)
+
 /** Run the native handler for the same verb against the same fixture. */
 function runNative(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
   const handler = NATIVE_VERBS[verb]
@@ -179,6 +187,7 @@ function runNative(verb: string, args: readonly string[], stdin?: string): Promi
     runTmux,
     runColumn,
     runGrep,
+    runTm: harnessRunTm,
     dispatcherDir,
     projectsDir,
   })
@@ -330,6 +339,19 @@ function assistantTextLine(text: string): string {
  */
 function killWorld(repo: string, sid?: string): string[] {
   const paths = [sidFile(repo), sendAtFile(repo), readyFile(repo), cwdFile(repo), sessionsFile]
+  if (sid !== undefined) {
+    paths.push(idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid))
+  }
+  return paths
+}
+
+/**
+ * The files a `tm reload` fan-out can touch for one teammate — its `.send-at`
+ * file, and (when a sid is seeded) that sid's idle markers, the effects of the
+ * `tm send` `_send_keys` each fan-out target runs.
+ */
+function reloadWorld(repo: string, sid?: string): string[] {
+  const paths = [sendAtFile(repo)]
   if (sid !== undefined) {
     paths.push(idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid))
   }
@@ -1408,6 +1430,60 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             args: ['t-bare'],
             stdin: 'closed it out',
             snapshot: () => snapshotTree(archiveMemoryDir()),
+          }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'reload',
+    scenarios: [
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus'] }),
+      },
+      {
+        name: '--all together with an explicit repo → the conflict error',
+        setup: () => ({ args: ['--all', uniqueName()] }),
+      },
+      {
+        name: '--all with no running teammates → the "nothing to reload" line',
+        setup: () => {
+          setSessions('')
+          return { args: ['--all'] }
+        },
+      },
+      {
+        name: 'fanning out to a teammate that is not running → stops at exit 1, no failed line',
+        setup: () => {
+          // The teammate has no session, so its `tm send` `die`s; `tm reload`
+          // ends at that first failure — the `(failed)` line is unreachable.
+          setSessions('')
+          return { args: [uniqueName()] }
+        },
+      },
+      {
+        name: 'fanning out to a running teammate → the arrow line, send-at touched',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [repo], snapshot: () => snapshotPaths(reloadWorld(repo)) }
+        },
+      },
+      {
+        name: 'a running then a not-running repo → first sent, second stops the fan-out',
+        setup: () => {
+          const running = uniqueName()
+          const stopped = uniqueName()
+          setSessions(`${sessionLine(running)}\n`)
+          return {
+            args: [running, stopped],
+            snapshot: () =>
+              snapshotPaths([...reloadWorld(running), ...reloadWorld(stopped)]),
           }
         },
       },

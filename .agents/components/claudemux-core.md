@@ -98,9 +98,15 @@ signal. Phase B attaches the native `wait` verb to the same watch.
 ## The MCP tool surface
 
 The core exposes one MCP tool per `tm` verb — the whole verb set, since the
-Phase A exit gate is "reproduces today's `tm` behavior for *every* verb". Each
-verb tool takes an opaque `args` string vector (and optional `stdin`) forwarded
-verbatim to `tm`; rich per-argument schemas are a Phase D task.
+Phase A exit gate is "reproduces today's `tm` behavior for *every* verb". A
+verb tool takes an opaque `args` string vector (and optional `stdin`)
+forwarded verbatim to `tm`; rich per-argument schemas are otherwise a Phase D
+task. The exception is the three registry-affecting verbs — `spawn`, `resume`,
+`kill` — whose tools also take a **required structured `repo` field**: the
+core needs the teammate identity as data to key the registry, and a named
+field is robust to `tm`'s per-verb flag ordering (`tm resume` accepts flags
+before the repo) where a positional guess is not. The `repo` is passed to
+`tm` as the first argument; any further arguments still ride in `args`.
 
 One tool is core-native rather than a `tm` passthrough: `teammates` lists the
 registry, each entry annotated with its live signal. It overlaps with `tm ls`

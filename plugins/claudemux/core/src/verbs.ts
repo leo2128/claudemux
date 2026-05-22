@@ -10,7 +10,11 @@
  *
  * The `summary` strings are short, lifted from `tm --help`. Rich per-argument
  * schemas — "the MCP tool descriptions become the new `tm --help`" — are a
- * Phase D task; Phase A forwards an opaque argument vector.
+ * Phase D task; Phase A forwards an opaque argument vector. The one exception
+ * is the registry-affecting verbs (`registry !== 'none'`): their tools take a
+ * required structured `repo` field, because the core keys the registry on the
+ * teammate identity and must read it as data, not parse it back out of the
+ * argument vector (see `core.ts`).
  */
 
 /** One `tm` verb re-exposed as an MCP tool. */

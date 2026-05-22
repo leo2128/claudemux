@@ -1,0 +1,157 @@
+/**
+ * Live-teammate integration suite for the hot-path verbs.
+ *
+ * `spawn`, `send`, `wait`, `compact`, and `resume` are racy: their behavior is
+ * the interaction of `tmux send-keys`, a real `claude` REPL, the claudemux
+ * hooks, and the `/tmp/claude-idle` turn signal. The conformance harness fakes
+ * tmux and runs no `claude`, so it cannot pin them — this suite does, by
+ * driving a real teammate end to end.
+ *
+ * It is opt-in and slow: each `test` below is a real Claude Code turn. They
+ * run as an **ordered lifecycle against one shared teammate** — spawn it,
+ * message it, wait on it, compact it, resume it — because a fresh teammate per
+ * assertion would multiply the cost for no extra coverage. vitest runs the
+ * tests in a file in source order; the integration config keeps files
+ * non-parallel.
+ *
+ * Run it explicitly (never via `npm test`):
+ *   npx vitest run --config vitest.integration.config.ts
+ * See `test/integration/README.md` for prerequisites.
+ *
+ * ## What is asserted, and what is not
+ *
+ * These tests assert the verb **contract** — the round-trip completes (exit 0,
+ * the turn's Stop signal fired within `--timeout`), the prompt was sent, the
+ * output is well-formed — not the exact reply text. `tm`'s last-turn capture
+ * (`<sid>.last`) is lossy by design: when the hook's extraction races a
+ * still-flushing transcript it leaves `.last` empty and the verb prints the
+ * documented sentinel `(no text reply this turn — …)` instead of the reply
+ * (see the domain spec's note on the lossy turn signal). A reply-text
+ * assertion would therefore flake; each prompt asks for a unique token and the
+ * test accepts the token *or* that sentinel — both are valid `tm` outputs; a
+ * timeout or a crash is not. Every assertion carries `tmDetail`, so a live
+ * failure shows `tm`'s own stdout/stderr.
+ */
+
+import { readFileSync } from 'node:fs'
+
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+
+import { sidFile } from '../../src/paths'
+import { createDispatcher, probeLiveTeammate, tmDetail, type Dispatcher } from './harness'
+
+// Decide up front whether a real teammate can run here. The probe spawns one
+// throwaway teammate (no turn), so this costs a REPL boot at collection time.
+const probe = await probeLiveTeammate()
+if (!probe.ok) {
+  console.warn(`[integration] skipping live-teammate suite — ${probe.reason}`)
+}
+
+/**
+ * A successful `send`/`wait` prints either the reply (carrying `token`) or
+ * `tm`'s documented empty-turn sentinel. Either is a valid round-trip; only a
+ * timeout or a crash fails the verb.
+ */
+function replyOrSentinel(token: string): RegExp {
+  return new RegExp(`${token}|no text reply this turn`)
+}
+
+describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => {
+  let dispatcher: Dispatcher
+  /** The unique repo name the whole lifecycle runs against. */
+  let repo: string
+
+  beforeAll(() => {
+    dispatcher = createDispatcher()
+    repo = dispatcher.addRepo('alpha')
+  })
+
+  afterAll(async () => {
+    await dispatcher.cleanup()
+  })
+
+  test('spawn — launches a teammate whose SessionStart hook fires', async () => {
+    const spawned = await dispatcher.tm(['spawn', repo])
+    expect(spawned.code, tmDetail('tm spawn', spawned)).toBe(0)
+    // `ready:` (not the `WARN:` line) proves the SessionStart hook fired.
+    expect(spawned.stderr, tmDetail('tm spawn', spawned)).toMatch(/^ready:/m)
+
+    const listed = await dispatcher.tm(['ls'])
+    expect(listed.code, tmDetail('tm ls', listed)).toBe(0)
+    expect(listed.stdout, tmDetail('tm ls', listed)).toContain(`teammate-${repo}`)
+  })
+
+  test('send — round-trips a prompt and returns a well-formed reply', async () => {
+    const sent = await dispatcher.tm([
+      'send',
+      repo,
+      '--prompt',
+      'Reply with the word PONG.',
+      '--timeout',
+      '120',
+    ])
+    expect(sent.code, tmDetail('tm send', sent)).toBe(0)
+    expect(sent.stderr, tmDetail('tm send', sent)).toContain(`sent to ${repo}`)
+    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('PONG'))
+  })
+
+  test('send — a second turn builds transcript for compact', async () => {
+    const sent = await dispatcher.tm([
+      'send',
+      repo,
+      '--prompt',
+      'Reply with the word ROGER.',
+      '--timeout',
+      '120',
+    ])
+    expect(sent.code, tmDetail('tm send', sent)).toBe(0)
+    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('ROGER'))
+  })
+
+  test('wait — collects a turn driven without a waiting send', async () => {
+    // Drive a turn fire-and-forget, then collect it with a bare `tm wait` —
+    // the path an external actor (web UI, cron) + the dispatcher take.
+    const fired = await dispatcher.tm([
+      'send',
+      repo,
+      '--no-wait',
+      '--prompt',
+      'Reply with the word ECHO.',
+    ])
+    expect(fired.code, tmDetail('tm send --no-wait', fired)).toBe(0)
+
+    const waited = await dispatcher.tm(['wait', repo, '--timeout', '120'])
+    expect(waited.code, tmDetail('tm wait', waited)).toBe(0)
+    expect(waited.stdout, tmDetail('tm wait', waited)).toMatch(replyOrSentinel('ECHO'))
+  })
+
+  test('compact — runs /compact and verifies it completed', async () => {
+    const compacted = await dispatcher.tm(['compact', repo, '--timeout', '180'])
+    expect(compacted.code, tmDetail('tm compact', compacted)).toBe(0)
+    expect(compacted.stdout, tmDetail('tm compact', compacted)).toContain('compacted')
+  })
+
+  test('resume — relaunches a killed conversation and drives a turn', async () => {
+    // `tm kill` removes the .sid file, so capture the sid before killing.
+    const sid = readFileSync(sidFile(repo), 'utf8').trim()
+    expect(sid).not.toBe('')
+
+    const killed = await dispatcher.tm(['kill', repo])
+    expect(killed.code, tmDetail('tm kill', killed)).toBe(0)
+
+    const resumed = await dispatcher.tm(['resume', repo, sid])
+    expect(resumed.code, tmDetail('tm resume', resumed)).toBe(0)
+    expect(resumed.stderr, tmDetail('tm resume', resumed)).toMatch(/resumed sid=/)
+
+    const sent = await dispatcher.tm([
+      'send',
+      repo,
+      '--prompt',
+      'Reply with the word BACK.',
+      '--timeout',
+      '120',
+    ])
+    expect(sent.code, tmDetail('tm send', sent)).toBe(0)
+    expect(sent.stdout, tmDetail('tm send', sent)).toMatch(replyOrSentinel('BACK'))
+  })
+})

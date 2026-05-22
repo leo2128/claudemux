@@ -180,8 +180,11 @@ migrated verb is pinned to `tm`'s current behavior, bug for bug.
 
 11 of the 17 `tm` verbs were migrated to native TypeScript before the pivot
 (under 0018's Phase B); stage 2 keeps that code and removes only the MCP shell
-around it. After stage 4 lands, this roadmap section is pruned in the same
-change.
+around it. Stage 3's live-teammate integration harness — the test that drives
+a real `claude` teammate through the racy hot path — lands ahead of the verb
+migration, so that migration proceeds under a working net rather than before
+one; see [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md).
+After stage 4 lands, this roadmap section is pruned in the same change.
 
 ---
 

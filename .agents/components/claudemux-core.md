@@ -121,10 +121,36 @@ for `archive`, the dispatcher's memory directory. The harness snapshots the
 world, runs the oracle, snapshots the effect, resets the world, runs native,
 and asserts the two post-states match (as well as the two `TmResult`s).
 
+## The live-teammate integration harness
+
+The conformance harness fakes tmux and runs no `claude`, so it cannot reach the
+racy hot path — `spawn`, `send`, `wait`, `compact`, `resume` — whose behavior
+is the interaction of `tmux send-keys`, a real REPL, the claudemux hooks, and
+the `/tmp/claude-idle` turn signal. The **live-teammate integration harness**
+([`test/integration/`](/plugins/claudemux/core/test/integration)) covers that
+gap: it spawns real `claude` teammates through `tm` and asserts the round-trips
+complete.
+
+It is opt-in — slow, and it needs a working Claude Code install — so it runs
+under its own [`vitest.integration.config.ts`](/plugins/claudemux/core/vitest.integration.config.ts)
+and its files are named `*.itest.ts`, never discovered by `npm test` or CI.
+[`harness.ts`](/plugins/claudemux/core/test/integration/harness.ts) is the
+framework: a temp-dispatcher fixture, a `tm` runner, the `~/.claude.json`
+directory-trust seeding a teammate needs to boot past the workspace-trust
+dialog, and a precondition probe that *skips* the suite — rather than failing
+it — when no live teammate can run. Every `tm` call resolves through
+`resolveTmBinary` / `CLAUDEMUX_TM`, so stage 3b re-aims the suite at the native
+hot-path verbs by pointing that override. Why trust is seeded by a targeted
+write rather than an isolated config dir is
+[decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md);
+the run instructions are the suite's own
+[README](/plugins/claudemux/core/test/integration/README.md).
+
 ## See also
 
 - [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) — the CLI architecture and the migration roadmap.
 - [decisions/0019-node-cli-orchestrator.md](/.agents/decisions/0019-node-cli-orchestrator.md) — why the `next` line is a Node CLI.
+- [decisions/0020-live-teammate-integration-harness.md](/.agents/decisions/0020-live-teammate-integration-harness.md) — how the live-teammate suite seeds trust and gates stage 3.
 - [decisions/0018-mcp-native-orchestration-core.md](/.agents/decisions/0018-mcp-native-orchestration-core.md) — the superseded MCP-native design.
 - [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `/tmp` marker protocol the Claude-teammate verbs read and write.
 - [components/tm.md](/.agents/components/tm.md) — the Bash `tm` the core fronts and progressively hollows.

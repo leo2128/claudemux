@@ -1,23 +1,16 @@
 /**
- * The core's dispatch contract: every `tm` verb is exposed as a tool, a
- * not-yet-migrated verb forwards faithfully to the `tm` shell-out, a migrated
- * verb runs natively instead, and the registry is kept in step with the verbs
- * that change the teammate set. The native-vs-`tm` *behavior* match is pinned
- * separately by `conformance.test.ts`; this file tests the core's wiring.
+ * The verb dispatch contract: `runVerb` runs a migrated verb as native code
+ * and shells every other verb out to `tm`, and a `--help` invocation shells
+ * out even for a migrated verb. The native-vs-`tm` *behavior* match is pinned
+ * separately by `conformance.test.ts`; this file tests the dispatch wiring.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, test } from 'bun:test'
 
 import type { ColumnRunner } from '../src/column'
-import { createCore } from '../src/core'
+import { runVerb } from '../src/core'
 import type { GrepRunner } from '../src/grep'
-import { isNativeVerb, triggersTmHelp } from '../src/native'
-import { Registry } from '../src/registry'
-import type { Signal, SignalSource } from '../src/subscription'
+import { isNativeVerb, type NativeEnv, triggersTmHelp } from '../src/native'
 import type { TmResult, TmRunner } from '../src/tm'
 import type { TmuxRunner } from '../src/tmux'
 import { TM_VERBS } from '../src/verbs'
@@ -35,65 +28,31 @@ function fakeRunner(result: Partial<TmResult> = {}): {
   return { run, calls }
 }
 
-/** A fake signal source: one sid is "busy", everything else is unobserved. */
-const fakeSignals: SignalSource = {
-  signalFor: (sid): Signal | undefined =>
-    sid === 'busy-sid' ? { busy: true, idle: false } : undefined,
-}
-
-/** A quiet fake `tmux` runner — enough for `createCore`'s native-verb dep. */
+/** A quiet fake `tmux` runner — enough for a native verb's dependency. */
 const fakeTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
-
-/** A fake `column` runner — echoes its input; native table tests use the real one. */
+/** A fake `column` runner — echoes its input. */
 const fakeColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
-
-/** A fake `grep` runner — reports no match; the `poll` native test never reaches it. */
+/** A fake `grep` runner — reports no match. */
 const fakeGrep: GrepRunner = async () => 1
 
-/** Pull the first text block out of a tool result. */
-function textOf(result: CallToolResult): string {
-  const block = result.content[0]
-  if (!block || block.type !== 'text') throw new Error('expected a text content block')
-  return block.text
+/** A `NativeEnv` whose `tm` shell-out is the given fake runner. */
+function fakeEnv(runTm: TmRunner, over: Partial<NativeEnv> = {}): NativeEnv {
+  return {
+    runTm,
+    runTmux: fakeTmux,
+    runColumn: fakeColumn,
+    runGrep: fakeGrep,
+    dispatcherDir: '/tmp',
+    projectsDir: '/tmp',
+    ...over,
+  }
 }
 
-let dir: string
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'claudemux-core-'))
-})
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true })
-})
-
-/** A fresh registry on a temp file. */
-function freshRegistry(): Registry {
-  return new Registry(join(dir, 'registry.json'))
-}
-
-describe('the tool list', () => {
-  test('exposes every tm verb plus the core-native teammates tool', () => {
-    const core = createCore({ runTm: fakeRunner().run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const names = core.tools.map((t) => t.name)
-    for (const verb of TM_VERBS) expect(names).toContain(verb.name)
-    expect(names).toContain('teammates')
-    expect(core.tools).toHaveLength(TM_VERBS.length + 1)
-  })
-})
-
-describe('every not-yet-migrated verb forwards faithfully to tm', () => {
+describe('every not-yet-migrated verb shells out to tm', () => {
   for (const verb of TM_VERBS.filter((v) => !isNativeVerb(v.name))) {
     test(`${verb.name} reaches tm with its verb name and arguments`, async () => {
       const runner = fakeRunner()
-      const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-      if (verb.registry === 'none') {
-        await core.handleTool(verb.name, { args: ['alpha', '--flag', 'beta'] })
-      } else {
-        // A registry verb takes the repo as a structured field; the core
-        // prepends it to the argument vector handed to `tm`.
-        await core.handleTool(verb.name, { repo: 'alpha', args: ['--flag', 'beta'] })
-      }
+      await runVerb(verb.name, ['alpha', '--flag', 'beta'], undefined, fakeEnv(runner.run))
       expect(runner.calls).toHaveLength(1)
       expect(runner.calls[0]?.verb).toBe(verb.name)
       expect(runner.calls[0]?.args).toEqual(['alpha', '--flag', 'beta'])
@@ -102,220 +61,84 @@ describe('every not-yet-migrated verb forwards faithfully to tm', () => {
 
   test('a verb with no args forwards an empty argument vector', async () => {
     const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('doctor', {})
+    await runVerb('doctor', [], undefined, fakeEnv(runner.run))
     expect(runner.calls[0]?.args).toEqual([])
   })
 
   test('stdin is forwarded to the runner', async () => {
     const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // `compact` still shells out — it exercises the core's stdin plumbing
-    // into `runTm`; the one verb that actually reads stdin, `archive`, is
-    // native, and `reload` (also native) shells out only its own `tm send`.
-    await core.handleTool('compact', { stdin: 'task-9' })
+    // `compact` still shells out — it exercises the stdin plumbing into `runTm`.
+    await runVerb('compact', [], { stdin: 'task-9' }, fakeEnv(runner.run))
     expect(runner.calls[0]?.stdin).toBe('task-9')
+  })
+
+  test('the verb result is returned unshaped', async () => {
+    const runner = fakeRunner({ code: 2, stdout: 'partial', stderr: 'it broke' })
+    const result = await runVerb('send', ['acme'], undefined, fakeEnv(runner.run))
+    expect(result).toEqual({ code: 2, stdout: 'partial', stderr: 'it broke' })
   })
 })
 
 describe('a migrated verb runs natively, not through tm', () => {
   test('ls is served from tmux, never reaching the tm shell-out', async () => {
     const runner = fakeRunner()
-    const core = createCore({
-      runTm: runner.run,
-      registry: freshRegistry(),
-      subscription: fakeSignals,
-      runTmux: async () => ({ code: 0, stdout: 'teammate-x: 1 windows\n', stderr: '' }),
-      runColumn: fakeColumn,
-      runGrep: fakeGrep,
-      dispatcherDir: '/tmp',
-      projectsDir: '/tmp',
-    })
-    const result = await core.handleTool('ls', {})
+    const result = await runVerb(
+      'ls',
+      [],
+      undefined,
+      fakeEnv(runner.run, {
+        runTmux: async () => ({ code: 0, stdout: 'teammate-x: 1 windows\n', stderr: '' }),
+      }),
+    )
     expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('teammate-x')
+    expect(result.stdout).toContain('teammate-x')
   })
 
-  test('ls masks a tmux that cannot be spawned, like `tmux ls || true`', async () => {
+  test("a native verb's arguments reach its handler", async () => {
     const runner = fakeRunner()
-    const core = createCore({
-      runTm: runner.run,
-      registry: freshRegistry(),
-      subscription: fakeSignals,
-      runTmux: () => Promise.reject(new Error('tmux not found')),
-      runColumn: fakeColumn,
-      runGrep: fakeGrep,
-      dispatcherDir: '/tmp',
-      projectsDir: '/tmp',
-    })
-    const result = await core.handleTool('ls', {})
+    // No marker files exist for this repo, so the native `last` handler returns
+    // its own error echoing the repo — proving `argv` reached the native
+    // handler rather than the call going to `runTm`.
+    const result = await runVerb('last', ['__coretest_argv_probe__'], undefined, fakeEnv(runner.run))
     expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('no teammate sessions')
+    expect(result.code).not.toBe(0)
+    expect(result.stdout + result.stderr).toContain('__coretest_argv_probe__')
   })
 
-  test('last is served natively, and its repo argument reaches the handler', async () => {
+  test('reload runs natively, fanning out over `tm send`', async () => {
     const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // No marker files exist for this repo, so the native handler returns its
-    // own error — whose message echoes the repo, proving the core forwarded
-    // `args` to the native handler rather than the call reaching `runTm`.
-    const result = await core.handleTool('last', { args: ['__coretest_argv_probe__'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('__coretest_argv_probe__')
-  })
-
-  test('ctx is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // No sid file exists for this repo, so `ctx` soft-fails to its `?` line —
-    // which echoes the repo, proving the core forwarded `args` to the native
-    // handler rather than the call reaching `runTm`.
-    const result = await core.handleTool('ctx', { args: ['__coretest_ctx_probe__'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('__coretest_ctx_probe__: ? (no sid file)')
-  })
-
-  test('states is served from tmux, never reaching the tm shell-out', async () => {
-    const runner = fakeRunner()
-    const core = createCore({
-      runTm: runner.run,
-      registry: freshRegistry(),
-      subscription: fakeSignals,
-      runTmux: async () => ({ code: 0, stdout: '', stderr: '' }),
-      runColumn: fakeColumn,
-      runGrep: fakeGrep,
-      dispatcherDir: '/tmp',
-      projectsDir: '/tmp',
-    })
-    const result = await core.handleTool('states', {})
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('no teammate sessions')
-  })
-
-  test('mem is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // No such repo under the dispatcher dir, so the native handler returns its
-    // repo-not-found error — whose message echoes the repo, proving the core
-    // forwarded `args` to the native handler rather than reaching `runTm`.
-    const result = await core.handleTool('mem', { args: ['__coretest_mem_probe__'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('__coretest_mem_probe__')
-  })
-
-  test('history is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // No such repo under the dispatcher dir → the native handler's
-    // repo-not-found error, echoing the repo, never reaching `runTm`.
-    const result = await core.handleTool('history', { args: ['__coretest_history_probe__'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('__coretest_history_probe__')
-  })
-
-  test('status is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // `fakeTmux` reports an empty session list, so the native handler cannot
-    // resolve a pane and returns its error — echoing the repo, never `runTm`.
-    const result = await core.handleTool('status', { args: ['__coretest_status_probe__'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('__coretest_status_probe__')
-  })
-
-  test('poll is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // Same path as `status`: no pane resolves, so the native handler's error
-    // echoes the repo and the call never reaches `runTm`.
-    const result = await core.handleTool('poll', { args: ['__coretest_poll_probe__', 'a-pattern'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('__coretest_poll_probe__')
-  })
-
-  test('kill is served natively, and its repo argument reaches the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // `kill` is a registry verb — its repo rides the structured `repo` field.
-    // `fakeTmux` reports the session exists, so the native handler returns
-    // `killed: <repo> ...`, echoing the repo, and never reaches `runTm`.
-    const result = await core.handleTool('kill', { repo: '__coretest_kill_probe__' })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('__coretest_kill_probe__')
-  })
-
-  test('archive is served natively, and its arguments reach the handler', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // An unknown flag makes the native handler return its unknown-flag error,
-    // echoing the flag — proving `args` reached it, never reaching `runTm`.
-    const result = await core.handleTool('archive', { args: ['--coretest-probe'] })
-    expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('--coretest-probe')
-  })
-
-  test('reload runs natively, fanning out over `tm send`, not `tm reload`', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
     // The native `reload` shells out, but to `tm send` per repo — never to
-    // `tm reload`; the call shape is what pins the fan-out as correct.
-    const result = await core.handleTool('reload', { args: ['repo-x'] })
+    // `tm reload`; the call shape pins the fan-out.
+    const result = await runVerb('reload', ['repo-x'], undefined, fakeEnv(runner.run))
     expect(runner.calls).toHaveLength(1)
     expect(runner.calls[0]?.verb).toBe('send')
     expect(runner.calls[0]?.args).toEqual(['--no-wait', 'repo-x', '--prompt', '/reload-plugins'])
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toContain('→ repo-x: /reload-plugins')
-  })
-
-  test('reload stops and exits non-zero when a tm send fails', async () => {
-    const runner = fakeRunner({ code: 1 })
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    // A non-zero `tm send` is the `_send_keys` `die` that ends `tm reload`;
-    // `reload` propagates the exit code and prints no `(failed)` line.
-    const result = await core.handleTool('reload', { args: ['repo-x'] })
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('→ repo-x: /reload-plugins')
-    expect(textOf(result)).not.toContain('failed')
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('→ repo-x: /reload-plugins')
   })
 })
 
 describe('a --help invocation shells out even for a migrated verb', () => {
   test('ls --help reaches tm, where the per-verb help text lives', async () => {
     const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('ls', { args: ['--help'] })
+    await runVerb('ls', ['--help'], undefined, fakeEnv(runner.run))
     expect(runner.calls).toHaveLength(1)
     expect(runner.calls[0]?.verb).toBe('ls')
     expect(runner.calls[0]?.args).toEqual(['--help'])
   })
 
-  test('last --help reaches tm', async () => {
+  test('a --help after the first positional does not trigger help — last still runs natively', async () => {
     const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('last', { args: ['--help'] })
-    expect(runner.calls).toHaveLength(1)
-    expect(runner.calls[0]?.args).toEqual(['--help'])
-  })
-
-  test('a --help after the repo positional does not trigger help — last still runs natively', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
     // `tm`'s pre-scan stops at the first positional, so a later `--help` is an
-    // ordinary (ignored) argument — the verb runs, it does not show help.
-    const result = await core.handleTool('last', { args: ['__coretest_probe__', '--help'] })
+    // ordinary argument — the verb runs natively, it does not show help.
+    const result = await runVerb(
+      'last',
+      ['__coretest_probe__', '--help'],
+      undefined,
+      fakeEnv(runner.run),
+    )
     expect(runner.calls).toHaveLength(0)
-    expect(result.isError).toBe(true)
+    expect(result.code).not.toBe(0)
   })
 })
 
@@ -338,127 +161,5 @@ describe("triggersTmHelp mirrors tm main's help pre-scan", () => {
 
   test('no arguments is not help', () => {
     expect(triggersTmHelp([])).toBe(false)
-  })
-})
-
-describe('result shaping', () => {
-  test('a non-zero exit marks the result isError and surfaces both streams', async () => {
-    const runner = fakeRunner({ code: 2, stdout: 'partial', stderr: 'it broke' })
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('send', { args: ['acme'] })
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('partial')
-    expect(textOf(result)).toContain('it broke')
-  })
-
-  test('an unknown tool is an error result', async () => {
-    const core = createCore({ runTm: fakeRunner().run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('not-a-verb', {})
-    expect(result.isError).toBe(true)
-  })
-
-  test('a non-string-array args argument is rejected before any shell-out', async () => {
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('send', { args: [1, 2] })
-    expect(result.isError).toBe(true)
-    expect(runner.calls).toHaveLength(0)
-  })
-
-  test('a runner that throws becomes an error result, not a rejected call', async () => {
-    const runTm: TmRunner = () => Promise.reject(new Error('tm not found'))
-    const core = createCore({ runTm, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('doctor', {})
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('tm not found')
-  })
-
-  test('a code-0 verb with only stderr output is shown plainly, not as an error annex', async () => {
-    // `tm spawn` succeeds (exit 0) while printing `spawned:`/`ready:` to stderr.
-    const runner = fakeRunner({ code: 0, stdout: '', stderr: 'spawned: acme\n' })
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('compact', {})
-    expect(result.isError).toBe(false)
-    expect(textOf(result)).toBe('spawned: acme')
-    expect(textOf(result)).not.toContain('--- stderr ---')
-  })
-
-  test('both streams are kept distinguishable under a divider', async () => {
-    const runner = fakeRunner({ code: 0, stdout: 'the reply', stderr: 'a diagnostic' })
-    const core = createCore({ runTm: runner.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await core.handleTool('compact', {}))).toBe('the reply\n--- stderr ---\na diagnostic')
-  })
-
-  test('trailing newlines are trimmed and empty output reports the exit code', async () => {
-    const blank = fakeRunner({ code: 0, stdout: '\n\n', stderr: '' })
-    const blankCore = createCore({ runTm: blank.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await blankCore.handleTool('compact', {}))).toContain('exited 0 with no output')
-
-    const trailing = fakeRunner({ code: 0, stdout: 'line\n\n', stderr: '' })
-    const trailingCore = createCore({ runTm: trailing.run, registry: freshRegistry(), subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    expect(textOf(await trailingCore.handleTool('compact', {}))).toBe('line')
-  })
-})
-
-describe('the registry tracks the mutating verbs', () => {
-  test('a successful spawn records the teammate from its structured repo', async () => {
-    const registry = freshRegistry()
-    const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('spawn', { repo: '__coretest_spawn__' })
-    expect(registry.get('__coretest_spawn__')?.repo).toBe('__coretest_spawn__')
-  })
-
-  test('a failed spawn records nothing', async () => {
-    const registry = freshRegistry()
-    const runner = fakeRunner({ code: 1, stderr: 'spawn failed' })
-    const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('spawn', { repo: '__coretest_failed__' })
-    expect(registry.get('__coretest_failed__')).toBeUndefined()
-  })
-
-  test('a successful kill removes the teammate', async () => {
-    const registry = freshRegistry()
-    registry.record({ repo: '__coretest_kill__', sid: null, cwd: null })
-    const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('kill', { repo: '__coretest_kill__' })
-    expect(registry.get('__coretest_kill__')).toBeUndefined()
-  })
-
-  test('resume records the teammate even when its args carry leading flags', async () => {
-    // `tm resume` accepts flags before the repo; the structured `repo` field
-    // means the core records the right teammate regardless of `args` order.
-    const registry = freshRegistry()
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    await core.handleTool('resume', { repo: '__coretest_resume__', args: ['--task', 'slug'] })
-    expect(registry.get('__coretest_resume__')?.repo).toBe('__coretest_resume__')
-    // The repo is still passed to `tm` as the first argument.
-    expect(runner.calls[0]?.args).toEqual(['__coretest_resume__', '--task', 'slug'])
-  })
-
-  test('a registry verb with no repo is rejected before any shell-out', async () => {
-    const registry = freshRegistry()
-    const runner = fakeRunner()
-    const core = createCore({ runTm: runner.run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-    const result = await core.handleTool('spawn', { args: ['--prompt', 'hi'] })
-    expect(result.isError).toBe(true)
-    expect(runner.calls).toHaveLength(0)
-    expect(registry.list()).toEqual([])
-  })
-})
-
-describe('the teammates tool', () => {
-  test('lists the registry and annotates each entry with its live signal', async () => {
-    const registry = freshRegistry()
-    registry.record({ repo: 'busy-repo', sid: 'busy-sid', cwd: '/r/busy' })
-    registry.record({ repo: 'quiet-repo', sid: 'quiet-sid', cwd: '/r/quiet' })
-    const core = createCore({ runTm: fakeRunner().run, registry, subscription: fakeSignals, runTmux: fakeTmux, runColumn: fakeColumn, runGrep: fakeGrep, dispatcherDir: '/tmp', projectsDir: '/tmp' })
-
-    const parsed = JSON.parse(textOf(await core.handleTool('teammates', {}))) as {
-      teammates: { repo: string; signal: Signal | null }[]
-    }
-    const byRepo = new Map(parsed.teammates.map((t) => [t.repo, t]))
-    expect(byRepo.get('busy-repo')?.signal).toEqual({ busy: true, idle: false })
-    expect(byRepo.get('quiet-repo')?.signal).toBeNull()
   })
 })

@@ -2,12 +2,13 @@
  * The orchestration core: it turns the `tm` verb set into MCP tools and keeps
  * the teammate registry in step with the mutating verbs.
  *
- * Phase A of the strangler migration: every verb tool shells out to the
- * unmodified `tm` (see `tm.ts`). The core adds exactly two things on top of
- * that pass-through — it maintains the teammate registry around
- * `spawn`/`resume`/`kill`, and it exposes the registry through one
- * core-native `teammates` tool. No verb logic is reimplemented here; that is
- * Phase B, one verb at a time.
+ * Each verb tool either runs natively (`native.ts`) or shells out to the
+ * unmodified `tm` (`tm.ts`). Phase A shelled every verb out; Phase B of the
+ * strangler migration moves verbs to native code one at a time, so the core
+ * consults `NATIVE_VERBS` per call and falls back to the shell-out. On top of
+ * the verbs the core maintains the teammate registry around
+ * `spawn`/`resume`/`kill` and exposes it through one core-native `teammates`
+ * tool.
  *
  * The core is transport-agnostic: it produces a tool list and a `handleTool`
  * function. `server.ts` is what binds those to a real MCP server on a socket.
@@ -16,10 +17,12 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync } from 'node:fs'
 
+import { isNativeVerb, NATIVE_VERBS, triggersTmHelp } from './native'
 import { cwdFile, sidFile } from './paths'
 import type { Registry } from './registry'
 import type { SignalSource } from './subscription'
-import type { TmResult, TmRunner } from './tm'
+import type { TmResult, TmRunOptions, TmRunner } from './tm'
+import type { TmuxRunner } from './tmux'
 import { TM_VERBS } from './verbs'
 
 /** The core-native tool that exposes the teammate registry. */
@@ -27,8 +30,10 @@ const TEAMMATES_TOOL = 'teammates'
 
 /** Everything `createCore` needs; all of it is injectable for tests. */
 export interface CoreDeps {
-  /** Shells out to `tm` — the production runner or a fake. */
+  /** Shells out to `tm` — for verbs not yet migrated into native code. */
   runTm: TmRunner
+  /** Runs `tmux` — for natively-migrated verbs that still query tmux. */
+  runTmux: TmuxRunner
   /** The teammate registry, already loaded. */
   registry: Registry
   /** The resident idle subscription (or any signal source), already started. */
@@ -77,14 +82,27 @@ export function createCore(deps: CoreDeps): Core {
       return errorResult(err instanceof Error ? err.message : String(err))
     }
 
+    const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined
     let result: TmResult
     try {
-      result = await deps.runTm(verb.name, argv, stdin != null ? { stdin } : undefined)
+      // A migrated verb runs natively; the rest still shell out to `tm`.
+      // Either way the verb produces a `TmResult`, so the shaping below is
+      // identical — that is what keeps the migration drop-in.
+      //
+      // A `--help` invocation is the exception: `tm`'s own dispatcher prints
+      // per-verb help, and a native handler has no help text — so when the
+      // arguments would trigger that pre-scan the verb shells out even if
+      // migrated, exactly as it did before the migration.
+      const native =
+        isNativeVerb(verb.name) && !triggersTmHelp(argv) ? NATIVE_VERBS[verb.name] : undefined
+      result = native
+        ? await native(argv, options, { runTmux: deps.runTmux })
+        : await deps.runTm(verb.name, argv, options)
     } catch (err) {
-      // A `tm` that cannot even be spawned (missing binary, exec failure) is
-      // a tool error, not a crashed request — surface it as one.
+      // A verb that cannot even start — `tm` or `tmux` missing, an exec
+      // failure — is a tool error, not a crashed request; surface it as one.
       return errorResult(
-        `could not run tm ${verb.name}: ${err instanceof Error ? err.message : String(err)}`,
+        `could not run ${verb.name}: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
 
@@ -112,7 +130,7 @@ function verbTool(verb: (typeof TM_VERBS)[number]): Tool {
     type: 'string' as const,
     description: 'Text fed to the verb on stdin. Only `archive` reads stdin.',
   }
-  const description = `${verb.summary} Phase A: shells out to \`tm ${verb.name}\`.`
+  const description = verb.summary
   if (verb.registry === 'none') {
     return {
       name: verb.name,
@@ -247,7 +265,7 @@ function verbResult(verb: string, result: TmResult): CallToolResult {
   let text: string
   if (out && err) text = `${out}\n--- stderr ---\n${err}`
   else if (out || err) text = out || err
-  else text = `tm ${verb} exited ${result.code} with no output`
+  else text = `${verb} exited ${result.code} with no output`
   return {
     content: [{ type: 'text', text }],
     isError: result.code !== 0,

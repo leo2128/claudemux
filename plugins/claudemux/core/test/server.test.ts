@@ -21,6 +21,7 @@ import { Registry } from '../src/registry'
 import { createCoreNetServer, listenOnSocket } from '../src/server'
 import type { SignalSource } from '../src/subscription'
 import type { TmRunner } from '../src/tm'
+import type { TmuxRunner } from '../src/tmux'
 
 /** A stub signal source — nothing is ever observed. */
 const fakeSignals: SignalSource = { signalFor: () => undefined }
@@ -32,10 +33,14 @@ const echoRunner: TmRunner = async (verb, args) => ({
   stderr: '',
 })
 
+/** A fake `tmux` runner — the socket tests drive non-native verbs only. */
+const quietTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
+
 /** Build a core over fakes, on a throwaway registry file. */
 function fakeCore(dir: string): ReturnType<typeof createCore> {
   return createCore({
     runTm: echoRunner,
+    runTmux: quietTmux,
     registry: new Registry(join(dir, 'registry.json')),
     subscription: fakeSignals,
   })
@@ -139,6 +144,18 @@ describe('the socket server', () => {
     expect(result.text).toContain('VERB:doctor')
   })
 
+  test('serves a natively-migrated verb over the socket', async () => {
+    socketPath = tempSocketPath()
+    net = createCoreNetServer(fakeCore(freshDir()))
+    await bind(net, socketPath)
+
+    // `ls` runs natively, not via the `tm` shell-out; `quietTmux` reports no
+    // sessions, so the native handler returns its "no teammate sessions" line.
+    const result = await callTool(socketPath, 'ls', { args: [] })
+    expect(result.isError).toBeFalsy()
+    expect(result.text).toContain('no teammate sessions')
+  })
+
   test('recovers from a stale socket file, then serves', async () => {
     socketPath = tempSocketPath()
     // A leftover file at the socket path: `net.listen` fails EADDRINUSE, the
@@ -147,7 +164,7 @@ describe('the socket server', () => {
     net = createCoreNetServer(fakeCore(freshDir()))
     await bind(net, socketPath) // rejects if it stood down instead of recovering
 
-    const result = await callTool(socketPath, 'ls', { args: [] })
-    expect(result.text).toContain('VERB:ls')
+    const result = await callTool(socketPath, 'states', { args: [] })
+    expect(result.text).toContain('VERB:states')
   })
 })

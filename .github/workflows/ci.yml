@@ -59,6 +59,7 @@ jobs:
           shellcheck \
             plugins/claudemux/bin/tm \
             plugins/claudemux/core/test/fixtures/fake-tm \
+            plugins/claudemux/core/test/fixtures/fake-tmux-bin/tmux \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
             bin/changeset \

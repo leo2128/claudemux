@@ -1,20 +1,21 @@
 /**
  * The catalog of `tm` verbs the core re-exposes as MCP tools.
  *
- * Phase A exposes the *whole* `tm` verb set — the migration's exit gate is
+ * The core exposes the *whole* `tm` verb set — the migration's exit gate is
  * "reproduces today's `tm` behavior for every verb", so no verb is carved
- * out. Each verb becomes one MCP tool whose handler shells out to `tm` (see
- * `core.ts`). The `help` verb is intentionally absent: the MCP tool schemas
- * are themselves the dispatcher-facing help surface, so a `tm help`
- * passthrough would be redundant.
+ * out. Each verb becomes one MCP tool; `core.ts` runs it natively (`native.ts`)
+ * or shells out to `tm`, per verb, as the strangler migration moves verbs
+ * across. The `help` verb is intentionally absent: the MCP tool schemas are
+ * themselves the dispatcher-facing help surface, so a `tm help` passthrough
+ * would be redundant.
  *
  * The `summary` strings are short, lifted from `tm --help`. Rich per-argument
  * schemas — "the MCP tool descriptions become the new `tm --help`" — are a
- * Phase D task; Phase A forwards an opaque argument vector. The one exception
- * is the registry-affecting verbs (`registry !== 'none'`): their tools take a
- * required structured `repo` field, because the core keys the registry on the
- * teammate identity and must read it as data, not parse it back out of the
- * argument vector (see `core.ts`).
+ * Phase D task; until then a verb tool forwards an opaque argument vector.
+ * The one exception is the registry-affecting verbs (`registry !== 'none'`):
+ * their tools take a required structured `repo` field, because the core keys
+ * the registry on the teammate identity and must read it as data, not parse
+ * it back out of the argument vector (see `core.ts`).
  */
 
 /** One `tm` verb re-exposed as an MCP tool. */

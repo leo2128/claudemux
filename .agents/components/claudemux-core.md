@@ -11,11 +11,12 @@ and decision [0018](/.agents/decisions/0018-mcp-native-orchestration-core.md).
 This document is the **component** view: what the core's modules are and what
 contracts they hold.
 
-> **Status — Phase A of the strangler migration.** The core stands up as a
+> **Status — Phase B of the strangler migration.** The core stands up as a
 > resident MCP server, holds the teammate registry and a resident idle
-> subscription, and **shells out to the unmodified `tm` for every verb**. No
-> verb logic is reimplemented yet; that is Phase B, one verb at a time. `tm`
-> is unchanged and remains fully usable on its own.
+> subscription, and serves the `tm` verb set. Phase A shelled every verb out
+> to the unmodified `tm`; Phase B migrates verbs into native core code one at
+> a time, read-only verbs first — `ls` and `last` run natively, the rest
+> still shell out. `tm` is unchanged and remains fully usable on its own.
 
 ## Module layout
 
@@ -25,11 +26,13 @@ single-purpose; the testable logic is separated from the process wiring.
 | Module | Role |
 |---|---|
 | `paths.ts` | Path builders for every `/tmp` protocol file and the core's own state — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) applied to the TypeScript side. |
-| `tm.ts` | The shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. The single seam Phase B migrates through. |
+| `tm.ts` | The `tm` shell-out layer — `runTm` spawns `tm` and captures its exit code, stdout, and stderr. Fronts every verb not yet migrated to native code. |
+| `tmux.ts` | The `tmux` shell-out layer — `runTmux` spawns `tmux` for natively-migrated verbs that still query it (`ls`). |
 | `verbs.ts` | The catalog of `tm` verbs the core re-exposes as MCP tools. |
+| `native.ts` | Native verb implementations — Phase B reimplements verbs here, one at a time, replacing their `tm` shell-out. |
 | `registry.ts` | The teammate registry — see below. |
 | `subscription.ts` | The resident idle subscription — see below. |
-| `core.ts` | Assembles the MCP tool list and dispatches a tool call: shell out, then reconcile the registry. Transport-agnostic and fully unit-tested. |
+| `core.ts` | Assembles the MCP tool list and dispatches a tool call: run the verb natively or shell out, then reconcile the registry. Transport-agnostic and fully unit-tested. |
 | `socket-transport.ts` | An MCP `Transport` over a unix-domain-socket connection. |
 | `server.ts` | The process entry — loads and reconciles the registry, starts the subscription, and serves the socket. |
 
@@ -79,8 +82,9 @@ set is declared in `verbs.ts` (`registry: 'record' | 'remove' | 'none'`).
 teammate a liveness predicate rejects — a registry reloaded after a crash can
 name teammates killed while the core was down. The Phase A predicate is "the
 repo-keyed `.sid` file still exists" (`tm kill` removes it). This is a known
-approximation — a teammate killed outside `tm` leaves a stale file; Phase B's
-native `ls` gives reconciliation an authoritative source.
+approximation — a teammate killed outside `tm` leaves a stale file; a later
+Phase B step will give reconciliation an authoritative source via the native
+`ls`.
 
 ## The resident idle subscription
 
@@ -93,26 +97,53 @@ the per-sid marker files the Bash hooks maintain under `/tmp/claude-idle/`
 `fs.watch` on that directory, kept in an in-memory per-sid map so a teammate's
 busy/idle state is a lookup, not a stat. Its Phase A reader is the
 `teammates` MCP tool, which annotates each registry entry with its live
-signal. Phase B attaches the native `wait` verb to the same watch.
+signal. A later Phase B step will attach the native `wait` verb to the same watch.
 
 ## The MCP tool surface
 
 The core exposes one MCP tool per `tm` verb — the whole verb set, since the
-Phase A exit gate is "reproduces today's `tm` behavior for *every* verb". A
-verb tool takes an opaque `args` string vector (and optional `stdin`)
-forwarded verbatim to `tm`; rich per-argument schemas are otherwise a Phase D
-task. The exception is the three registry-affecting verbs — `spawn`, `resume`,
-`kill` — whose tools also take a **required structured `repo` field**: the
-core needs the teammate identity as data to key the registry, and a named
-field is robust to `tm`'s per-verb flag ordering (`tm resume` accepts flags
-before the repo) where a positional guess is not. The `repo` is passed to
-`tm` as the first argument; any further arguments still ride in `args`.
+migration's exit gate is "reproduces today's `tm` behavior for *every* verb".
+A verb tool takes an opaque `args` string vector (and optional `stdin`) passed
+verbatim to the verb's handler; rich per-argument schemas are otherwise a
+Phase D task. The exception is the three registry-affecting verbs — `spawn`,
+`resume`, `kill` — whose tools also take a **required structured `repo`
+field**: the core needs the teammate identity as data to key the registry,
+and a named field is robust to `tm`'s per-verb flag ordering (`tm resume`
+accepts flags before the repo) where a positional guess is not. The `repo` is
+passed as the first argument; any further arguments still ride in `args`.
 
-One tool is core-native rather than a `tm` passthrough: `teammates` lists the
-registry, each entry annotated with its live signal. It overlaps with `tm ls`
-during the migration on purpose — `ls` shells out to a tmux query, `teammates`
-reads the persistent registry; Phase B merges them as `ls` migrates into the
-core.
+One tool is core-native rather than a verb passthrough: `teammates` lists the
+registry, each entry annotated with its live signal. It overlaps with `ls`
+during the migration on purpose — `ls` is a tmux query, `teammates` reads the
+persistent registry; a later Phase B step merges them.
+
+## Native verbs and the conformance harness
+
+Phase B migrates verbs out of the `tm` shell-out into native TypeScript, one
+at a time — read-only verbs first, the racy hot path (`spawn`, `send`, `wait`)
+last. A migrated verb is a `NativeVerb` in
+[`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
+`NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
+migrated. `ls` and `last` are native; some native verbs still need a backend —
+`ls` runs `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts).
+
+A `NativeVerb` returns the same `{code, stdout, stderr}` `TmResult` a shell-out
+returns — not a shaped MCP result. That keeps `verbResult` the single
+result-shaping site and makes the migration drop-in: `core.ts` shapes a native
+verb's output exactly as it shapes a shell-out's.
+
+**The migration is behavior-preserving.** A native verb reproduces what `tm`
+does today, down to the exact text of an error line; fixing a `tm` behavior is
+a separate change, never folded into the migration. This is enforced by the
+**conformance harness**
+([`test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts)):
+for each migrated verb and a set of fixture scenarios it runs the real
+`bin/tm` and the native handler against the *same* fixture and asserts their
+`TmResult` is identical. The oracle is the live `tm`, re-derived on every run,
+not a golden file. tmux is faked — a script both sides reach (`tm` through
+`PATH`, the core through `CLAUDEMUX_TMUX`) — so the harness needs no real
+tmux; the `/tmp` marker files are written under their real paths with
+collision-proof unique names.
 
 ## See also
 

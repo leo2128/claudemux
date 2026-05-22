@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Test double for `tmux`, used by the Phase B conformance harness
+# (test/conformance.test.ts). It serves only the subcommands the migrated
+# verbs invoke — `ls` so far.
+#
+# The "session list" is whatever the file in FAKE_TMUX_SESSIONS holds, so a
+# test controls exactly what `tmux ls` returns. Both sides of the conformance
+# check reach this same script: the real `bin/tm` finds it on PATH, the
+# native core finds it through CLAUDEMUX_TMUX — so they see identical output.
+set -u
+case "${1:-}" in
+  ls|list-sessions)
+    sessions="${FAKE_TMUX_SESSIONS:-}"
+    if [ -n "$sessions" ] && [ -s "$sessions" ]; then
+      cat "$sessions"
+      exit 0
+    fi
+    # Real `tmux ls` exits non-zero when no server is running; mirror that so
+    # the harness exercises the verb's "ignore tmux's exit code" path.
+    echo "no server running" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac

@@ -29,6 +29,7 @@ import { Registry } from './registry'
 import { SocketServerTransport } from './socket-transport'
 import { IdleSubscription } from './subscription'
 import { runTm } from './tm'
+import { runTmux } from './tmux'
 
 /**
  * Version advertised in the MCP `initialize` handshake. It names the version
@@ -40,16 +41,17 @@ const SERVER_VERSION = '1.0.0-beta.0'
 /** Guidance injected into a connected dispatcher's system prompt. */
 const CORE_INSTRUCTIONS = [
   'This MCP server is the claudemux orchestration core. Each tool named after a',
-  '`tm` verb drives teammates by shelling out to `tm`; pass the verb arguments',
-  'verbatim in the `args` array. The `teammates` tool lists the registry — the',
-  "core's authoritative teammate set.",
+  '`tm` verb drives teammates; pass the verb arguments verbatim in the `args`',
+  "array. The `teammates` tool lists the registry — the core's authoritative",
+  'teammate set.',
 ].join('\n')
 
 /**
  * A teammate is live if its repo-keyed `.sid` file still exists. `tm kill`
- * removes that file, so its absence means the teammate is gone. This is a
- * Phase A approximation — a teammate killed outside `tm` leaves a stale file;
- * Phase B's native `ls` gives reconciliation an authoritative source.
+ * removes that file, so its absence means the teammate is gone. This is an
+ * approximation — a teammate killed outside `tm` leaves a stale file; a later
+ * Phase B step will give reconciliation an authoritative source via the
+ * native `ls`.
  */
 function teammateIsAlive(repo: string): boolean {
   return existsSync(sidFile(repo))
@@ -152,7 +154,7 @@ async function main(): Promise<void> {
   const subscription = new IdleSubscription()
   // `createCore` only assembles the tool list and a dispatcher closure over
   // these objects; it touches no shared state, so it is safe before the bind.
-  const core = createCore({ runTm, registry, subscription })
+  const core = createCore({ runTm, runTmux, registry, subscription })
   const net = createCoreNetServer(core)
 
   const shutdown = (signal: string): void => {

@@ -573,12 +573,29 @@ const mem: NativeVerb = async (args, _options, env) => {
   return { code: 0, stdout: readFileSync(mfile, 'utf8'), stderr: '' }
 }
 
+/**
+ * One-decimal string of `value`, rounding a `.x5` tie to even — C `printf`'s
+ * `%.1f`, which `fmt_size`'s `awk` uses. `Number.toFixed` rounds half away
+ * from zero, so it would print `1.3M` where `awk` prints `1.2M` for a file of
+ * exactly 1.25 MiB; this keeps the size cells byte-identical to `tm`.
+ */
+function toFixed1HalfEven(value: number): string {
+  const tenths = value * 10
+  const floor = Math.floor(tenths)
+  const frac = tenths - floor
+  let rounded: number
+  if (frac < 0.5) rounded = floor
+  else if (frac > 0.5) rounded = floor + 1
+  else rounded = floor % 2 === 0 ? floor : floor + 1
+  return (rounded / 10).toFixed(1)
+}
+
 /** Format a byte count as a short human size — `tm`'s `fmt_size`. */
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1048576) return `${Math.trunc(bytes / 1024)}K`
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)}M`
-  return `${(bytes / 1073741824).toFixed(1)}G`
+  if (bytes < 1073741824) return `${toFixed1HalfEven(bytes / 1048576)}M`
+  return `${toFixed1HalfEven(bytes / 1073741824)}G`
 }
 
 /**
@@ -847,8 +864,9 @@ async function historyList(repo: string, projectDir: string, env: NativeEnv): Pr
     }
     return { name, mtime }
   })
-  // `ls -t` — newest first.
-  files.sort((a, b) => b.mtime - a.mtime)
+  // `ls -t` — newest first; equal mtimes break by name (a `<`/`>` compare,
+  // not `localeCompare`, so the tie order is the same on every CI runner).
+  files.sort((a, b) => b.mtime - a.mtime || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 
   const liveSid = resolveSid(repo) ?? ''
   const now = Math.floor(Date.now() / 1000)
@@ -1052,7 +1070,8 @@ function sleep(ms: number): Promise<void> {
 const status: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm status <repo> [lines=80]')
-  const lines = args[1] ?? '80'
+  // `||`, not `??`: `tm`'s `${2:-80}` also defaults on an empty-string arg.
+  const lines = args[1] || '80'
 
   const sessionMissing = await requireSession(repo, env.runTmux)
   if (sessionMissing !== null) return sessionMissing
@@ -1078,7 +1097,8 @@ const poll: NativeVerb = async (args, _options, env) => {
   if (repo === '' || pattern === '') {
     return die('usage: tm poll <repo> <regex> [timeout=180]')
   }
-  const timeoutArg = args[2] ?? '180'
+  // `||`, not `??`: `tm`'s `${3:-180}` also defaults on an empty-string arg.
+  const timeoutArg = args[2] || '180'
 
   const sessionMissing = await requireSession(repo, env.runTmux)
   if (sessionMissing !== null) return sessionMissing

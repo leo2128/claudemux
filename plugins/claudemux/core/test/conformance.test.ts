@@ -1514,6 +1514,10 @@ for (const { verb, scenarios } of CONFORMANCE) {
         const afterNative = snapshot()
         expect(native).toEqual(oracle)
         expect(afterNative).toEqual(afterOracle)
+        // Restore the world a last time: a native run that shells out (e.g.
+        // `reload`'s `tm send`) creates files outside `marker()`/`scratchDir`,
+        // which neither `afterEach` nor `afterAll` would otherwise reclaim.
+        resetSnapshot(before, afterNative)
       })
     }
   })

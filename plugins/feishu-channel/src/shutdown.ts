@@ -141,7 +141,7 @@ export class ShutdownCoordinator {
    * parent exits, the write end of that pipe closes and the server's stdin
    * reaches EOF. That EOF is the signal: the OS delivers it the moment the
    * parent is gone, it needs no polling, and it cannot be fooled by PID reuse.
-   * It also survives the indirect `bun run … start` → `bun run src/server.ts`
+   * It also survives the indirect `npm run start` → `tsx src/server.ts`
    * process tree the server launches under, since the stdio pipe is inherited
    * straight through to this process.
    *

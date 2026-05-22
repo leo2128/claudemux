@@ -1,17 +1,11 @@
-# Component: the `feishu-channel` plugin (WIP)
-
-> **Status: in progress.** This plugin is being built on branch
-> `feishu-channel-plugin` and is **not yet merged to `main`**. Until it
-> merges, `plugins/feishu-channel/` does not exist on `main`. This doc
-> records the design as built on the branch; re-verify it against the live
-> plugin once the branch lands. Rationale is in
-> [decision 0005](/.agents/decisions/0005-feishu-channel-plugin.md) and
-> [decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md).
+# Component: the `feishu-channel` plugin
 
 `feishu-channel` is a second plugin shipped from this repo: a Claude Code
 **channel** for Feishu (飞书). It bridges Feishu events into a running Claude
 Code session and replies back, over a long-lived WebSocket — so no public
-webhook URL is needed.
+webhook URL is needed. Its rationale is in
+[decision 0005](/.agents/decisions/0005-feishu-channel-plugin.md) and
+[decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md).
 
 ## Why it lives here
 
@@ -23,10 +17,11 @@ plugin**, not as part of the claudemux plugin. They install independently.
 
 ## Stack — and why it differs from claudemux
 
-claudemux is Bash. `feishu-channel` is **TypeScript on Bun**. The job is a
+claudemux is Bash. `feishu-channel` is **TypeScript on Node**. The job is a
 long-lived WebSocket server plus an MCP server — a persistent networked
-process, not a CLI — which is poorly served by Bash. Bun is the channel
-server runtime.
+process, not a CLI — which is poorly served by Bash. The server runs through
+[`tsx`](https://tsx.is), the Node TypeScript runner, so the `src/` modules run
+as written, with no build step; the test suite runs on `vitest`.
 
 ## How a channel works
 
@@ -60,7 +55,7 @@ Feishu event type is one `EventHandler` (`src/events.ts`) that declares its
 `event_type` and maps a raw payload to a channel delivery. Adding a new event
 type is **one handler module under `src/handlers/` plus one registration
 line** in `createChannelCore` — the core pipeline and the transport do not
-change. Two handlers exist on the branch:
+change. Two handlers exist:
 
 - `im.message.receive_v1` — inbound chat messages (`src/handlers/im-message.ts`).
 - `drive.notice.comment_add_v1` — document comments and replies
@@ -69,13 +64,13 @@ change. Two handlers exist on the branch:
 See [decision 0006](/.agents/decisions/0006-feishu-channel-event-registry.md)
 for the rationale.
 
-## Layout (on the `feishu-channel-plugin` branch)
+## Layout
 
 | Path | Holds |
 |---|---|
 | `.claude-plugin/plugin.json` | Plugin manifest (`name: feishu-channel`, own `version`) |
-| `.mcp.json` | MCP server declaration — runs `bun run start` |
-| `package.json` | Bun project; deps `@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk` |
+| `.mcp.json` | MCP server declaration — launches the server via `npm run start` |
+| `package.json` | Node project; runtime deps `@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `tsx` |
 | `src/events.ts` | The `EventHandler` interface and the `EventRegistry` |
 | `src/server.ts` | `createChannelCore` — registry dispatch + the outbound tools |
 | `src/feishu.ts` | The Feishu transport boundary (event-type agnostic) |
@@ -84,7 +79,7 @@ for the rationale.
 | `src/*.ts` | Core logic — access control, content parsing, pairing, … |
 | `scripts/configure.ts` | Credential factory — writes `.env`, verifies against Feishu |
 | `commands/configure.md` | The `/feishu-channel:configure` slash command |
-| `test/*.test.ts` | `bun:test` unit tests; input-heavy modules use `fast-check` |
+| `test/*.test.ts` | `vitest` unit tests; input-heavy modules use `fast-check` |
 | `test/feishu-live.ts` | Live integration test against the real Feishu platform |
 | `skills/` | The `access` skill |
 
@@ -93,8 +88,9 @@ so it unit-tests without a running server or connection.
 
 ## Foot-guns
 
-- **Bun is required** and is not a claudemux dependency. On the dev machine
-  Bun lives at `~/.bun/bin` and is not on `PATH` — invoke it by absolute path.
+- **Node is required** (v22 or later) and is not a claudemux dependency. The
+  plugin installs its own dependencies — including its `tsx` TypeScript runner
+  — on first channel launch, through the `start` script `.mcp.json` invokes.
 - The plugin has its **own** `version` in its own `plugin.json`, bumped
   independently of claudemux. A change under `feishu-channel/` takes a
   `feishu-channel` changeset (`bin/changeset feishu-channel ...`), not a
@@ -131,7 +127,7 @@ so it unit-tests without a running server or connection.
 
 ## See also
 
-- [decisions/0005-feishu-channel-plugin.md](/.agents/decisions/0005-feishu-channel-plugin.md) — why a second plugin, why TS+Bun.
+- [decisions/0005-feishu-channel-plugin.md](/.agents/decisions/0005-feishu-channel-plugin.md) — why a second plugin, why a separate TypeScript project.
 - [decisions/0006-feishu-channel-event-registry.md](/.agents/decisions/0006-feishu-channel-event-registry.md) — the event registry and core design choices.
 - [decisions/0013-feishu-channel-received-reaction-indicator.md](/.agents/decisions/0013-feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound chat messages.
 - [components/repo-tooling.md](/.agents/components/repo-tooling.md) — the CI `feishu-channel` job.

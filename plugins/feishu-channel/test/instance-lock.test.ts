@@ -103,7 +103,7 @@ describe('instance-lock', () => {
 /** A probe describing a feishu-channel channel server in version directory `version`. */
 function serverProbe(version: string): ProcessProbe {
   return {
-    command: '/path/to/bun run src/server.ts',
+    command: '/path/to/tsx src/server.ts',
     cwd: `/cache/claudemux/feishu-channel/${version}`,
   }
 }
@@ -121,7 +121,7 @@ describe('holderIsEvictable', () => {
   })
 
   test('a server.ts process outside a version directory is never evictable', () => {
-    const probe: ProcessProbe = { command: 'bun run src/server.ts', cwd: '/tmp/scratch' }
+    const probe: ProcessProbe = { command: 'tsx src/server.ts', cwd: '/tmp/scratch' }
     expect(holderIsEvictable(probe, self)).toBe(false)
   })
 

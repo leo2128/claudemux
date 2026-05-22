@@ -8,7 +8,7 @@ all over a long-lived WebSocket connection, so no public webhook URL is needed.
 
 - [Claude Code](https://claude.com/claude-code) **v2.1.80 or later** — channels
   are a research-preview feature and are not available in earlier versions.
-- [Node.js](https://nodejs.org) **v20 or later** — the channel server runtime.
+- [Node.js](https://nodejs.org) **v22 or later** — the channel server runtime.
   The plugin installs its own dependencies on first launch.
 - A Feishu **self-built app** with the Bot capability (see below).
 

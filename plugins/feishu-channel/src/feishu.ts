@@ -117,6 +117,45 @@ function asCommentFileType(fileType: string): CommentFileType | undefined {
     : undefined
 }
 
+/**
+ * One comment as `drive.v1.fileComment.batchQuery` returns it — only the
+ * fields the channel reads. The SDK's response type carries more; this is the
+ * structural subset `commentFromBatchQuery` decodes, and the shape a unit
+ * test builds a fixture against.
+ */
+interface RawCommentItem {
+  comment_id?: string
+  is_whole?: boolean
+  quote?: string
+  reply_list?: {
+    replies?: Array<{
+      reply_id?: string
+      user_id?: string
+      content?: { elements?: unknown[] }
+    }>
+  }
+}
+
+/**
+ * Pick the comment with `commentId` out of a `fileComment.batchQuery` response
+ * and shape it into a `FeishuDocComment`. Returns `null` when the response
+ * carried no such comment. Pure: no I/O, never throws — exported so the decode
+ * is unit-tested without a live Feishu connection.
+ */
+export function commentFromBatchQuery(
+  items: RawCommentItem[],
+  commentId: string,
+): FeishuDocComment | null {
+  const item = items.find((c) => c.comment_id === commentId)
+  if (!item) return null
+  const replies: FeishuDocCommentReply[] = (item.reply_list?.replies ?? []).map((reply) => ({
+    replyId: reply.reply_id ?? '',
+    authorId: reply.user_id ?? '',
+    elements: reply.content?.elements ?? [],
+  }))
+  return { isWhole: item.is_whole ?? true, quote: item.quote ?? '', replies }
+}
+
 /** Document types the drive metadata API serves. */
 const META_DOC_TYPES = [
   'doc',
@@ -374,22 +413,19 @@ export function createFeishuTransport(
       const ct = asCommentFileType(fileType)
       if (!ct) return null
       try {
-        const res = await client.drive.fileComment.get({
-          path: { file_token: fileToken, comment_id: commentId },
+        // `batchQuery` resolves a comment by id and serves both
+        // whole-document and local-selection comments. The single-comment
+        // `get` endpoint serves only whole-document comments — it returns
+        // "not exist" for a comment anchored to a text selection, which is
+        // most document comments.
+        const res = await client.drive.fileComment.batchQuery({
+          path: { file_token: fileToken },
           // Resolve reply authors to open_id, so they match the open_id the
           // event carries and the sender_id of chat messages.
           params: { file_type: ct, user_id_type: 'open_id' },
+          data: { comment_ids: [commentId] },
         })
-        const data = res.data
-        if (!data) return null
-        const replies: FeishuDocCommentReply[] = (data.reply_list?.replies ?? []).map(
-          (reply) => ({
-            replyId: reply.reply_id ?? '',
-            authorId: reply.user_id ?? '',
-            elements: reply.content?.elements ?? [],
-          }),
-        )
-        return { isWhole: data.is_whole ?? true, quote: data.quote ?? '', replies }
+        return commentFromBatchQuery(res.data?.items ?? [], commentId)
       } catch (err) {
         console.error(
           `[feishu-channel] could not fetch comment ${commentId} on ${fileToken}:`,

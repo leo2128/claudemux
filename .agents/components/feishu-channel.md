@@ -106,9 +106,12 @@ so it unit-tests without a running server or connection.
   fetches the comment text and document title from Feishu, because a comment
   event payload carries only the comment's identifiers. See
   [decision 0011](/.agents/decisions/0011-feishu-doc-comment-enrichment.md).
-  The bot needs the document-comment and document-metadata read scopes;
-  lacking them, a comment is still delivered, but with its text and title as
-  a placeholder.
+  The comment is fetched with `fileComment.batchQuery`, not the single-comment
+  `fileComment.get` — `get` serves only whole-document comments and 404s on a
+  comment anchored to a text selection, which is most of them. When a comment
+  arrives with an empty body, the endpoint is the thing to check before the
+  bot's scopes; see
+  [decision 0016](/.agents/decisions/0016-feishu-doc-comment-fetch-via-batch-query.md).
 - Group messages are gated by `access.json`'s `groupPolicy`, set by
   `/feishu-channel:configure`: `block` (the bot ignores groups), `allowlist`
   (each group authorized as a unit by pairing — decision 0010), or

@@ -17,12 +17,13 @@
  * today, bug for bug, down to the exact text of an error line. Fixing a `tm`
  * behavior is a separate change, never folded into the migration.
  *
- * Migrated so far: `ls`, `last`.
+ * Migrated so far: `ls`, `last`, `ctx`.
  */
 
 import { readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
-import { lastFileFor, sidFile } from './paths'
+import { cwdFile, encodeProjectDir, lastFileFor, sidFile } from './paths'
 import type { TmResult, TmRunOptions } from './tm'
 import type { TmuxRunner } from './tmux'
 
@@ -33,6 +34,10 @@ const SESSION_PREFIX = 'teammate-'
 export interface NativeEnv {
   /** Runs `tmux` — injected so a conformance fixture can supply a fake. */
   runTmux: TmuxRunner
+  /** The dispatcher directory — the parent of the sibling teammate repos. */
+  dispatcherDir: string
+  /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
+  projectsDir: string
 }
 
 /**
@@ -174,8 +179,212 @@ const last: NativeVerb = async (args) => {
   return { code: 0, stdout: reply, stderr: '' }
 }
 
+/** A teammate's context-window usage, summed from its transcript. */
+interface CtxUsage {
+  /** Tokens in the last assistant turn — input plus both cache reads. */
+  used: number
+  /** Output tokens of the last assistant turn. */
+  out: number
+  /** The largest `used`-style total across every assistant turn. */
+  peak: number
+}
+
+/** Sum the cache-inclusive input tokens of one `message.usage` object. */
+function usageInput(usage: Record<string, unknown>): number {
+  const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
+  return (
+    num(usage.input_tokens) +
+    num(usage.cache_creation_input_tokens) +
+    num(usage.cache_read_input_tokens)
+  )
+}
+
+/** Whether a value is a plain JSON object — not a primitive, not an array. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Read a teammate's ctx usage from its transcript jsonl — the native form of
+ * the `jq -s` pass in `tm`'s `_ctx_format_line`. It collects the
+ * `message.usage` of every assistant entry: `used`/`out` come from the last
+ * one, `peak` is the max input across all. Returns `null` when there is no
+ * usable usage — which includes the cases where `jq -s` fails:
+ *
+ * `jq -s` slurps the *whole* file, then its filter indexes `.type` on every
+ * entry and `.message.usage` on the assistant ones. A line `jq` cannot index
+ * — a non-object (a bare number/string/array), or an assistant entry whose
+ * `.message`/`.message.usage` is a non-object — errors the entire pass, which
+ * `tm` reports as the `?` diagnostic. So such a line *fails the file* here
+ * too; it is not silently skipped. (`jq` does tolerate a bare `null` line and
+ * a missing/`null` `.message`/`.usage` — those drop out without an error.)
+ */
+function readCtxUsage(jsonl: string): CtxUsage | null {
+  let content: string
+  try {
+    content = readFileSync(jsonl, 'utf8')
+  } catch {
+    return null
+  }
+  const inputs: number[] = []
+  let lastOut = 0
+  for (const line of content.split('\n')) {
+    if (line.trim() === '') continue
+    let entry: unknown
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      return null
+    }
+    if (entry === null) continue
+    if (!isPlainObject(entry)) return null
+    if (entry.type !== 'assistant') continue
+    const message = entry.message
+    if (message === null || message === undefined) continue
+    if (!isPlainObject(message)) return null
+    const usage = message.usage
+    if (usage === null || usage === undefined) continue
+    if (!isPlainObject(usage)) return null
+    inputs.push(usageInput(usage))
+    lastOut = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+  }
+  if (inputs.length === 0) return null
+  // A plain reduce, not `Math.max(...inputs)` — a long transcript can hold
+  // more entries than the argument-spread limit, and `jq`'s `max` has none.
+  let peak = inputs[0]!
+  for (const value of inputs) if (value > peak) peak = value
+  return { used: inputs[inputs.length - 1]!, out: lastOut, peak }
+}
+
+/** The Claude Code transcript file for a teammate session under `projectsDir`. */
+function transcriptFile(projectsDir: string, cwd: string, sid: string): string {
+  return join(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`)
+}
+
+/** Whether a path exists and is a regular file — `tm`'s `[[ -f ]]` test. */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One teammate's `ctx` line. Soft-fails to a `? (...)` diagnostic line — like
+ * `tm`'s `ctx_one` — so `ctx --all` keeps going across teammates with no
+ * readable transcript. `windowOverride` is `''`, `'200k'`, or `'1m'`.
+ */
+function ctxLine(repo: string, windowOverride: string, env: NativeEnv): string {
+  const sid = resolveSid(repo)
+  if (sid === null) return `${repo}: ? (no sid file)`
+
+  // The teammate's cwd: its recorded `.cwd` file, else `<dispatcher>/<repo>`.
+  const recordedCwd = readIfNonEmpty(cwdFile(repo))
+  const cwd =
+    recordedCwd !== null ? recordedCwd.replace(/\n+$/, '') : `${env.dispatcherDir}/${repo}`
+  const jsonl = transcriptFile(env.projectsDir, cwd, sid)
+  if (!isRegularFile(jsonl)) return `${repo}: ? (no transcript at ${jsonl})`
+
+  const usage = readCtxUsage(jsonl)
+  if (usage === null) return `${repo}: ? (no assistant usage in transcript)`
+
+  const next = usage.used + usage.out
+  let window: number
+  let note: string
+  if (windowOverride === '1m') {
+    window = 1000000
+    note = 'flag'
+  } else if (windowOverride === '200k') {
+    window = 200000
+    note = 'flag'
+  } else if (usage.peak > 210000) {
+    // A peak above ~210k can only have happened on a 1M-token window.
+    window = 1000000
+    note = 'detected 1M'
+  } else {
+    window = 200000
+    note = 'assumed 200k'
+  }
+  const pct = Math.floor((usage.used * 100) / window)
+  const wlabel = window >= 1000000 ? '1M' : '200k'
+  return `${repo}: ${usage.used} tokens · ~${next} next turn · ${pct}% of ${wlabel} (${note})`
+}
+
+/** The running teammate repo names, from `tmux ls` — `tm`'s `iter_repos`. */
+async function iterRepos(runTmux: TmuxRunner): Promise<string[]> {
+  let listing = ''
+  try {
+    listing = (await runTmux(['ls'])).stdout
+  } catch {
+    listing = ''
+  }
+  const repos: string[] = []
+  for (const line of listing.split('\n')) {
+    const field = sessionField(line)
+    if (field.startsWith(SESSION_PREFIX)) repos.push(field.slice(SESSION_PREFIX.length))
+  }
+  return repos
+}
+
+/** The outcome of parsing `ctx`'s arguments: a plan, or an early-exit result. */
+type CtxArgs = { repos: string[]; windowOverride: string; all: boolean } | { error: TmResult }
+
+/**
+ * Parse `tm ctx`'s flags — `--all`, `--window <v>`, `--window=<v>` — mirroring
+ * `cmd_ctx`'s loop. A bare `--window` with no value reproduces `tm`'s quirk: a
+ * `shift 2` past the end of the arguments fails under `set -e`, so `tm` exits
+ * 1 with no output at all.
+ */
+function parseCtxArgs(args: readonly string[]): CtxArgs {
+  const repos: string[] = []
+  let windowOverride = ''
+  let all = false
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--all') {
+      all = true
+    } else if (arg === '--window') {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: '', stderr: '' } }
+      windowOverride = args[i + 1]!
+      i++
+    } else if (arg.startsWith('--window=')) {
+      windowOverride = arg.slice('--window='.length)
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm ctx: unknown flag: ${arg}`) }
+    } else {
+      repos.push(arg)
+    }
+  }
+  if (windowOverride !== '' && windowOverride !== '200k' && windowOverride !== '1m') {
+    return { error: die('tm ctx: --window must be 200k or 1m') }
+  }
+  return { repos, windowOverride, all }
+}
+
+/**
+ * `tm ctx` — report context-window usage for one or more teammates.
+ *
+ * Each teammate yields one line, or a `? (...)` diagnostic when its transcript
+ * cannot be read; `--all` fans out across every running teammate. Migrating
+ * the verb keeps the jsonl parse in the core rather than shelling out to `jq`.
+ */
+const ctx: NativeVerb = async (args, _options, env) => {
+  const parsed = parseCtxArgs(args)
+  if ('error' in parsed) return parsed.error
+
+  const repos = [...parsed.repos]
+  if (parsed.all) repos.push(...(await iterRepos(env.runTmux)))
+  if (repos.length === 0) {
+    return die('usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]')
+  }
+
+  const lines = repos.map((repo) => ctxLine(repo, parsed.windowOverride, env))
+  return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
+}
+
 /** Every natively-migrated verb, keyed by verb name. */
-export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last }
+export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = { ls, last, ctx }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */
 export function isNativeVerb(name: string): boolean {

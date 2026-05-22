@@ -11,6 +11,7 @@ import {
   busyMarkerFor,
   coreSocketPath,
   cwdFile,
+  encodeProjectDir,
   idleDir,
   idleMarkerFor,
   lastFileFor,
@@ -37,6 +38,16 @@ describe('repo-keyed builders mirror the hook protocol', () => {
   test('the .sid and .cwd files are /tmp/teammate-<repo>.*', () => {
     expect(sidFile('acme')).toBe('/tmp/teammate-acme.sid')
     expect(cwdFile('acme')).toBe('/tmp/teammate-acme.cwd')
+  })
+})
+
+describe('encodeProjectDir mirrors Claude Code project-dir naming', () => {
+  test('every / becomes a -', () => {
+    expect(encodeProjectDir('/Users/x/repo')).toBe('-Users-x-repo')
+  })
+
+  test('a . is replaced too — the bug a /-only encoder once shipped', () => {
+    expect(encodeProjectDir('/Users/x/foo.bar/repo')).toBe('-Users-x-foo-bar-repo')
   })
 })
 

@@ -15,8 +15,8 @@ contracts they hold.
 > resident MCP server, holds the teammate registry and a resident idle
 > subscription, and serves the `tm` verb set. Phase A shelled every verb out
 > to the unmodified `tm`; Phase B migrates verbs into native core code one at
-> a time, read-only verbs first — `ls` and `last` run natively, the rest
-> still shell out. `tm` is unchanged and remains fully usable on its own.
+> a time, read-only verbs first — `ls`, `last`, and `ctx` run natively, the
+> rest still shell out. `tm` is unchanged and remains fully usable on its own.
 
 ## Module layout
 
@@ -124,8 +124,11 @@ at a time — read-only verbs first, the racy hot path (`spawn`, `send`, `wait`)
 last. A migrated verb is a `NativeVerb` in
 [`native.ts`](/plugins/claudemux/core/src/native.ts); `core.ts` consults
 `NATIVE_VERBS` per call and falls back to the `tm` shell-out for verbs not yet
-migrated. `ls` and `last` are native; some native verbs still need a backend —
-`ls` runs `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts).
+migrated. `ls`, `last`, and `ctx` are native; some native verbs still need a
+backend — `ls` and `ctx --all` run `tmux` through
+[`tmux.ts`](/plugins/claudemux/core/src/tmux.ts), and `ctx` reads Claude Code
+transcript files under the dispatcher dir and `~/.claude/projects` (both
+resolved once at boot and injected, so a test can sandbox them).
 
 A `NativeVerb` returns the same `{code, stdout, stderr}` `TmResult` a shell-out
 returns — not a shaped MCP result. That keeps `verbResult` the single
@@ -139,10 +142,11 @@ a separate change, never folded into the migration. This is enforced by the
 ([`test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts)):
 for each migrated verb and a set of fixture scenarios it runs the real
 `bin/tm` and the native handler against the *same* fixture and asserts their
-`TmResult` is identical. The oracle is the live `tm`, re-derived on every run,
-not a golden file. tmux is faked — a script both sides reach (`tm` through
-`PATH`, the core through `CLAUDEMUX_TMUX`) — so the harness needs no real
-tmux; the `/tmp` marker files are written under their real paths with
+`TmResult` values — exit code, and stdout/stderr as UTF-8-decoded strings —
+are equal. The oracle is the live `tm`, re-derived on every run, not a golden
+file. tmux is faked — a script both sides reach (`tm` through `PATH`, the core
+through `CLAUDEMUX_TMUX`) — so the harness needs no real tmux; the `/tmp`
+marker files are written under their real paths with
 collision-proof unique names.
 
 ## See also

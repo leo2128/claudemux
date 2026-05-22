@@ -7,7 +7,9 @@
  * (`.agents/domains/mcp-native-orchestrator.md` §12). This is the differential
  * test that pins that — for each migrated verb and a set of fixture
  * scenarios, it runs the real `bin/tm` and the native handler against the
- * *same* fixture and asserts their `{code, stdout, stderr}` are identical.
+ * *same* fixture and asserts their `TmResult` values are equal: the exit
+ * code, and stdout/stderr as strings decoded from UTF-8 (the `last` suite has
+ * a CJK scenario that pins multibyte content surviving both paths intact).
  *
  * The oracle is the live `tm`, not a golden file: the spec's contract is
  * "`tm`'s current behavior", so the harness re-derives it on every run.
@@ -21,6 +23,10 @@
  *  - the `/tmp` marker files — written under their real `/tmp` paths (`tm`
  *    hardcodes them and cannot be redirected) but with UUID-unique repo/sid
  *    names, so a run cannot collide with a real teammate. Cleaned up per test.
+ *  - the dispatcher dir and `~/.claude/projects` — sandboxed under a scratch
+ *    dir. `tm` is pointed at them with `TM_DISPATCHER_DIR` / `HOME` in its
+ *    spawn env; the native side with the injected `dispatcherDir` /
+ *    `projectsDir`. (`ctx` needs `jq` for the `tm` side; CI installs it.)
  *
  * Scope: this pins a *verb handler*'s logic against the matching `cmd_<verb>`
  * in `tm`. The dispatch around it — `tm`'s `main` help pre-scan, the core's
@@ -38,7 +44,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { NATIVE_VERBS } from '../src/native'
-import { idleDir, lastFileFor, sidFile } from '../src/paths'
+import { cwdFile, encodeProjectDir, idleDir, lastFileFor, sidFile } from '../src/paths'
 import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
@@ -52,6 +58,12 @@ const FAKE_TMUX = join(FAKE_TMUX_DIR, 'tmux')
 let sessionsFile = ''
 /** A scratch dir for the harness's own files. */
 let scratchDir = ''
+/** The sandbox dispatcher dir — `tm`'s `TM_DISPATCHER_DIR`, the core's `dispatcherDir`. */
+let dispatcherDir = ''
+/** The sandbox `~/.claude/projects` — under the sandbox `HOME`. */
+let projectsDir = ''
+/** The sandbox `HOME` — what `tm` resolves `~/.claude/projects` against. */
+let sandboxHome = ''
 /** `/tmp` marker files a scenario wrote — removed after that scenario. */
 const tmpFiles: string[] = []
 /** Env values saved on entry, restored after the file so nothing leaks. */
@@ -68,6 +80,11 @@ beforeAll(() => {
   scratchDir = mkdtempSync(join(tmpdir(), 'claudemux-conf-'))
   sessionsFile = join(scratchDir, 'tmux-sessions')
   writeFileSync(sessionsFile, '')
+  dispatcherDir = join(scratchDir, 'dispatcher')
+  sandboxHome = join(scratchDir, 'home')
+  projectsDir = join(sandboxHome, '.claude', 'projects')
+  mkdirSync(projectsDir, { recursive: true })
+  mkdirSync(dispatcherDir, { recursive: true })
   mkdirSync(idleDir(), { recursive: true })
 
   // Point the native `runTmux` at the same fake `tmux` the `tm` subprocess
@@ -94,7 +111,12 @@ afterEach(() => {
 async function realTm(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
   const proc = Bun.spawn([TM_BIN, verb, ...args], {
     cwd: import.meta.dir,
-    env: { ...process.env, PATH: `${FAKE_TMUX_DIR}:${process.env.PATH ?? ''}` },
+    env: {
+      ...process.env,
+      PATH: `${FAKE_TMUX_DIR}:${process.env.PATH ?? ''}`,
+      HOME: sandboxHome,
+      TM_DISPATCHER_DIR: dispatcherDir,
+    },
     stdin: stdin != null ? new TextEncoder().encode(stdin) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -111,7 +133,11 @@ async function realTm(verb: string, args: readonly string[], stdin?: string): Pr
 function runNative(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
   const handler = NATIVE_VERBS[verb]
   if (!handler) throw new Error(`no native handler for ${verb}`)
-  return handler(args, stdin != null ? { stdin } : undefined, { runTmux })
+  return handler(args, stdin != null ? { stdin } : undefined, {
+    runTmux,
+    dispatcherDir,
+    projectsDir,
+  })
 }
 
 /** Write a `/tmp` marker file and remember it for cleanup. */
@@ -130,10 +156,42 @@ function uniqueName(): string {
   return `claudemux-conftest-${randomUUID().slice(0, 12)}`
 }
 
+/** The cwd a teammate with no recorded `.cwd` file resolves to. */
+function defaultCwd(repo: string): string {
+  return `${dispatcherDir}/${repo}`
+}
+
+/** One assistant transcript line carrying a `message.usage` token block. */
+function usageLine(input: number, cacheCreation: number, cacheRead: number, output: number): string {
+  return JSON.stringify({
+    type: 'assistant',
+    message: {
+      usage: {
+        input_tokens: input,
+        cache_creation_input_tokens: cacheCreation,
+        cache_read_input_tokens: cacheRead,
+        output_tokens: output,
+      },
+    },
+  })
+}
+
+/** Write a teammate's transcript jsonl under the sandbox projects dir. */
+function writeTranscript(cwd: string, sid: string, lines: string[]): void {
+  const dir = join(projectsDir, encodeProjectDir(cwd))
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `${sid}.jsonl`), lines.length > 0 ? `${lines.join('\n')}\n` : '')
+}
+
 /** One conformance scenario: prepare the fixture, return the verb args. */
 interface Scenario {
   name: string
   setup: () => { args: string[]; stdin?: string }
+}
+
+/** An `ls`/`ctx`-style teammate session line for the fake `tmux ls`. */
+function sessionLine(repo: string): string {
+  return `teammate-${repo}: 1 windows (created Wed)`
 }
 
 const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
@@ -193,6 +251,16 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         },
       },
       {
+        name: 'a .last with CJK / multibyte content survives both paths intact',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          marker(lastFileFor(sid), '已完成中文回复\n第二行:emoji 🚀 也要原样回来\n')
+          return { args: [repo] }
+        },
+      },
+      {
         name: 'no repo argument → the usage error',
         setup: () => ({ args: [] }),
       },
@@ -224,6 +292,165 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           marker(sidFile(repo), `${sid}\n`)
           marker(lastFileFor(sid), '')
           return { args: [repo] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'ctx',
+    scenarios: [
+      {
+        name: 'usage present, peak under 210k → the "assumed 200k" line',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          writeTranscript(defaultCwd(repo), sid, [
+            usageLine(100, 0, 0, 50),
+            usageLine(1000, 2000, 3000, 500),
+          ])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a peak above 210k → the "detected 1M" window',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          writeTranscript(defaultCwd(repo), sid, [usageLine(250000, 0, 0, 1000)])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: '--window 1m forces the 1M window regardless of peak',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          writeTranscript(defaultCwd(repo), sid, [usageLine(5000, 0, 0, 100)])
+          return { args: ['--window', '1m', repo] }
+        },
+      },
+      {
+        name: '--window=200k (the = form) is honored',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          writeTranscript(defaultCwd(repo), sid, [usageLine(300000, 0, 0, 100)])
+          return { args: [`--window=200k`, repo] }
+        },
+      },
+      {
+        name: 'an invalid --window value → the validation error',
+        setup: () => ({ args: ['--window', 'bad', uniqueName()] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus', uniqueName()] }),
+      },
+      {
+        name: 'a bare --window with no value → tm exits 1 with no output',
+        setup: () => ({ args: ['--window'] }),
+      },
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: '--all with no running teammates → the usage error',
+        setup: () => {
+          setSessions('')
+          return { args: ['--all'] }
+        },
+      },
+      {
+        name: '--all fans out across every running teammate, in tmux order',
+        setup: () => {
+          const repoA = uniqueName()
+          const repoB = uniqueName()
+          setSessions(`${sessionLine(repoA)}\n${sessionLine(repoB)}\n`)
+          for (const repo of [repoA, repoB]) {
+            const sid = uniqueName()
+            marker(sidFile(repo), `${sid}\n`)
+            writeTranscript(defaultCwd(repo), sid, [usageLine(4000, 0, 0, 80)])
+          }
+          return { args: ['--all'] }
+        },
+      },
+      {
+        name: 'no sid file → the "? (no sid file)" diagnostic',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'sid present but no transcript → the "? (no transcript)" diagnostic',
+        setup: () => {
+          const repo = uniqueName()
+          marker(sidFile(repo), `${uniqueName()}\n`)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a transcript with no assistant usage → the "? (no usage)" diagnostic',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          writeTranscript(defaultCwd(repo), sid, [
+            JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } }),
+          ])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a non-object transcript line fails the file, as jq does',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          // A bare `42` line: `jq -s` errors indexing it, failing the whole
+          // pass — the native parse must fail the file too, not skip the line.
+          writeTranscript(defaultCwd(repo), sid, ['42', usageLine(5000, 0, 0, 100)])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a directory at the transcript path → the "no transcript" diagnostic',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          marker(sidFile(repo), `${sid}\n`)
+          // `[[ -f ]]` is false for a directory; the native check must agree.
+          mkdirSync(join(projectsDir, encodeProjectDir(defaultCwd(repo)), `${sid}.jsonl`), {
+            recursive: true,
+          })
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'a recorded .cwd file relocates where the transcript is read',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueName()
+          const recordedCwd = `${dispatcherDir}/relocated.v2/${repo}`
+          marker(sidFile(repo), `${sid}\n`)
+          marker(cwdFile(repo), `${recordedCwd}\n`)
+          writeTranscript(recordedCwd, sid, [usageLine(8000, 0, 0, 120)])
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'multiple repos each yield a line, in argument order',
+        setup: () => {
+          const repoA = uniqueName()
+          const repoB = uniqueName()
+          for (const repo of [repoA, repoB]) {
+            const sid = uniqueName()
+            marker(sidFile(repo), `${sid}\n`)
+            writeTranscript(defaultCwd(repo), sid, [usageLine(6000, 1000, 2000, 90)])
+          }
+          return { args: [repoA, repoB] }
         },
       },
     ],

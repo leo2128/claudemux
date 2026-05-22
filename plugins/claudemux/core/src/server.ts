@@ -22,6 +22,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { existsSync, unlinkSync } from 'node:fs'
 import { type Server as NetServer, connect, createServer } from 'node:net'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 import { type Core, createCore } from './core'
 import { coreSocketPath, registryFile, sidFile } from './paths'
@@ -152,9 +154,15 @@ async function main(): Promise<void> {
   const socketPath = coreSocketPath()
   const registry = new Registry(registryFile())
   const subscription = new IdleSubscription()
+  // The dispatcher directory and the Claude Code projects directory, read once
+  // at boot. `tm` resolves the dispatcher dir the same way — `TM_DISPATCHER_DIR`
+  // or the cwd — and the projects dir mirrors `tm`'s use of `$HOME` to address
+  // `~/.claude/projects`.
+  const dispatcherDir = process.env.TM_DISPATCHER_DIR ?? process.cwd()
+  const projectsDir = join(process.env.HOME ?? homedir(), '.claude', 'projects')
   // `createCore` only assembles the tool list and a dispatcher closure over
   // these objects; it touches no shared state, so it is safe before the bind.
-  const core = createCore({ runTm, runTmux, registry, subscription })
+  const core = createCore({ runTm, runTmux, registry, subscription, dispatcherDir, projectsDir })
   const net = createCoreNetServer(core)
 
   const shutdown = (signal: string): void => {

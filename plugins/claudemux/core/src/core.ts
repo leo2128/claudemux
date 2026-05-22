@@ -38,6 +38,10 @@ export interface CoreDeps {
   registry: Registry
   /** The resident idle subscription (or any signal source), already started. */
   subscription: SignalSource
+  /** The dispatcher directory — the parent of the sibling teammate repos. */
+  dispatcherDir: string
+  /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
+  projectsDir: string
 }
 
 /** The transport-agnostic core: an MCP tool list and a dispatcher for them. */
@@ -96,7 +100,11 @@ export function createCore(deps: CoreDeps): Core {
       const native =
         isNativeVerb(verb.name) && !triggersTmHelp(argv) ? NATIVE_VERBS[verb.name] : undefined
       result = native
-        ? await native(argv, options, { runTmux: deps.runTmux })
+        ? await native(argv, options, {
+            runTmux: deps.runTmux,
+            dispatcherDir: deps.dispatcherDir,
+            projectsDir: deps.projectsDir,
+          })
         : await deps.runTm(verb.name, argv, options)
     } catch (err) {
       // A verb that cannot even start — `tm` or `tmux` missing, an exec

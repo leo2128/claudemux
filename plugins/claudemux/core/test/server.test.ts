@@ -43,6 +43,8 @@ function fakeCore(dir: string): ReturnType<typeof createCore> {
     runTmux: quietTmux,
     registry: new Registry(join(dir, 'registry.json')),
     subscription: fakeSignals,
+    dispatcherDir: dir,
+    projectsDir: dir,
   })
 }
 

@@ -590,6 +590,20 @@ and how each point was handled.
 
 ---
 
+## 16. Backlog — deferred past the phase plan
+
+Work intentionally deferred past the A–D plan of §12. These are not part of
+any phase's exit gate; they are recorded here so the intent is not lost.
+
+- **Runtime migration: Bun → Node.** Both TypeScript packages — the
+  orchestration core ([`core/`](/plugins/claudemux/core)) and
+  [`feishu-channel/`](/plugins/feishu-channel) — run on Bun today. Moving them
+  onto the Node runtime is on the backlog, to be taken up once the Codex
+  integration (Phase C) has landed on the main line; no work is scheduled
+  before then.
+
+---
+
 ## See also
 
 - [decisions/0018-mcp-native-orchestration-core.md](/.agents/decisions/0018-mcp-native-orchestration-core.md) — the decision record and the *why*.

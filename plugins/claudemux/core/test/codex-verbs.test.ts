@@ -23,14 +23,14 @@ import {
   codexWait,
   isCodexTarget,
   subscribeTurnCollection,
-} from '../src/codex-verbs'
-import type { CodexWsClient } from '../src/codex-ws'
+} from '../src/engines/codex/verbs'
+import type { CodexWsClient } from '../src/engines/codex/rpc'
 import type {
   NotificationHandler,
   ServerRequestHandler,
-} from '../src/codex-ws'
-import { reapDaemon } from '../src/codex-supervisor'
-import { codexTeammateDir } from '../src/paths'
+} from '../src/engines/codex/rpc'
+import { reapDaemon } from '../src/engines/codex/supervisor'
+import { codexTeammateDir } from '../src/engines/codex/persistence'
 import { closeSync, openSync, writeSync } from 'node:fs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -77,6 +77,7 @@ describe('isCodexTarget — verb-fork prefix detection', () => {
     expect(isCodexTarget('codex-1')).toBe(true)
     expect(isCodexTarget('codex-reviewer')).toBe(true)
     expect(isCodexTarget('codex-')).toBe(true)
+    expect(isCodexTarget('codex/foo')).toBe(true)
   })
 
   test('any other repo name stays on the tmux driver', () => {
@@ -155,9 +156,8 @@ describe('codexAsk — pool borrow semantics', () => {
 
   test('reports "all busy" when every alive teammate is already borrowed', async () => {
     // Spawn one teammate, hold its borrow lock from this test, then ask.
-    // The fake daemon does not speak the protocol, but ask's contention
-    // check fires before the protocol round-trip — it should fail at
-    // "all busy" without ever opening the websocket.
+    // The contention check fires before the protocol round-trip — it should
+    // fail at "all busy" without ever opening the websocket.
     const name = nameUnder()
     toReap.push(name)
     await codexSpawn(name)

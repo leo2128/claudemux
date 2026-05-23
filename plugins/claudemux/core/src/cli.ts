@@ -25,6 +25,7 @@ import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from './help'
 import { NATIVE_VERBS, type NativeEnv } from './native'
 import { type TmResult, type TmRunOptions } from './tm'
 import { runTmux } from './tmux'
+import { productionRegistry } from './engines/production'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -281,5 +282,6 @@ export function productionEnv(): NativeEnv {
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
+    engines: productionRegistry(),
   }
 }

@@ -55,20 +55,24 @@ import type { TmResult, TmRunOptions } from './tm'
 import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
+import type { EngineRegistryView } from './engines/registry'
 import {
   codexAsk,
   codexKill,
+  codexListLines,
   codexSend,
   codexSpawn,
+  codexStateRows,
+  codexStatus,
   codexWait,
   isCodexTarget,
-} from './codex-verbs'
+} from './engines/codex/verbs'
 import {
   isProcessAlive as codexProcessAlive,
   listDaemons as listCodexDaemons,
   readDaemonState as readCodexState,
   reapDaemon as reapCodexDaemon,
-} from './codex-supervisor'
+} from './engines/codex/supervisor'
 
 /** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
 const SESSION_PREFIX = 'teammate-'
@@ -85,6 +89,8 @@ export interface NativeEnv {
   dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
   projectsDir: string
+  /** Production Engine registry for Phase 2 verbs; optional for legacy tests. */
+  engines?: EngineRegistryView
 }
 
 /**
@@ -138,9 +144,11 @@ const ls: NativeVerb = async (_args, _options, env) => {
   const rows = listing
     .split('\n')
     .filter((line) => sessionField(line).startsWith(SESSION_PREFIX))
+  const codexRows = await codexListLines(env.engines?.get('codex'))
+  const allRows = [...rows, ...codexRows]
   const text =
-    rows.length > 0
-      ? `${rows.join('\n')}\n`
+    allRows.length > 0
+      ? `${allRows.join('\n')}\n`
       : "(no teammate sessions; use 'tm spawn <repo>')\n"
   return { code: 0, stdout: text, stderr: '' }
 }
@@ -485,13 +493,16 @@ function statesRow(repo: string, now: number): string[] {
  */
 const states: NativeVerb = async (_args, _options, env) => {
   const repos = await iterRepos(env.runTmux)
-  if (repos.length === 0) return { code: 0, stdout: '(no teammate sessions)\n', stderr: '' }
-
   // `now` is sampled once, before the loop — `tm`'s `cmd_states` does the same.
   const now = Math.floor(Date.now() / 1000)
+  const codexRows = await codexStateRows(now, env.engines?.get('codex'))
+  if (repos.length === 0 && codexRows.length === 0) {
+    return { code: 0, stdout: '(no teammate sessions)\n', stderr: '' }
+  }
   const rows = [
     ['REPO', 'SID', 'BUSY', 'LAST', 'PREVIEW'],
     ...repos.map((repo) => statesRow(repo, now)),
+    ...codexRows,
   ]
   // The `column` result *is* the verb's result — `tm`'s `cmd_states` likewise
   // ends in `| column`, so `column`'s exit code, stdout, and stderr are what
@@ -1067,6 +1078,7 @@ function sleep(ms: number): Promise<void> {
 const status: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm status <repo> [lines=80]')
+  if (isCodexTarget(repo)) return codexStatus(repo, env.engines?.get('codex'))
   // `||`, not `??`: `tm`'s `${2:-80}` also defaults on an empty-string arg.
   const lines = args[1] || '80'
 
@@ -1146,7 +1158,7 @@ function clearIdle(sid: string): void {
 const kill: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm kill <repo>')
-  if (isCodexTarget(repo)) return codexKill(repo)
+  if (isCodexTarget(repo)) return codexKill(repo, { engine: env.engines?.get('codex') })
   const name = `${SESSION_PREFIX}${repo}`
 
   // A recorded sid means there are hook artifacts to clear first.
@@ -1935,11 +1947,13 @@ const doctor: NativeVerb = async (args, _options, env) => {
 
 /** Parsed arg vector for `tm spawn`, after `parseSpawnArgs`. */
 interface SpawnArgs {
+  engine: 'claude' | 'codex' | null
   resumeSid: string
   task: string
   prompt: string
   hasPrompt: boolean
   noWait: boolean
+  timeout: string | null
 }
 
 /**
@@ -1956,16 +1970,38 @@ function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult 
   let prompt = ''
   let hasPrompt = false
   let noWait = false
+  let timeout: string | null = null
+  let engine: 'claude' | 'codex' | null = null
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!
     if (arg === '--resume') {
       if (i + 1 >= rest.length) return { error: SILENT }
       resumeSid = rest[i + 1]!
       i++
+    } else if (arg === '--engine') {
+      if (i + 1 >= rest.length) return { error: die('tm spawn: --engine requires a value') }
+      const value = rest[i + 1]!
+      if (value !== 'claude' && value !== 'codex') {
+        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) }
+      }
+      engine = value
+      i++
+    } else if (arg.startsWith('--engine=')) {
+      const value = arg.slice('--engine='.length)
+      if (value !== 'claude' && value !== 'codex') {
+        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) }
+      }
+      engine = value
     } else if (arg === '--task') {
       if (i + 1 >= rest.length) return { error: SILENT }
       task = rest[i + 1]!
       i++
+    } else if (arg === '--timeout') {
+      if (i + 1 >= rest.length) return { error: die('tm spawn: --timeout requires a value') }
+      timeout = rest[i + 1]!
+      i++
+    } else if (arg.startsWith('--timeout=')) {
+      timeout = arg.slice('--timeout='.length)
     } else if (arg.startsWith('--task=')) {
       task = arg.slice('--task='.length)
     } else if (arg === '--prompt') {
@@ -1982,7 +2018,7 @@ function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult 
       return { error: die(`unknown flag: ${arg}`) }
     }
   }
-  return { resumeSid, task, prompt, hasPrompt, noWait }
+  return { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout }
 }
 
 /**
@@ -2044,22 +2080,34 @@ const spawn: NativeVerb = async (args, _options, env) => {
   if (repo.length === 0) {
     return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
   }
-  // A `codex-<n>` target spawns a codex `app-server` daemon instead of a
-  // Claude REPL inside tmux. The codex driver has its own argument
-  // surface (no `--task`, no `--resume` yet); the dispatcher gets a
-  // uniform `TmResult` back either way. See `codex-verbs.ts`.
-  if (isCodexTarget(repo)) {
-    if (args.length > 1) {
-      return die(
-        `tm spawn: codex teammate '${repo}' takes no additional arguments yet ` +
-          `(stage 4 surface is just 'tm spawn ${repo}'; --prompt etc. land later)`,
-      )
-    }
-    return codexSpawn(repo)
-  }
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
-  const { resumeSid, task, prompt, hasPrompt, noWait } = parsed
+  const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed
+
+  // Codex teammates run as per-teammate daemons and are not tmux sessions.
+  // Route explicit `--engine codex`, the legacy `codex-<n>` pool names, and
+  // the nested `codex/<name>` shape through the CodexEngine adapter.
+  if (engine === 'codex' || isCodexTarget(repo)) {
+    if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
+    if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
+    if (noWait) return die('tm spawn: --no-wait is not supported for codex teammates')
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
+      return die(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
+    const repoPath = join(env.dispatcherDir, repo)
+    const cwdPhys = isDirectory(repoPath) ? realpathSync(repoPath) : realpathSync(env.dispatcherDir)
+    return codexSpawn(repo, {
+      cwd: cwdPhys,
+      prompt: hasPrompt ? prompt : null,
+      timeoutSec: timeout === null ? null : Number(timeout),
+      displayName: null,
+      engine: env.engines?.get('codex'),
+    })
+  }
+
+  if (engine === 'claude') {
+    // Explicit Claude stays on the tmux-backed path below.
+  }
 
   if (noWait && !hasPrompt) {
     return die(
@@ -2306,37 +2354,6 @@ function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } 
  * to ..." preamble, the post-turn ctx echo) ride stderr exclusively.
  */
 const send: NativeVerb = async (args, _options, env) => {
-  const firstArg = args[0] ?? ''
-  if (isCodexTarget(firstArg)) {
-    // Codex teammates speak over WebSocket, not tmux + hooks. The codex
-    // `send` understands `--prompt` and `--no-wait`; tmux-bound flags
-    // (`--pane-quiet`, `--timeout`) are rejected explicitly rather than
-    // silently ignored. `--no-wait` here means "fire turn/start and
-    // return without blocking on turn/completed" — the matching
-    // `tm wait codex-<n>` picks up the completion later, so the verb
-    // pair behaves like the Claude-side `tm send --no-wait` / `tm wait`
-    // composition.
-    const rest = args.slice(1)
-    let prompt: string | null = null
-    let noWait = false
-    for (let i = 0; i < rest.length; i++) {
-      const a = rest[i]
-      if (a === '--prompt') {
-        if (i + 1 >= rest.length) return die('tm send: --prompt requires a value')
-        prompt = rest[i + 1] ?? ''
-        i += 1
-      } else if (a === '--no-wait') {
-        noWait = true
-      } else {
-        return die(
-          `tm send: codex teammate '${firstArg}' does not yet accept '${a}' ` +
-            `(stage 4 surface is '--prompt' and '--no-wait')`,
-        )
-      }
-    }
-    if (prompt === null) return die('tm send: missing --prompt')
-    return codexSend(firstArg, prompt, { noWait })
-  }
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
@@ -2354,6 +2371,12 @@ const send: NativeVerb = async (args, _options, env) => {
   }
   if (!isNonNegativeInteger(timeout)) {
     return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
+  }
+
+  if (isCodexTarget(repo)) {
+    if (noWait) return die('tm send: --no-wait is not supported for codex teammates')
+    if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
+    return codexSend(repo, prompt, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
   }
 
   const sentResult = await sendKeys(repo, prompt, env)
@@ -2441,21 +2464,6 @@ function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } 
  * Stop that wakes the wait, not a prior one.
  */
 const wait: NativeVerb = async (args, _options, env) => {
-  const firstArg = args[0] ?? ''
-  if (isCodexTarget(firstArg)) {
-    // Codex `wait`: block on the next `turn/completed` notification from
-    // the daemon. The tmux-bound flags (timeout, --fresh, --pane-quiet)
-    // are not applicable yet — they encode signal-detection knobs for
-    // the hooks-based driver.
-    const rest = args.slice(1)
-    if (rest.length > 0) {
-      return die(
-        `tm wait: codex teammate '${firstArg}' takes no additional arguments yet ` +
-          `(stage 4 surface is just 'tm wait ${firstArg}')`,
-      )
-    }
-    return codexWait(firstArg)
-  }
   const parsed = parseWaitArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, timeout, fresh, paneQuiet } = parsed
@@ -2466,6 +2474,12 @@ const wait: NativeVerb = async (args, _options, env) => {
   }
   if (!isNonNegativeInteger(timeout)) {
     return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
+  }
+
+  if (isCodexTarget(repo)) {
+    if (fresh) return die('tm wait: --fresh is not supported for codex teammates')
+    if (paneQuiet) return die('tm wait: --pane-quiet is not supported for codex teammates')
+    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
   }
 
   const timeoutSec = Number(timeout)

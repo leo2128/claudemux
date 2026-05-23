@@ -3829,6 +3829,10 @@ var HELP_TEXTS = {
       reply yet" error instead of stale content from an earlier sid.
       The --prompt sync path inherits 'tm send''s stderr ctx echo
       after the first-turn Stop.
+      Codex teammates can be spawned with the legacy codex-<n> /
+      codex/<name> target shape or by passing --engine codex. Their
+      daemon is not a tmux session; --task, --resume, and --no-wait
+      are rejected on that path.
       Every teammate launches with the AskUserQuestion tool disabled
       (this applies to 'tm resume' too). A teammate runs with no
       human at its terminal, and that tool's modal holds the turn
@@ -3871,11 +3875,10 @@ var HELP_TEXTS = {
       exit 1.
 
       When <repo> is a codex teammate (name starts with 'codex-'),
-      this verb routes into the codex driver instead: only --prompt
-      and --no-wait are accepted, the reply on stdout is the raw
-      Turn JSON, and --no-wait composes with 'tm wait codex-<n>' for
-      the async case. Tmux-bound flags (--pane-quiet, --timeout) are
-      rejected explicitly rather than silently ignored.
+      this verb routes into the codex driver instead: --prompt is
+      required, --timeout is accepted, the reply on stdout is the raw
+      Turn JSON, and --no-wait / --pane-quiet are rejected explicitly
+      rather than silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
@@ -4070,17 +4073,17 @@ var REMOVED_VERB_MESSAGES = {
 // src/native.ts
 import {
   existsSync as existsSync2,
-  mkdirSync as mkdirSync2,
+  mkdirSync as mkdirSync3,
   readdirSync as readdirSync2,
   readFileSync as readFileSync3,
   realpathSync,
-  rmSync as rmSync3,
+  rmSync as rmSync4,
   statSync as statSync2,
-  writeFileSync as writeFileSync2
+  writeFileSync as writeFileSync3
 } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/paths.ts
 import { join } from "node:path";
@@ -4111,34 +4114,59 @@ function readyFile(repo) {
 function encodeProjectDir(cwd) {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
-function codexRegistryRoot() {
-  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
-}
-function codexTeammateDir(name) {
-  return join(codexRegistryRoot(), name);
-}
-function codexSocketPath(name) {
-  return join(codexTeammateDir(name), "socket");
-}
-function codexPidFile(name) {
-  return join(codexTeammateDir(name), "pid");
-}
-function codexStartedAtFile(name) {
-  return join(codexTeammateDir(name), "started-at");
-}
-function codexThreadFile(name) {
-  return join(codexTeammateDir(name), "thread");
-}
-function codexLastSeenFile(name) {
-  return join(codexTeammateDir(name), "last-seen");
-}
-function codexMetaFile(name) {
-  return join(codexTeammateDir(name), "meta.json");
-}
 
-// src/codex-verbs.ts
-import { closeSync as closeSync2, openSync as openSync2, readFileSync as readFileSync2, rmSync as rmSync2, writeSync as writeSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+// src/engines/codex/verbs.ts
+import { closeSync as closeSync2, openSync as openSync2, rmSync as rmSync3, writeSync as writeSync2 } from "node:fs";
+
+// src/verbs/format.ts
+function teammateNotFound(name) {
+  return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
+` };
+}
+function noEngineRegistered() {
+  return {
+    code: 1,
+    stdout: "",
+    stderr: "tm: no engine registered in this process (Phase 2 wiring pending)\n"
+  };
+}
+function formatListing(rows) {
+  if (rows.length === 0) return { code: 0, stdout: "", stderr: "" };
+  const lines = rows.map((r) => `${r.name}	${r.engine}	${r.state}	${r.cwd}`);
+  return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+}
+function formatStatus(status2) {
+  switch (status2.kind) {
+    case "present": {
+      return { code: 0, stdout: status2.pane ?? "", stderr: "" };
+    }
+    case "not-found":
+      return { code: 1, stdout: "", stderr: "tm: status: not found\n" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: status: ${status2.message}
+` };
+  }
+}
+function formatTurn(turn) {
+  switch (turn.kind) {
+    case "completed":
+      return { code: 0, stdout: turn.text.endsWith("\n") ? turn.text : `${turn.text}
+`, stderr: "" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: turn failed: ${turn.message}
+` };
+    case "timed-out":
+      return { code: 1, stdout: "", stderr: `tm: turn timed out after ${turn.elapsedMs}ms
+` };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${turn.reason}
+` };
+    case "no-op":
+      return { code: 0, stdout: "", stderr: `  no-op: ${turn.reason}
+` };
+  }
+}
 
 // node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -4151,7 +4179,7 @@ var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 var wrapper_default = import_websocket.default;
 
-// src/codex-ws.ts
+// src/engines/codex/rpc.ts
 var CodexWsClient = class {
   ws;
   pending = /* @__PURE__ */ new Map();
@@ -4236,7 +4264,7 @@ var CodexWsClient = class {
   /** Tear down. Pending requests reject with the caller's reason. */
   close() {
     this.tearDown(new Error("codex client closed by caller"));
-    this.ws.close();
+    this.ws.terminate();
   }
   onFrame(data) {
     let parsed;
@@ -4317,25 +4345,254 @@ var CodexWsClient = class {
   }
 };
 
-// src/codex-supervisor.ts
+// src/engines/codex/events.ts
+function subscribeTurnCollection(client, threadId) {
+  const itemsByTurn = /* @__PURE__ */ new Map();
+  let cached = null;
+  let awaiting = null;
+  let resolveTurn = null;
+  let done = false;
+  const onResolve = (params) => {
+    const items = itemsByTurn.get(params.turn.id) ?? [];
+    const itemsView = items.length > 0 ? "full" : "notLoaded";
+    const merged = {
+      ...params,
+      turn: { ...params.turn, items, itemsView }
+    };
+    cached = merged;
+    if (resolveTurn !== null) {
+      resolveTurn(merged);
+      resolveTurn = null;
+    }
+  };
+  client.onNotification((notif) => {
+    if (done) return;
+    if (notif.method === "item/completed") {
+      const params = notif.params;
+      if (params.threadId !== threadId) return;
+      const bucket = itemsByTurn.get(params.turnId) ?? [];
+      bucket.push(params.item);
+      itemsByTurn.set(params.turnId, bucket);
+    } else if (notif.method === "turn/completed") {
+      const params = notif.params;
+      if (params.threadId !== threadId) return;
+      done = true;
+      onResolve(params);
+    }
+  });
+  return {
+    awaitTurn() {
+      if (cached !== null) return Promise.resolve(cached);
+      if (awaiting !== null) return awaiting;
+      awaiting = new Promise((res) => {
+        resolveTurn = res;
+      });
+      return awaiting;
+    }
+  };
+}
+async function runTurn(client, threadId, prompt, options) {
+  const collector = options.wait ? subscribeTurnCollection(client, threadId) : null;
+  await client.request("turn/start", {
+    threadId,
+    input: [{ type: "text", text: prompt, text_elements: [] }],
+    ...options.cwd === null ? {} : { cwd: options.cwd }
+  });
+  if (collector === null) return null;
+  return collector.awaitTurn();
+}
+
+// src/engines/codex/supervisor.ts
 import {
   spawn as spawnChild
 } from "node:child_process";
-import { join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 import {
   closeSync,
   existsSync,
-  mkdirSync,
+  mkdirSync as mkdirSync2,
   openSync,
-  readFileSync,
+  readFileSync as readFileSync2,
   readdirSync,
-  renameSync,
-  rmSync,
+  renameSync as renameSync2,
+  rmSync as rmSync2,
   statSync,
-  writeFileSync,
+  writeFileSync as writeFileSync2,
   writeSync
 } from "node:fs";
+
+// src/engines/codex/persistence.ts
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { dirname, join as join2 } from "node:path";
+
+// src/engines/teammate-record.ts
+var TEAMMATE_RECORD_SCHEMA = 1;
+var TeammateRecord = class {
+  schema = TEAMMATE_RECORD_SCHEMA;
+  name;
+  cwd;
+  createdAt;
+  displayName;
+  constructor(args) {
+    this.name = args.name;
+    this.cwd = args.cwd;
+    this.createdAt = args.createdAt;
+    this.displayName = args.displayName;
+  }
+  /**
+   * Absolute path of the base JSON file for this teammate. The single
+   * builder so the file shape changes in one place.
+   */
+  static markerPath(name) {
+    return `/tmp/teammate-${name}.json`;
+  }
+  /** Serialise this record's base fields to the on-disk JSON shape. */
+  toJson() {
+    return {
+      schema: this.schema,
+      name: this.name,
+      engine: this.engine,
+      cwd: this.cwd,
+      createdAt: this.createdAt,
+      displayName: this.displayName
+    };
+  }
+};
+
+// src/engines/codex/persistence.ts
+function codexRegistryRoot() {
+  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
+}
+function codexTeammateDir(name) {
+  return join2(codexRegistryRoot(), name);
+}
+function codexSocketPath(name) {
+  return join2(codexTeammateDir(name), "socket");
+}
+function codexPidFile(name) {
+  return join2(codexTeammateDir(name), "pid");
+}
+function codexStartedAtFile(name) {
+  return join2(codexTeammateDir(name), "started-at");
+}
+function codexThreadFile(name) {
+  return join2(codexTeammateDir(name), "thread");
+}
+function codexLastSeenFile(name) {
+  return join2(codexTeammateDir(name), "last-seen");
+}
+function codexStdoutLogFile(name) {
+  return join2(codexTeammateDir(name), "stdout.log");
+}
+function codexStderrLogFile(name) {
+  return join2(codexTeammateDir(name), "stderr.log");
+}
+function codexMetaFile(name) {
+  return join2(codexTeammateDir(name), "meta.json");
+}
+function codexBorrowLockFile(name) {
+  return join2(codexTeammateDir(name), "lock");
+}
+function codexExtension(name) {
+  const root = codexTeammateDir(name);
+  return {
+    root,
+    pid: codexPidFile(name),
+    socket: codexSocketPath(name),
+    thread: codexThreadFile(name),
+    startedAt: codexStartedAtFile(name),
+    lastSeen: codexLastSeenFile(name),
+    stdoutLog: codexStdoutLogFile(name),
+    stderrLog: codexStderrLogFile(name),
+    meta: codexMetaFile(name),
+    lock: codexBorrowLockFile(name)
+  };
+}
 function atomicWrite(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, content, { mode: 384 });
+  renameSync(tmp, path);
+}
+function readBaseRecord(name) {
+  try {
+    const parsed = JSON.parse(readFileSync(TeammateRecord.markerPath(name), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && (parsed.engine === "claude" || parsed.engine === "codex") && typeof parsed.cwd === "string" && typeof parsed.createdAt === "number") {
+      const displayName = parsed.displayName;
+      return {
+        schema: 1,
+        name: parsed.name,
+        engine: parsed.engine,
+        cwd: parsed.cwd,
+        createdAt: parsed.createdAt,
+        displayName: typeof displayName === "string" ? displayName : null
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function writeBaseRecord(record) {
+  atomicWrite(
+    TeammateRecord.markerPath(record.name),
+    `${JSON.stringify(record.toJson(), null, 2)}
+`
+  );
+}
+function removeBaseRecord(name) {
+  rmSync(TeammateRecord.markerPath(name), { force: true });
+}
+function readCodexMeta(name) {
+  try {
+    const parsed = JSON.parse(readFileSync(codexMetaFile(name), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && typeof parsed.cwd === "string" && typeof parsed.spawnedAt === "number") {
+      const displayName = parsed.displayName;
+      return {
+        schema: 1,
+        name: parsed.name,
+        cwd: parsed.cwd,
+        displayName: typeof displayName === "string" ? displayName : null,
+        spawnedAt: parsed.spawnedAt
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+var CodexTeammateRecord = class extends TeammateRecord {
+  engine = "codex";
+  constructor(args) {
+    super(args);
+  }
+  extension() {
+    return codexExtension(this.name);
+  }
+  engineExtensionFiles() {
+    const ext = this.extension();
+    return [
+      ext.pid,
+      ext.socket,
+      ext.thread,
+      ext.startedAt,
+      ext.lastSeen,
+      ext.stdoutLog,
+      ext.stderrLog,
+      ext.meta,
+      ext.lock
+    ];
+  }
+};
+
+// src/engines/codex/supervisor.ts
+function atomicWrite2(path, content) {
   const tmpPath = `${path}.tmp`;
   const fd = openSync(tmpPath, "w", 384);
   try {
@@ -4343,11 +4600,11 @@ function atomicWrite(path, content) {
   } finally {
     closeSync(fd);
   }
-  renameSync(tmpPath, path);
+  renameSync2(tmpPath, path);
 }
 function readIntFile(path) {
   try {
-    const txt = readFileSync(path, "utf8").trim();
+    const txt = readFileSync2(path, "utf8").trim();
     if (txt === "") return null;
     const n = Number.parseInt(txt, 10);
     return Number.isFinite(n) ? n : null;
@@ -4357,7 +4614,7 @@ function readIntFile(path) {
 }
 function readTextFile(path) {
   try {
-    return readFileSync(path, "utf8").trim() || null;
+    return readFileSync2(path, "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -4406,7 +4663,18 @@ function daemonAlive(name) {
 }
 function listDaemons() {
   try {
-    return readdirSync(codexRegistryRoot()).sort();
+    const root = codexRegistryRoot();
+    const names = [];
+    const walk = (dir, prefix) => {
+      if (prefix.length > 0 && existsSync(join3(dir, "pid"))) names.push(prefix);
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const childPrefix = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
+        walk(join3(dir, entry.name), childPrefix);
+      }
+    };
+    walk(root, "");
+    return names.sort();
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw e;
@@ -4414,20 +4682,40 @@ function listDaemons() {
 }
 async function spawnDaemon(opts) {
   const { name } = opts;
-  const binPath = opts.binPath ?? (process.env["CLAUDEMUX_CODEX_BIN"] || "codex");
   const dir = codexTeammateDir(name);
   const socketPath = codexSocketPath(name);
   const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
-  if (daemonAlive(name)) {
-    throw new Error(
-      `codex daemon '${name}' is already alive (pid ${readDaemonState(name)?.pid ?? "?"}); reap it first with tm doctor / tm kill`
-    );
+  const spawnLock = `${dir}.spawn.lock`;
+  mkdirSync2(dirname2(spawnLock), { recursive: true });
+  let lockFd = null;
+  try {
+    lockFd = openSync(spawnLock, "wx", 384);
+    writeSync(lockFd, `${process.pid}
+`);
+  } catch {
+    throw new Error(`codex daemon '${name}' is already being spawned`);
   }
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
+  try {
+    if (daemonAlive(name)) {
+      throw new Error(
+        `codex daemon '${name}' is already alive (pid ${readDaemonState(name)?.pid ?? "?"}); reap it first with tm doctor / tm kill`
+      );
+    }
+    rmSync2(dir, { recursive: true, force: true });
+    mkdirSync2(dir, { recursive: true });
+    const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs);
+    return state;
+  } finally {
+    if (lockFd !== null) closeSync(lockFd);
+    rmSync2(spawnLock, { force: true });
+  }
+}
+async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
+  const { name } = opts;
+  const binPath = opts.binPath ?? (process.env["CLAUDEMUX_CODEX_BIN"] || "codex");
   const args = ["app-server", "--listen", `unix://${socketPath}`, ...opts.extraArgs ?? []];
-  const stdoutLog = join2(dir, "stdout.log");
-  const stderrLog = join2(dir, "stderr.log");
+  const stdoutLog = codexStdoutLogFile(name);
+  const stderrLog = codexStderrLogFile(name);
   const stdoutFd = openSync(stdoutLog, "a", 384);
   const stderrFd = openSync(stderrLog, "a", 384);
   const spawnOpts = {
@@ -4455,7 +4743,7 @@ async function spawnDaemon(opts) {
   } catch (e) {
     closeSync(stdoutFd);
     closeSync(stderrFd);
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
     );
@@ -4467,22 +4755,22 @@ async function spawnDaemon(opts) {
   });
   const pid = child.pid;
   if (pid === void 0) {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
     throw new Error(`codex daemon '${name}' spawned without a pid`);
   }
   const startedAt = nowSec();
-  atomicWrite(codexPidFile(name), `${pid}
+  atomicWrite2(codexPidFile(name), `${pid}
 `);
-  atomicWrite(codexStartedAtFile(name), `${startedAt}
+  atomicWrite2(codexStartedAtFile(name), `${startedAt}
 `);
   if (opts.meta !== void 0 && opts.meta !== null) {
-    atomicWrite(codexMetaFile(name), JSON.stringify(opts.meta, null, 2) + "\n");
+    atomicWrite2(codexMetaFile(name), JSON.stringify(opts.meta, null, 2) + "\n");
   }
   try {
     await waitForSocket(socketPath, pid, readyTimeoutMs);
   } catch (e) {
     killProcessGroup(pid, "SIGKILL");
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
     throw e;
   }
   return {
@@ -4528,216 +4816,446 @@ async function reapDaemon(name) {
     }
     killProcessGroup(state.pid, "SIGKILL");
   }
-  rmSync(codexTeammateDir(name), { recursive: true, force: true });
+  rmSync2(codexTeammateDir(name), { recursive: true, force: true });
 }
 function touchLastSeen(name) {
-  writeFileSync(codexLastSeenFile(name), `${nowSec()}
+  writeFileSync2(codexLastSeenFile(name), `${nowSec()}
 `);
 }
 function writeThreadId(name, threadId) {
-  atomicWrite(codexThreadFile(name), `${threadId}
+  atomicWrite2(codexThreadFile(name), `${threadId}
 `);
 }
 
-// src/codex-verbs.ts
-var CLIENT_INFO = {
+// src/engines/codex/engine.ts
+var CODEX_CLIENT_INFO = {
   name: "claudemux",
   title: null,
   version: "1.0.0-beta.0"
 };
+var COMPACT_REASON = "codex compacts its own context automatically when the 252k window fills";
+function notSupported(reason) {
+  return { kind: "not-supported", reason };
+}
+function itemToInteractions(item) {
+  if (item.type === "agentMessage") {
+    return [{ kind: "assistant-text", text: item.text }];
+  }
+  if (item.type === "commandExecution") {
+    return [
+      { kind: "tool-call", tool: "commandExecution", argsJson: item.command },
+      {
+        kind: "tool-result",
+        tool: "commandExecution",
+        ok: item.exitCode === 0,
+        textOrJson: item.aggregatedOutput ?? ""
+      }
+    ];
+  }
+  if (item.type === "mcpToolCall") {
+    return [
+      { kind: "tool-call", tool: item.tool, argsJson: JSON.stringify(item.arguments) },
+      {
+        kind: "tool-result",
+        tool: item.tool,
+        ok: item.error === null,
+        textOrJson: JSON.stringify(item.result ?? item.error ?? null)
+      }
+    ];
+  }
+  return [{ kind: "system-note", text: JSON.stringify(item) }];
+}
+function turnNotificationToResult(completed) {
+  const text = `${JSON.stringify(completed, null, 2)}
+`;
+  const items = completed.turn.items.flatMap((item) => itemToInteractions(item));
+  if (completed.turn.status === "failed") {
+    return {
+      kind: "failed",
+      message: completed.turn.error?.message ?? "codex turn failed",
+      recoverable: false
+    };
+  }
+  if (completed.turn.status === "interrupted") {
+    return {
+      kind: "failed",
+      message: "codex turn was interrupted",
+      recoverable: true
+    };
+  }
+  return { kind: "completed", text, items, context: null };
+}
+async function withTimeout(promise, timeoutMs) {
+  if (timeoutMs === null) return promise;
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+function isTimedOut(value) {
+  return typeof value === "object" && value !== null && value.timedOut === true;
+}
+var CodexEngine = class {
+  constructor(options = {}) {
+    this.options = options;
+  }
+  kind = "codex";
+  capabilities = {
+    atomicSend: true,
+    atomicSpawnPrompt: true,
+    compaction: "auto",
+    contextUsage: "rpc-token-usage",
+    history: "unsupported",
+    memory: "unsupported",
+    reload: "unsupported",
+    resume: "unsupported",
+    detachedTurn: "unsupported",
+    events: "push"
+  };
+  async spawn(req, ctx2) {
+    const existing = readBaseRecord(req.name);
+    if (existing !== null) {
+      if (existing.engine !== "codex") return { kind: "already-exists", existingEngine: existing.engine };
+      if (daemonAlive(req.name)) return { kind: "already-exists", existingEngine: "codex" };
+      removeBaseRecord(req.name);
+    }
+    if (daemonAlive(req.name)) return { kind: "already-exists", existingEngine: "codex" };
+    const createdAt = Math.floor(ctx2.now() / 1e3);
+    const record = new CodexTeammateRecord({
+      name: req.name,
+      cwd: req.cwd,
+      createdAt,
+      displayName: req.displayName
+    });
+    try {
+      await spawnDaemon({
+        name: req.name,
+        binPath: this.options.binPath,
+        cwd: req.cwd,
+        env: ctx2.env,
+        readyTimeoutMs: this.options.readyTimeoutMs,
+        meta: {
+          schema: 1,
+          name: req.name,
+          cwd: req.cwd,
+          displayName: req.displayName,
+          spawnedAt: createdAt
+        }
+      });
+      await this.healthCheck(req.name);
+      writeBaseRecord(record);
+      if (req.prompt === null) {
+        return { kind: "spawned", name: req.name, firstTurn: null };
+      }
+      const firstTurn = await this.send(
+        { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs },
+        ctx2
+      );
+      return { kind: "spawned", name: req.name, firstTurn };
+    } catch (e) {
+      await reapDaemon(req.name);
+      removeBaseRecord(req.name);
+      return {
+        kind: "failed",
+        message: e instanceof Error ? e.message : String(e)
+      };
+    }
+  }
+  async send(req, _ctx) {
+    if (!daemonAlive(req.name)) {
+      return {
+        kind: "failed",
+        message: `codex teammate '${req.name}' is not alive \u2014 try 'tm spawn ${req.name}' first`,
+        recoverable: false
+      };
+    }
+    if (req.prompt.length === 0) {
+      return { kind: "failed", message: 'usage: tm send <teammate> "<prompt>"', recoverable: false };
+    }
+    let client = null;
+    try {
+      client = await openInitializedCodexClient(req.name);
+      let threadId = readDaemonState(req.name)?.threadId ?? null;
+      if (threadId === null) {
+        const resp = await client.request("thread/start", {
+          experimentalRawEvents: false,
+          persistExtendedHistory: false
+        });
+        threadId = resp.thread.id;
+        writeThreadId(req.name, threadId);
+      } else {
+        await client.request("thread/resume", {
+          threadId,
+          persistExtendedHistory: false
+        });
+      }
+      const completed = await withTimeout(
+        runTurn(client, threadId, req.prompt, { wait: true, cwd: null }),
+        req.timeoutMs
+      );
+      if (isTimedOut(completed)) return { kind: "timed-out", elapsedMs: req.timeoutMs ?? 0 };
+      if (completed === null) return { kind: "no-op", reason: "turn was started without waiting" };
+      touchLastSeen(req.name);
+      return turnNotificationToResult(completed);
+    } catch (e) {
+      return {
+        kind: "failed",
+        message: `codex send on '${req.name}' failed: ${e instanceof Error ? e.message : String(e)}`,
+        recoverable: true
+      };
+    } finally {
+      if (client !== null) client.close();
+    }
+  }
+  async wait(req, _ctx) {
+    if (!daemonAlive(req.name)) {
+      return { kind: "failed", message: `codex teammate '${req.name}' is not alive`, recoverable: false };
+    }
+    const threadId = readDaemonState(req.name)?.threadId ?? null;
+    if (threadId === null) {
+      return {
+        kind: "failed",
+        message: `codex teammate '${req.name}' has no started thread yet \u2014 run 'tm send ${req.name} --prompt "\u2026"' first`,
+        recoverable: false
+      };
+    }
+    let client = null;
+    try {
+      client = await openInitializedCodexClient(req.name);
+      await client.request("thread/resume", {
+        threadId,
+        persistExtendedHistory: false
+      });
+      const collector = subscribeTurnCollection(client, threadId);
+      const completed = await withTimeout(
+        collector.awaitTurn(),
+        req.timeoutMs
+      );
+      if (isTimedOut(completed)) return { kind: "timed-out", elapsedMs: req.timeoutMs ?? 0 };
+      touchLastSeen(req.name);
+      return turnNotificationToResult(completed);
+    } catch (e) {
+      return {
+        kind: "failed",
+        message: `codex wait on '${req.name}' failed: ${e instanceof Error ? e.message : String(e)}`,
+        recoverable: true
+      };
+    } finally {
+      if (client !== null) client.close();
+    }
+  }
+  async kill(req, _ctx) {
+    const state = readDaemonState(req.name);
+    const base = readBaseRecord(req.name);
+    const meta = readCodexMeta(req.name);
+    if (state === null && base === null && meta === null) return { kind: "not-found" };
+    try {
+      await reapDaemon(req.name);
+      removeBaseRecord(req.name);
+      return { kind: "killed" };
+    } catch (e) {
+      return { kind: "failed", message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async list(_ctx) {
+    return listDaemons().map((name) => {
+      const state = readDaemonState(name);
+      const base = readBaseRecord(name);
+      const meta = readCodexMeta(name);
+      return {
+        name,
+        engine: "codex",
+        state: state !== null && isProcessAlive(state.pid) ? "idle" : "unknown",
+        cwd: base?.cwd ?? meta?.cwd ?? "",
+        displayName: base?.displayName ?? meta?.displayName ?? null,
+        extras: {
+          pid: state?.pid === void 0 ? "" : String(state.pid),
+          socket: state?.socketPath ?? "",
+          thread: state?.threadId ?? "",
+          lastSeen: state?.lastSeen === null || state?.lastSeen === void 0 ? "" : String(state.lastSeen)
+        }
+      };
+    });
+  }
+  async status(req, _ctx) {
+    const state = readDaemonState(req.name);
+    const base = readBaseRecord(req.name);
+    const meta = readCodexMeta(req.name);
+    if (state === null && base === null && meta === null) return { kind: "not-found" };
+    return {
+      kind: "present",
+      name: req.name,
+      engine: "codex",
+      state: state !== null && isProcessAlive(state.pid) ? "idle" : "unknown",
+      cwd: base?.cwd ?? meta?.cwd ?? "",
+      pane: null,
+      diagnostics: {
+        pid: state?.pid === void 0 ? "" : String(state.pid),
+        socket: state?.socketPath ?? "",
+        thread: state?.threadId ?? "",
+        startedAt: state?.startedAt === void 0 ? "" : String(state.startedAt),
+        lastSeen: state?.lastSeen === null || state?.lastSeen === void 0 ? "" : String(state.lastSeen)
+      }
+    };
+  }
+  async compact(_req, _ctx) {
+    return { kind: "not-supported", reason: COMPACT_REASON };
+  }
+  async resume(_req, _ctx) {
+    return { kind: "not-supported", reason: "codex thread resume is internal to send/wait in Phase 2b" };
+  }
+  async last(_req, _ctx) {
+    return notSupported("codex app-server does not expose last-turn text as a standalone read");
+  }
+  async ctx(_req, _ctx) {
+    return { kind: "not-supported", reason: "codex context usage is not exposed through the Phase 2b engine yet" };
+  }
+  async history(_req, _ctx) {
+    return { kind: "not-supported", reason: "codex thread history enumeration is not exposed through the Phase 2b engine yet" };
+  }
+  async mem(_req, _ctx) {
+    return notSupported("codex does not use Claude project memory files");
+  }
+  async reload(_req, _ctx) {
+    return { kind: "not-supported", reason: "codex has no reload prompt command" };
+  }
+  async inspect(req, _ctx) {
+    const status2 = await this.status({ name: req.name, lines: null }, _ctx);
+    if (status2.kind !== "present") return { engine: "codex", name: req.name, fields: { status: status2.kind } };
+    return { engine: "codex", name: req.name, fields: status2.diagnostics };
+  }
+  async doctor(_ctx) {
+    const findings = [];
+    for (const name of listDaemons()) {
+      const state = readDaemonState(name);
+      if (state === null) {
+        await reapDaemon(name);
+        findings.push({ severity: "warn", summary: `reaped malformed codex daemon entry ${name}`, fix: null });
+      } else if (!isProcessAlive(state.pid)) {
+        await reapDaemon(name);
+        findings.push({ severity: "warn", summary: `reaped stale codex daemon ${name} (pid=${state.pid})`, fix: null });
+      } else {
+        findings.push({ severity: "ok", summary: `${name} alive (pid=${state.pid})`, fix: null });
+      }
+    }
+    return { engine: "codex", findings };
+  }
+  async healthCheck(name) {
+    const initialized = await withTimeout(
+      openInitializedCodexClient(name),
+      this.options.readyTimeoutMs ?? 1e4
+    );
+    if (isTimedOut(initialized)) {
+      throw new Error(`codex daemon '${name}' did not answer initialize within health-check timeout`);
+    }
+    const client = initialized;
+    client.close();
+  }
+};
+async function openInitializedCodexClient(name) {
+  const state = readDaemonState(name);
+  if (state === null) throw new Error(`codex daemon '${name}' has no registry state`);
+  const client = new CodexWsClient({ socketPath: state.socketPath });
+  try {
+    await client.ready();
+    await client.request("initialize", {
+      clientInfo: CODEX_CLIENT_INFO,
+      capabilities: {
+        experimentalApi: true,
+        requestAttestation: false
+      }
+    });
+    return client;
+  } catch (e) {
+    client.close();
+    throw e;
+  }
+}
+
+// src/engines/codex/verbs.ts
 function die(message) {
   return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
 }
+function engineContext() {
+  return { now: () => Date.now(), env: process.env };
+}
+function resolveEngine(engine) {
+  return engine ?? new CodexEngine();
+}
+function timeoutMsFromSeconds(timeoutSec) {
+  return timeoutSec === null ? null : timeoutSec * 1e3;
+}
 function isCodexTarget(name) {
-  return name.startsWith("codex-");
+  if (name.startsWith("codex-") || name.startsWith("codex/")) return true;
+  const base = readBaseRecord(name);
+  if (base?.engine === "codex") return true;
+  return readDaemonState(name) !== null;
 }
-async function openInitialized(name) {
-  const client = new CodexWsClient({ socketPath: codexSocketPath(name) });
-  await client.ready();
-  await client.request("initialize", {
-    clientInfo: CLIENT_INFO,
-    capabilities: {
-      // Opt into the experimental methods the codex protocol marks
-      // upstream — every verb here uses one (thread/start, turn/start,
-      // turn/completed). Without this opt-in the daemon would suppress
-      // them.
-      experimentalApi: true,
-      requestAttestation: false
-    }
-  });
-  return client;
-}
-function readThreadId(name) {
-  try {
-    const txt = readFileSync2(codexThreadFile(name), "utf8").trim();
-    return txt.length === 0 ? null : txt;
-  } catch {
-    return null;
-  }
-}
-function subscribeTurnCollection(client, threadId) {
-  const itemsByTurn = /* @__PURE__ */ new Map();
-  let cached = null;
-  let awaiting = null;
-  let resolveTurn = null;
-  let done = false;
-  const onResolve = (params) => {
-    const items = itemsByTurn.get(params.turn.id) ?? [];
-    const itemsView = items.length > 0 ? "full" : "notLoaded";
-    const merged = {
-      ...params,
-      turn: { ...params.turn, items, itemsView }
-    };
-    cached = merged;
-    if (resolveTurn !== null) {
-      resolveTurn(merged);
-      resolveTurn = null;
-    }
-  };
-  client.onNotification((notif) => {
-    if (done) return;
-    if (notif.method === "item/completed") {
-      const params = notif.params;
-      if (params.threadId !== threadId) return;
-      const bucket = itemsByTurn.get(params.turnId) ?? [];
-      bucket.push(params.item);
-      itemsByTurn.set(params.turnId, bucket);
-    } else if (notif.method === "turn/completed") {
-      const params = notif.params;
-      if (params.threadId !== threadId) return;
-      done = true;
-      onResolve(params);
-    }
-  });
-  return {
-    awaitTurn() {
-      if (cached !== null) return Promise.resolve(cached);
-      if (awaiting !== null) return awaiting;
-      awaiting = new Promise((res) => {
-        resolveTurn = res;
-      });
-      return awaiting;
-    }
-  };
-}
-async function codexSpawn(name) {
-  try {
-    const state = await spawnDaemon({ name });
-    return {
-      code: 0,
-      stdout: "",
-      stderr: `spawned: ${name} (pid=${state.pid}, socket=${state.socketPath})
-`
-    };
-  } catch (e) {
-    return die(e.message);
-  }
-}
-async function runTurn(client, threadId, prompt, wait2) {
-  const collector = wait2 ? subscribeTurnCollection(client, threadId) : null;
-  await client.request("turn/start", {
-    threadId,
-    input: [{ type: "text", text: prompt, text_elements: [] }]
-  });
-  if (collector === null) return null;
-  return collector.awaitTurn();
-}
-async function codexSend(name, prompt, opts = {}) {
-  if (!daemonAlive(name)) {
-    return die(
-      `codex teammate '${name}' is not alive \u2014 try 'tm spawn ${name}' first`
-    );
-  }
-  if (prompt.length === 0) {
-    return die('usage: tm send <teammate> "<prompt>"');
-  }
-  const noWait = opts.noWait ?? false;
-  let client = null;
-  try {
-    client = await openInitialized(name);
-    let threadId = readThreadId(name);
-    if (threadId === null) {
-      const resp = await client.request(
-        "thread/start",
-        {
-          experimentalRawEvents: false,
-          persistExtendedHistory: false
-        }
-      );
-      threadId = resp.thread.id;
-      writeThreadId(name, threadId);
-    } else {
-      await client.request(
-        "thread/resume",
-        {
-          threadId,
-          // `persistExtendedHistory` is the one required ThreadResumeParams
-          // field beyond `threadId`; it does not have `experimentalRawEvents`
-          // the way ThreadStartParams does.
-          persistExtendedHistory: false
-        }
-      );
-    }
-    const params = await runTurn(client, threadId, prompt, !noWait);
-    touchLastSeen(name);
-    if (params === null) {
+async function codexSpawn(name, opts = {}) {
+  const engine = resolveEngine(opts.engine);
+  const result = await engine.spawn(
+    {
+      name,
+      cwd: opts.cwd ?? process.cwd(),
+      prompt: opts.prompt ?? null,
+      timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
+      displayName: opts.displayName ?? null
+    },
+    engineContext()
+  );
+  switch (result.kind) {
+    case "spawned": {
+      const state = readDaemonState(name);
+      let stderr = state === null ? `spawned: ${name}
+` : `spawned: ${name} (pid=${state.pid}, socket=${state.socketPath})
+`;
+      if (result.firstTurn === null) return { code: 0, stdout: "", stderr };
+      const turn = formatTurn(result.firstTurn);
       return {
-        code: 0,
-        stdout: "",
-        stderr: `sent: ${name} (thread=${threadId}, --no-wait; use 'tm wait ${name}' for the reply)
-`
+        code: turn.code,
+        stdout: turn.stdout,
+        stderr: stderr + turn.stderr
       };
     }
-    return {
-      code: 0,
-      stdout: JSON.stringify(params, null, 2) + "\n",
-      stderr: ""
-    };
-  } catch (e) {
-    return die(
-      `codex send on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`
-    );
-  } finally {
-    if (client !== null) client.close();
+    case "already-exists":
+      return die(`codex teammate '${name}' already exists (engine=${result.existingEngine})`);
+    case "failed":
+      return die(result.message);
   }
 }
-async function codexWait(name) {
-  if (!daemonAlive(name)) {
-    return die(`codex teammate '${name}' is not alive`);
+async function codexSend(name, prompt, opts = {}) {
+  if (opts.noWait === true) {
+    return die("tm send: --no-wait is not supported for codex teammates");
   }
-  const threadId = readThreadId(name);
-  if (threadId === null) {
-    return die(
-      `codex teammate '${name}' has no started thread yet \u2014 run 'tm send ${name} --prompt "\u2026"' first`
-    );
-  }
-  let client = null;
-  try {
-    client = await openInitialized(name);
-    await client.request(
-      "thread/resume",
-      { threadId, persistExtendedHistory: false }
-    );
-    const collector = subscribeTurnCollection(client, threadId);
-    const completed = await collector.awaitTurn();
-    touchLastSeen(name);
-    return {
-      code: 0,
-      stdout: JSON.stringify(completed, null, 2) + "\n",
-      stderr: ""
-    };
-  } catch (e) {
-    return die(
-      `codex wait on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`
-    );
-  } finally {
-    if (client !== null) client.close();
-  }
+  const result = await resolveEngine(opts.engine).send(
+    {
+      name,
+      prompt,
+      timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null)
+    },
+    engineContext()
+  );
+  return formatTurn(result);
 }
-async function codexKill(name) {
+async function codexWait(name, opts = {}) {
+  const result = await resolveEngine(opts.engine).wait(
+    { name, recoverFor: null, timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null) },
+    engineContext()
+  );
+  return formatTurn(result);
+}
+async function codexKill(name, opts = {}) {
   const state = readDaemonState(name);
-  await reapDaemon(name);
+  const result = await resolveEngine(opts.engine).kill({ name }, engineContext());
+  if (result.kind === "failed") return die(result.message);
   if (state === null) {
     return {
       code: 0,
@@ -4749,14 +5267,62 @@ async function codexKill(name) {
   return {
     code: 0,
     stdout: "",
-    stderr: `killed: ${name} (was pid=${state.pid})
+    stderr: state === null ? `killed: ${name}
+` : `killed: ${name} (was pid=${state.pid})
 `
   };
 }
+async function codexListLines(engine) {
+  const rows = await resolveEngine(engine).list(engineContext());
+  return rows.map((row) => formatListLine(row));
+}
+function formatListLine(row) {
+  const pid = row.extras["pid"] === void 0 || row.extras["pid"] === "" ? "?" : row.extras["pid"];
+  return `${row.name}: codex daemon (${row.state}; pid=${pid})`;
+}
+async function codexStateRows(nowSec3, engine) {
+  const rows = await resolveEngine(engine).list(engineContext());
+  return rows.map((row) => {
+    const thread = row.extras["thread"] ?? "";
+    const lastSeen = row.extras["lastSeen"] ?? "";
+    const pid = row.extras["pid"] ?? "";
+    const lastSeenSec = Number.parseInt(lastSeen, 10);
+    const last2 = Number.isFinite(lastSeenSec) ? `${Math.max(0, nowSec3 - lastSeenSec)}s` : "-";
+    const preview = pid.length === 0 ? "codex daemon" : `pid=${pid}`;
+    return [
+      row.name,
+      thread.length === 0 ? "codex" : thread.slice(0, 8),
+      row.state === "busy" ? "yes" : row.state === "idle" ? "no" : "?",
+      last2,
+      preview
+    ];
+  });
+}
+async function codexStatus(name, engine) {
+  const result = await resolveEngine(engine).status({ name, lines: null }, engineContext());
+  switch (result.kind) {
+    case "present": {
+      const lines = [
+        `codex teammate: ${result.name}`,
+        `engine:          ${result.engine}`,
+        `state:           ${result.state}`,
+        `cwd:             ${result.cwd}`
+      ];
+      for (const [key, value] of Object.entries(result.diagnostics)) {
+        if (value.length > 0) lines.push(`${key}: ${value}`);
+      }
+      return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+    }
+    case "not-found":
+      return die(`no such codex teammate: ${name}`);
+    case "failed":
+      return die(`codex status on '${name}' failed: ${result.message}`);
+  }
+}
 function tryBorrow(name) {
-  const lockPath = join3(codexTeammateDir(name), "lock");
   try {
-    const fd = openSync2(lockPath, "wx", 384);
+    const fd = openSync2(codexBorrowLockFile(name), "wx", 384);
     try {
       writeSync2(fd, `${process.pid}
 `);
@@ -4769,17 +5335,13 @@ function tryBorrow(name) {
   }
 }
 function releaseBorrow(name) {
-  rmSync2(join3(codexTeammateDir(name), "lock"), { force: true });
+  rmSync3(codexBorrowLockFile(name), { force: true });
 }
 async function codexAsk(prompt) {
-  if (prompt.length === 0) {
-    return die('usage: tm ask "<prompt>"');
-  }
-  const candidates = listDaemons().filter(isCodexTarget);
+  if (prompt.length === 0) return die('usage: tm ask "<prompt>"');
+  const candidates = listDaemons();
   if (candidates.length === 0) {
-    return die(
-      "no codex teammates available \u2014 run 'tm spawn codex-1' (or similar) first"
-    );
+    return die("no codex teammates available \u2014 run 'tm spawn codex-1' (or similar) first");
   }
   let borrowed = null;
   let aliveCount = 0;
@@ -4793,43 +5355,33 @@ async function codexAsk(prompt) {
   }
   if (borrowed === null) {
     if (aliveCount === 0) {
-      return die(
-        `all ${candidates.length} codex teammate(s) are dead \u2014 'tm doctor' will reap them`
-      );
+      return die(`all ${candidates.length} codex teammate(s) are dead \u2014 'tm doctor' will reap them`);
     }
-    return die(
-      `all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`
-    );
+    return die(`all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`);
   }
+  const borrowedName = borrowed;
   let client = null;
   try {
-    client = await openInitialized(borrowed);
-    const resp = await client.request(
-      "thread/start",
-      {
-        // Daemon-side throwaway thread: codex treats it as not part of
-        // the teammate's persistent history, and frees it once the turn
-        // completes. Without this the borrow leaks one server-side
-        // thread per ask, accumulating over the daemon's lifetime.
-        ephemeral: true,
-        experimentalRawEvents: false,
-        persistExtendedHistory: false
-      }
-    );
-    const params = await runTurn(client, resp.thread.id, prompt, true);
-    touchLastSeen(borrowed);
+    client = await openInitializedCodexClient(borrowedName);
+    const resp = await client.request("thread/start", {
+      ephemeral: true,
+      experimentalRawEvents: false,
+      persistExtendedHistory: false
+    });
+    const completed = await runTurn(client, resp.thread.id, prompt, { wait: true, cwd: null });
+    touchLastSeen(borrowedName);
     return {
       code: 0,
-      stdout: JSON.stringify(params, null, 2) + "\n",
+      stdout: JSON.stringify(completed, null, 2) + "\n",
       stderr: ""
     };
   } catch (e) {
     return die(
-      `codex ask on '${borrowed}' failed: ${e instanceof Error ? e.message : String(e)}`
+      `codex ask on '${borrowedName}' failed: ${e instanceof Error ? e.message : String(e)}`
     );
   } finally {
     if (client !== null) client.close();
-    releaseBorrow(borrowed);
+    releaseBorrow(borrowedName);
   }
 }
 
@@ -4851,7 +5403,9 @@ var ls = async (_args, _options, env) => {
     listing = "";
   }
   const rows = listing.split("\n").filter((line) => sessionField(line).startsWith(SESSION_PREFIX));
-  const text = rows.length > 0 ? `${rows.join("\n")}
+  const codexRows = await codexListLines(env.engines?.get("codex"));
+  const allRows = [...rows, ...codexRows];
+  const text = allRows.length > 0 ? `${allRows.join("\n")}
 ` : "(no teammate sessions; use 'tm spawn <repo>')\n";
   return { code: 0, stdout: text, stderr: "" };
 };
@@ -5068,11 +5622,15 @@ function statesRow(repo, now) {
 }
 var states = async (_args, _options, env) => {
   const repos = await iterRepos(env.runTmux);
-  if (repos.length === 0) return { code: 0, stdout: "(no teammate sessions)\n", stderr: "" };
   const now = Math.floor(Date.now() / 1e3);
+  const codexRows = await codexStateRows(now, env.engines?.get("codex"));
+  if (repos.length === 0 && codexRows.length === 0) {
+    return { code: 0, stdout: "(no teammate sessions)\n", stderr: "" };
+  }
   const rows = [
     ["REPO", "SID", "BUSY", "LAST", "PREVIEW"],
-    ...repos.map((repo) => statesRow(repo, now))
+    ...repos.map((repo) => statesRow(repo, now)),
+    ...codexRows
   ];
   return env.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
 `);
@@ -5082,7 +5640,7 @@ function dieRepoNotFound(verb, repo, path, dispatcherDir) {
     return die2(
       `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
     The dispatcher dir should be the PARENT of your sibling repos.
-    Try:  cd "${dirname(dispatcherDir)}" && tm ${verb} ${repo}
+    Try:  cd "${dirname3(dispatcherDir)}" && tm ${verb} ${repo}
     (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
     \u2014 run /claudemux:setup to wire it up automatically.)`
     );
@@ -5460,6 +6018,7 @@ function sleep(ms) {
 var status = async (args, _options, env) => {
   const repo = args[0] ?? "";
   if (repo.length === 0) return die2("usage: tm status <repo> [lines=80]");
+  if (isCodexTarget(repo)) return codexStatus(repo, env.engines?.get("codex"));
   const lines = args[1] || "80";
   const sessionMissing = await requireSession(repo, env.runTmux);
   if (sessionMissing !== null) return sessionMissing;
@@ -5498,18 +6057,18 @@ var poll = async (args, _options, env) => {
 function clearIdle(sid) {
   if (sid === "") return;
   for (const file of [idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid)]) {
-    rmSync3(file, { force: true });
+    rmSync4(file, { force: true });
   }
 }
 var kill = async (args, _options, env) => {
   const repo = args[0] ?? "";
   if (repo.length === 0) return die2("usage: tm kill <repo>");
-  if (isCodexTarget(repo)) return codexKill(repo);
+  if (isCodexTarget(repo)) return codexKill(repo, { engine: env.engines?.get("codex") });
   const name = `${SESSION_PREFIX}${repo}`;
   const sid = resolveSid(repo);
   if (sid !== null) clearIdle(sid);
   for (const file of [sidFile(repo), sendAtFile(repo), readyFile(repo), cwdFile(repo)]) {
-    rmSync3(file, { force: true });
+    rmSync4(file, { force: true });
   }
   let running = false;
   try {
@@ -5658,8 +6217,8 @@ ${entry}
   const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
   const newActive = remaining.length > 0 ? `${remaining.join("\n")}
 ` : "";
-  writeFileSync2(archivePath, newArchive);
-  writeFileSync2(activePath, newActive);
+  writeFileSync3(archivePath, newArchive);
+  writeFileSync3(activePath, newActive);
   return {
     code: 0,
     stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
@@ -5771,8 +6330,8 @@ async function sendKeys(repo, prompt, env) {
   const sid = resolveSid(repo);
   if (sid !== null) clearIdle(sid);
   const sa = sendAtFile(repo);
-  mkdirSync2(dirname(sa), { recursive: true });
-  writeFileSync2(sa, "");
+  mkdirSync3(dirname3(sa), { recursive: true });
+  writeFileSync3(sa, "");
   const n = prompt.length;
   const inlinePath = n <= cfg.inlineMax && !prompt.includes("\n");
   const name = `${SESSION_PREFIX}${repo}`;
@@ -5889,7 +6448,7 @@ var doctor = async (args, _options, env) => {
 `;
   };
   let out = "";
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const moduleDir = dirname3(fileURLToPath(import.meta.url));
   const tmWrapper = join4(moduleDir, "..", "..", "bin", "tm");
   const pluginJson = join4(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
   let version = "unknown";
@@ -6033,16 +6592,38 @@ function parseSpawnArgs(rest) {
   let prompt = "";
   let hasPrompt = false;
   let noWait = false;
+  let timeout = null;
+  let engine = null;
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === "--resume") {
       if (i + 1 >= rest.length) return { error: SILENT };
       resumeSid = rest[i + 1];
       i++;
+    } else if (arg === "--engine") {
+      if (i + 1 >= rest.length) return { error: die2("tm spawn: --engine requires a value") };
+      const value = rest[i + 1];
+      if (value !== "claude" && value !== "codex") {
+        return { error: die2(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
+      }
+      engine = value;
+      i++;
+    } else if (arg.startsWith("--engine=")) {
+      const value = arg.slice("--engine=".length);
+      if (value !== "claude" && value !== "codex") {
+        return { error: die2(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
+      }
+      engine = value;
     } else if (arg === "--task") {
       if (i + 1 >= rest.length) return { error: SILENT };
       task = rest[i + 1];
       i++;
+    } else if (arg === "--timeout") {
+      if (i + 1 >= rest.length) return { error: die2("tm spawn: --timeout requires a value") };
+      timeout = rest[i + 1];
+      i++;
+    } else if (arg.startsWith("--timeout=")) {
+      timeout = arg.slice("--timeout=".length);
     } else if (arg.startsWith("--task=")) {
       task = arg.slice("--task=".length);
     } else if (arg === "--prompt") {
@@ -6059,7 +6640,7 @@ function parseSpawnArgs(rest) {
       return { error: die2(`unknown flag: ${arg}`) };
     }
   }
-  return { resumeSid, task, prompt, hasPrompt, noWait };
+  return { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout };
 }
 function shellSingleQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -6087,17 +6668,28 @@ var spawn2 = async (args, _options, env) => {
   if (repo.length === 0) {
     return die2('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]');
   }
-  if (isCodexTarget(repo)) {
-    if (args.length > 1) {
-      return die2(
-        `tm spawn: codex teammate '${repo}' takes no additional arguments yet (stage 4 surface is just 'tm spawn ${repo}'; --prompt etc. land later)`
-      );
-    }
-    return codexSpawn(repo);
-  }
   const parsed = parseSpawnArgs(args.slice(1));
   if ("error" in parsed) return parsed.error;
-  const { resumeSid, task, prompt, hasPrompt, noWait } = parsed;
+  const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed;
+  if (engine === "codex" || isCodexTarget(repo)) {
+    if (resumeSid.length > 0) return die2("tm spawn: --resume is not supported for codex teammates");
+    if (task.length > 0) return die2("tm spawn: --task is not supported for codex teammates");
+    if (noWait) return die2("tm spawn: --no-wait is not supported for codex teammates");
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
+      return die2(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`);
+    }
+    const repoPath = join4(env.dispatcherDir, repo);
+    const cwdPhys2 = isDirectory(repoPath) ? realpathSync(repoPath) : realpathSync(env.dispatcherDir);
+    return codexSpawn(repo, {
+      cwd: cwdPhys2,
+      prompt: hasPrompt ? prompt : null,
+      timeoutSec: timeout === null ? null : Number(timeout),
+      displayName: null,
+      engine: env.engines?.get("codex")
+    });
+  }
+  if (engine === "claude") {
+  }
   if (noWait && !hasPrompt) {
     return die2(
       "tm spawn: --no-wait is only valid with --prompt (a fresh spawn without a prompt already returns as soon as the REPL is ready)"
@@ -6140,10 +6732,10 @@ var spawn2 = async (args, _options, env) => {
     };
   }
   const rf = readyFile(repo);
-  rmSync3(rf, { force: true });
+  rmSync4(rf, { force: true });
   const cf = cwdFile(repo);
-  mkdirSync2(dirname(cf), { recursive: true });
-  writeFileSync2(cf, `${cwdPhys}
+  mkdirSync3(dirname3(cf), { recursive: true });
+  writeFileSync3(cf, `${cwdPhys}
 `);
   let paneId = "";
   try {
@@ -6184,13 +6776,13 @@ var spawn2 = async (args, _options, env) => {
 `;
   }
   const sf = sidFile(repo);
-  mkdirSync2(dirname(sf), { recursive: true });
-  writeFileSync2(sf, `${sid}
+  mkdirSync3(dirname3(sf), { recursive: true });
+  writeFileSync3(sf, `${sid}
 `);
   clearIdle(sid);
   if (resumeSid.length === 0) {
-    mkdirSync2(idleDir(), { recursive: true });
-    writeFileSync2(lastFileFor(sid), "");
+    mkdirSync3(idleDir(), { recursive: true });
+    writeFileSync3(lastFileFor(sid), "");
   }
   const readyAfter = await pollReady(repo);
   if (readyAfter !== null) {
@@ -6268,28 +6860,6 @@ function parseSendArgs(args) {
   return { repo, prompt, hasPrompt, noWait, paneQuiet, timeout };
 }
 var send = async (args, _options, env) => {
-  const firstArg = args[0] ?? "";
-  if (isCodexTarget(firstArg)) {
-    const rest = args.slice(1);
-    let prompt2 = null;
-    let noWait2 = false;
-    for (let i = 0; i < rest.length; i++) {
-      const a = rest[i];
-      if (a === "--prompt") {
-        if (i + 1 >= rest.length) return die2("tm send: --prompt requires a value");
-        prompt2 = rest[i + 1] ?? "";
-        i += 1;
-      } else if (a === "--no-wait") {
-        noWait2 = true;
-      } else {
-        return die2(
-          `tm send: codex teammate '${firstArg}' does not yet accept '${a}' (stage 4 surface is '--prompt' and '--no-wait')`
-        );
-      }
-    }
-    if (prompt2 === null) return die2("tm send: missing --prompt");
-    return codexSend(firstArg, prompt2, { noWait: noWait2 });
-  }
   const parsed = parseSendArgs(args);
   if ("error" in parsed) return parsed.error;
   const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed;
@@ -6305,6 +6875,11 @@ var send = async (args, _options, env) => {
   }
   if (!isNonNegativeInteger(timeout)) {
     return die2(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
+  }
+  if (isCodexTarget(repo)) {
+    if (noWait) return die2("tm send: --no-wait is not supported for codex teammates");
+    if (paneQuiet) return die2("tm send: --pane-quiet is not supported for codex teammates");
+    return codexSend(repo, prompt, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
   }
   const sentResult = await sendKeys(repo, prompt, env);
   if (sentResult.code !== 0) return sentResult;
@@ -6364,16 +6939,6 @@ function parseWaitArgs(args) {
   return { repo, timeout, fresh, paneQuiet };
 }
 var wait = async (args, _options, env) => {
-  const firstArg = args[0] ?? "";
-  if (isCodexTarget(firstArg)) {
-    const rest = args.slice(1);
-    if (rest.length > 0) {
-      return die2(
-        `tm wait: codex teammate '${firstArg}' takes no additional arguments yet (stage 4 surface is just 'tm wait ${firstArg}')`
-      );
-    }
-    return codexWait(firstArg);
-  }
   const parsed = parseWaitArgs(args);
   if ("error" in parsed) return parsed.error;
   const { repo, timeout, fresh, paneQuiet } = parsed;
@@ -6384,6 +6949,11 @@ var wait = async (args, _options, env) => {
   }
   if (!isNonNegativeInteger(timeout)) {
     return die2(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
+  }
+  if (isCodexTarget(repo)) {
+    if (fresh) return die2("tm wait: --fresh is not supported for codex teammates");
+    if (paneQuiet) return die2("tm wait: --pane-quiet is not supported for codex teammates");
+    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
   }
   const timeoutSec = Number(timeout);
   const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env) : await waitIdleSignal(repo, timeoutSec, fresh, env);
@@ -6651,12 +7221,42 @@ function resolveTmuxBinary() {
 }
 var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], options);
 
+// src/engines/registry.ts
+var EngineRegistry = class {
+  engines = /* @__PURE__ */ new Map();
+  /** Add an engine; throws if a kind is registered twice in one process. */
+  register(engine) {
+    if (this.engines.has(engine.kind)) {
+      throw new Error(
+        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
+      );
+    }
+    this.engines.set(engine.kind, engine);
+  }
+  get(kind) {
+    return this.engines.get(kind);
+  }
+  registered() {
+    return Array.from(this.engines.values());
+  }
+  kinds() {
+    return Array.from(this.engines.keys());
+  }
+};
+
+// src/engines/production.ts
+function productionRegistry() {
+  const registry = new EngineRegistry();
+  registry.register(new CodexEngine());
+  return registry;
+}
+
 // src/cli.ts
 import { homedir } from "node:os";
 import { join as join7 } from "node:path";
 
 // src/verbs/archive.ts
-import { readFileSync as readFileSync4, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/persistence/project-dir.ts
@@ -6809,8 +7409,8 @@ ${entry}
   const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
   const newActive = remaining.length > 0 ? `${remaining.join("\n")}
 ` : "";
-  writeFileSync3(archivePath, newArchive);
-  writeFileSync3(activePath, newActive);
+  writeFileSync4(archivePath, newArchive);
+  writeFileSync4(activePath, newActive);
   return {
     code: 0,
     stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
@@ -6820,15 +7420,10 @@ ${entry}
 }
 
 // src/engines/claude/claude-engine.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync5, statSync as statSync4 } from "node:fs";
 
 // src/engines/claude/persistence.ts
 import { join as join6 } from "node:path";
-
-// src/engines/teammate-record.ts
-var TEAMMATE_RECORD_SCHEMA = 1;
-
-// src/engines/claude/persistence.ts
 var TEAMMATE_ROOT = "/tmp";
 function cwdFile2(name) {
   return join6(TEAMMATE_ROOT, `teammate-${name}.cwd`);
@@ -6994,12 +7589,12 @@ var ClaudeEngine = class {
     const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
     const sid = readSid(req.name);
     if (sid !== null) {
-      rmSync4(idleMarkerFor2(sid), { force: true });
-      rmSync4(lastFileFor2(sid), { force: true });
-      rmSync4(busyMarkerFor2(sid), { force: true });
+      rmSync5(idleMarkerFor2(sid), { force: true });
+      rmSync5(lastFileFor2(sid), { force: true });
+      rmSync5(busyMarkerFor2(sid), { force: true });
     }
     for (const file of [sidFile2(req.name), sendAtFile2(req.name), readyFile2(req.name), cwdFile2(req.name)]) {
-      rmSync4(file, { force: true });
+      rmSync5(file, { force: true });
     }
     let running = false;
     try {
@@ -7123,39 +7718,16 @@ var ClaudeEngine = class {
   }
 };
 
-// src/engines/registry.ts
-var EngineRegistry = class {
-  engines = /* @__PURE__ */ new Map();
-  /** Add an engine; throws if a kind is registered twice in one process. */
-  register(engine) {
-    if (this.engines.has(engine.kind)) {
-      throw new Error(
-        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
-      );
-    }
-    this.engines.set(engine.kind, engine);
-  }
-  get(kind) {
-    return this.engines.get(kind);
-  }
-  registered() {
-    return Array.from(this.engines.values());
-  }
-  kinds() {
-    return Array.from(this.engines.keys());
-  }
-};
-
 // src/persistence/atomic-file.ts
 import {
   closeSync as closeSync3,
-  mkdirSync as mkdirSync3,
+  mkdirSync as mkdirSync4,
   openSync as openSync3,
   readFileSync as readFileSync6,
-  renameSync as renameSync2,
-  rmSync as rmSync5,
+  renameSync as renameSync3,
+  rmSync as rmSync6,
   statSync as statSync5,
-  writeFileSync as writeFileSync4
+  writeFileSync as writeFileSync5
 } from "node:fs";
 function readIfPresent(path) {
   try {
@@ -7166,7 +7738,7 @@ function readIfPresent(path) {
   }
 }
 function removeIfPresent(path) {
-  rmSync5(path, { force: true });
+  rmSync6(path, { force: true });
 }
 
 // src/persistence/identity-store.ts
@@ -7286,37 +7858,6 @@ var ProductionIdentityStore = class {
   }
 };
 
-// src/verbs/format.ts
-function teammateNotFound(name) {
-  return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
-` };
-}
-function noEngineRegistered() {
-  return {
-    code: 1,
-    stdout: "",
-    stderr: "tm: no engine registered in this process (Phase 2 wiring pending)\n"
-  };
-}
-function formatListing(rows) {
-  if (rows.length === 0) return { code: 0, stdout: "", stderr: "" };
-  const lines = rows.map((r) => `${r.name}	${r.engine}	${r.state}	${r.cwd}`);
-  return { code: 0, stdout: `${lines.join("\n")}
-`, stderr: "" };
-}
-function formatStatus(status2) {
-  switch (status2.kind) {
-    case "present": {
-      return { code: 0, stdout: status2.pane ?? "", stderr: "" };
-    }
-    case "not-found":
-      return { code: 1, stdout: "", stderr: "tm: status: not found\n" };
-    case "failed":
-      return { code: 1, stdout: "", stderr: `tm: status: ${status2.message}
-` };
-  }
-}
-
 // src/verbs/ls.ts
 async function lsVerb(ctx2) {
   const engines = ctx2.engines.registered();
@@ -7371,11 +7912,11 @@ function productionVerbContext(env) {
       }
     })
   ]);
-  const engineContext = { now: () => Date.now(), env: process.env };
+  const engineContext2 = { now: () => Date.now(), env: process.env };
   return {
     engines: registry,
     router,
-    engineContext,
+    engineContext: engineContext2,
     identity: new ProductionIdentityStore()
   };
 }
@@ -7485,7 +8026,8 @@ function productionEnv() {
     //     `""`, while `tm doctor`'s own check treats empty as unset and
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
-    projectsDir: join7(process.env.HOME ?? homedir(), ".claude", "projects")
+    projectsDir: join7(process.env.HOME ?? homedir(), ".claude", "projects"),
+    engines: productionRegistry()
   };
 }
 

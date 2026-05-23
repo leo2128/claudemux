@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Fake `codex` binary used by the supervisor tests. Accepts the same
 // `app-server --listen unix://<path>` invocation the real codex binary
-// understands, binds a unix-domain socket at that path, and then sleeps
-// forever (until SIGTERM / SIGKILL). The socket is non-functional —
-// nothing speaks WebSocket on it — but the supervisor's responsibility
-// stops at "the socket exists and the pid is alive", which is what this
-// fakes.
+// understands, binds a unix-domain socket at that path, speaks a tiny
+// WebSocket JSON-RPC subset (`initialize`, `thread/start`, `thread/resume`,
+// `turn/start`), and then sleeps forever (until SIGTERM / SIGKILL). The
+// subset is enough for CodexEngine contract tests while keeping supervisor
+// lifecycle tests cheap.
 //
 // Optional behavior knobs via environment, for the negative-path tests:
 //   CODEX_FAKE_BIND_DELAY_MS=<n>   wait <n>ms before binding the socket
@@ -18,8 +18,9 @@
 //                                  group and the orphan failure mode it
 //                                  guards against cannot be exercised.
 
-import { createServer } from 'node:net'
+import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
+import { WebSocketServer } from 'ws'
 
 const argv = process.argv.slice(2)
 if (argv[0] !== 'app-server') {
@@ -47,8 +48,119 @@ if (process.env.CODEX_FAKE_EXIT_BEFORE_BIND === '1') {
 const delay = Number.parseInt(process.env.CODEX_FAKE_BIND_DELAY_MS ?? '0', 10) || 0
 
 function bind() {
-  const server = createServer(() => {
-    // Accept-and-ignore — we don't need to speak any protocol here.
+  const server = createServer()
+  const wss = new WebSocketServer({ server })
+  let threadCounter = 0
+  let turnCounter = 0
+
+  function makeThread(id, cwd = process.cwd(), ephemeral = false) {
+    const now = Math.floor(Date.now() / 1000)
+    return {
+      id,
+      sessionId: `session-${id}`,
+      forkedFromId: null,
+      preview: '',
+      ephemeral,
+      modelProvider: 'fake',
+      createdAt: now,
+      updatedAt: now,
+      status: { type: 'idle' },
+      path: null,
+      cwd,
+      cliVersion: 'fake-codex/0.0',
+      source: 'appServer',
+      threadSource: null,
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    }
+  }
+
+  function makeThreadResponse(thread) {
+    return {
+      thread,
+      model: 'fake-model',
+      modelProvider: 'fake',
+      serviceTier: null,
+      cwd: thread.cwd,
+      runtimeWorkspaceRoots: [thread.cwd],
+      instructionSources: [],
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: { type: 'dangerFullAccess' },
+      activePermissionProfile: null,
+      reasoningEffort: null,
+    }
+  }
+
+  wss.on('connection', (socket) => {
+    socket.on('message', (data) => {
+      const env = JSON.parse(data.toString())
+      const id = env.id
+      const params = env.params ?? {}
+      if (env.method === 'initialize') {
+        socket.send(JSON.stringify({
+          id,
+          result: {
+            userAgent: 'fake-codex/0.0',
+            codexHome: '/tmp/fake-codex-home',
+            platformFamily: 'unix',
+            platformOs: process.platform,
+          },
+        }))
+      } else if (env.method === 'thread/start') {
+        const thread = makeThread(
+          `thread-${++threadCounter}`,
+          params.cwd ?? process.cwd(),
+          params.ephemeral === true,
+        )
+        socket.send(JSON.stringify({ id, result: makeThreadResponse(thread) }))
+      } else if (env.method === 'thread/resume') {
+        const thread = makeThread(params.threadId ?? `thread-${++threadCounter}`)
+        socket.send(JSON.stringify({ id, result: makeThreadResponse(thread) }))
+      } else if (env.method === 'turn/start') {
+        const turnId = `turn-${++turnCounter}`
+        const textInput = Array.isArray(params.input)
+          ? (params.input.find((item) => item?.type === 'text')?.text ?? '')
+          : ''
+        const turn = {
+          id: turnId,
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: Math.floor(Date.now() / 1000),
+          completedAt: Math.floor(Date.now() / 1000),
+          durationMs: 1,
+        }
+        socket.send(JSON.stringify({ id, result: { turn } }))
+        setImmediate(() => {
+          socket.send(JSON.stringify({
+            method: 'item/completed',
+            params: {
+              threadId: params.threadId,
+              turnId,
+              completedAtMs: Date.now(),
+              item: {
+                type: 'agentMessage',
+                id: `msg-${turnId}`,
+                text: `fake reply: ${textInput}`,
+                phase: null,
+                memoryCitation: null,
+              },
+            },
+          }))
+          socket.send(JSON.stringify({
+            method: 'turn/completed',
+            params: { threadId: params.threadId, turn },
+          }))
+        })
+      } else {
+        socket.send(JSON.stringify({ id, error: { message: `unknown method: ${env.method}` } }))
+      }
+    })
   })
   server.listen(socketPath)
 }

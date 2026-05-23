@@ -99,6 +99,7 @@ const tmpFiles: string[] = []
 let savedTmux: string | undefined
 let savedSessions: string | undefined
 let savedCapture: string | undefined
+let savedCodexRegistryRoot: string | undefined
 let savedTz: string | undefined
 
 /**
@@ -161,6 +162,7 @@ beforeAll(() => {
   savedTmux = process.env.CLAUDEMUX_TMUX
   savedSessions = process.env.FAKE_TMUX_SESSIONS
   savedCapture = process.env.FAKE_TMUX_CAPTURE
+  savedCodexRegistryRoot = process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT
 
   // Pin Date for the whole file — see FIXED_NOW above.
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -184,6 +186,7 @@ beforeAll(() => {
   process.env.CLAUDEMUX_TMUX = FAKE_TMUX
   process.env.FAKE_TMUX_SESSIONS = sessionsFile
   process.env.FAKE_TMUX_CAPTURE = captureFile
+  process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT = join(scratchDir, 'codex-registry')
 })
 
 afterAll(() => {
@@ -194,6 +197,8 @@ afterAll(() => {
   else process.env.FAKE_TMUX_SESSIONS = savedSessions
   if (savedCapture === undefined) delete process.env.FAKE_TMUX_CAPTURE
   else process.env.FAKE_TMUX_CAPTURE = savedCapture
+  if (savedCodexRegistryRoot === undefined) delete process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT
+  else process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT = savedCodexRegistryRoot
   if (savedTz === undefined) delete process.env.TZ
   else process.env.TZ = savedTz
   if (existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })

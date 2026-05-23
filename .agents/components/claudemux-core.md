@@ -22,7 +22,10 @@ contracts they hold.
 > `exec`s `node` against the esbuild bundle committed at
 > [`core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs); a dev launcher
 > at [`core/bin/tm`](/plugins/claudemux/core/bin/tm) runs the same code
-> through `tsx` so source edits need no rebuild.
+> through `tsx` so source edits need no rebuild. The conformance harness
+> compares native output to committed golden JSON files under
+> [`core/test/goldens/`](/plugins/claudemux/core/test/goldens) rather than a
+> bash oracle.
 >
 > [Decision 0024](/.agents/decisions/0024-multi-engine-tui-architecture.md)
 > reshapes the core around an `Engine` interface, a single `TeammateRecord`
@@ -48,15 +51,24 @@ contracts they hold.
 > the fleet 4 verb goldens once), and lands the remaining verb skeletons
 > (`poll`, `doctor`, `ask`).
 >
-> Stage 4 added the Codex driver — `tm spawn codex-<n>`, `tm send codex-<n>`,
-> `tm wait codex-<n>`, `tm kill codex-<n>`, and `tm ask "<prompt>"` route
-> through [`codex-verbs.ts`](/plugins/claudemux/core/src/codex-verbs.ts),
-> backed by [`codex-supervisor.ts`](/plugins/claudemux/core/src/codex-supervisor.ts)
-> for daemon lifecycle and [`codex-ws.ts`](/plugins/claudemux/core/src/codex-ws.ts)
-> for the protocol. Phase 2b lands `CodexEngine` and the Codex registration
-> line in `productionVerbContext`; see
-> [decision 0022](/.agents/decisions/0022-codex-driver.md) and
-> [decision 0024](/.agents/decisions/0024-multi-engine-tui-architecture.md).
+> Phase 2b moved the Codex driver behind `CodexEngine`. `tm spawn codex-<n>`,
+> `tm send codex-<n>`, `tm wait codex-<n>`, `tm kill codex-<n>`, and
+> `tm ask "<prompt>"` route through
+> [`plugins/claudemux/core/src/engines/codex/engine.ts`](/plugins/claudemux/core/src/engines/codex/engine.ts),
+> with a thin CLI adapter at
+> [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts).
+> Daemon lifecycle lives in
+> [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts),
+> the JSON-RPC client lives in
+> [`plugins/claudemux/core/src/engines/codex/rpc.ts`](/plugins/claudemux/core/src/engines/codex/rpc.ts),
+> event collection lives in
+> [`plugins/claudemux/core/src/engines/codex/events.ts`](/plugins/claudemux/core/src/engines/codex/events.ts),
+> and Codex persistence paths live in
+> [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts).
+> The wire schema is vendored as the output of
+> `codex app-server generate-ts --experimental` under
+> [`codex-protocol/`](/plugins/claudemux/core/src/codex-protocol) and pinned
+> by a CI drift gate; see [decision 0022](/.agents/decisions/0022-codex-driver.md).
 
 ## Module layout
 
@@ -85,10 +97,13 @@ single-purpose; routing, verb code, and process wiring each have their own home.
 | `tmux.ts` | The `tmux` backend — `runTmux`, used by every verb that queries tmux. |
 | `column.ts` | The `column` backend — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs. |
 | `grep.ts` | The `grep` backend — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
-| `paths.ts` | Path builders for every `/tmp` protocol file and `~/.claude/projects` path the legacy `native.ts` still consumes ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)). Phase 2a-2 retires this file in favour of the engine-local `engines/<kind>/persistence.ts` builders. Includes the codex-daemon registry builders under `/tmp/teammate-codex/<name>/` (overridable via `CLAUDEMUX_CODEX_REGISTRY_ROOT` for tests). |
-| `codex-verbs.ts` | The codex-teammate verbs — `codexSpawn`, `codexSend`, `codexWait`, `codexKill`, `codexAsk`, plus `isCodexTarget(name)` for the prefix fork. Phase 2b folds this into a `CodexEngine` implementation. Each returns the same `TmResult` shape every other verb does. |
-| `codex-supervisor.ts` | Daemon lifecycle — `spawnDaemon`, `daemonAlive`, `readDaemonState`, `listDaemons`, `reapDaemon`, and the per-call bookkeeping helpers. Owns spawn-detached, the unix-socket readiness probe, and SIGTERM-then-SIGKILL reap. |
-| `codex-ws.ts` | The WebSocket JSON-RPC client. Routes incoming frames by envelope shape (`method+id+params` is a server-request, `method+params` is a notification, `id+result\|error` is a response), pinned by [`codex-schema.test.ts`](/plugins/claudemux/core/test/codex-schema.test.ts). |
+| `paths.ts` | Path builders for the shared Claude `/tmp` protocol files and `~/.claude/projects` paths — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) on the TypeScript side. |
+| [`plugins/claudemux/core/src/engines/codex/engine.ts`](/plugins/claudemux/core/src/engines/codex/engine.ts) | `CodexEngine implements Engine`: spawn/send/wait/list/status/kill plus structured not-supported results for capabilities Codex does not expose. |
+| [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts) | The native CLI compatibility adapter for Codex verbs — `codexSpawn`, `codexSend`, `codexWait`, `codexKill`, `codexStatus`, `codexAsk`, plus `isCodexTarget(name)`. It keeps `TmResult` formatting out of the engine. |
+| [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts) | Per-teammate daemon lifecycle — `spawnDaemon`, `daemonAlive`, `readDaemonState`, `listDaemons`, `reapDaemon`, and the per-call bookkeeping helpers. Owns spawn-detached, lock-based duplicate-spawn protection, the unix-socket readiness probe, and SIGTERM-then-SIGKILL reap. |
+| [`plugins/claudemux/core/src/engines/codex/rpc.ts`](/plugins/claudemux/core/src/engines/codex/rpc.ts) | The WebSocket JSON-RPC client. Routes incoming frames by envelope shape (`method+id+params` is a server-request, `method+params` is a notification, `id+result\|error` is a response), pinned by [`plugins/claudemux/core/test/codex-schema.test.ts`](/plugins/claudemux/core/test/codex-schema.test.ts). |
+| [`plugins/claudemux/core/src/engines/codex/events.ts`](/plugins/claudemux/core/src/engines/codex/events.ts) | Codex-private event collector. It subscribes to `item/completed` and `turn/completed`, filters by `threadId`, buckets by `turnId`, and returns a merged turn to the engine. |
+| [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts) | Codex teammate persistence builders: base-record helpers plus `/tmp/teammate-codex/<name>/pid`, `socket`, `thread`, `started-at`, `last-seen`, `stdout.log`, `stderr.log`, and `meta.json`. |
 | `codex-protocol/` | Generated by `codex app-server generate-ts --experimental`. Treat as vendored ground truth; the CI drift gate (`Install codex CLI` + `codex-protocol not stale`) regenerates it on every push and asserts the diff is empty. |
 
 `tm` holds no state between invocations — a verb is one short-lived process.

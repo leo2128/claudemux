@@ -23,6 +23,20 @@ import { TM_VERBS } from '../src/verbs'
 const fakeTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 const fakeColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
 const fakeGrep: GrepRunner = async () => 1
+let savedCodexRegistryRoot: string | undefined
+let codexRegistryRoot: string
+
+beforeAll(() => {
+  savedCodexRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  codexRegistryRoot = mkdtempSync('/tmp/cmxcli-')
+  process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = codexRegistryRoot
+})
+
+afterAll(() => {
+  if (savedCodexRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedCodexRegistryRoot
+  rmSync(codexRegistryRoot, { recursive: true, force: true })
+})
 
 /** A `NativeEnv` with quiet fakes for every backend. */
 function fakeEnv(over: Partial<NativeEnv> = {}): NativeEnv {
@@ -276,7 +290,7 @@ describe('doctor — sections fire top-down, never raising', () => {
     // Short `/tmp` root rather than `$TMPDIR` so the supervisor's unix
     // socket nodes (under `<root>/<name>/socket`) stay under macOS's
     // ~104-char path limit. Doctor itself does not bind sockets, but
-    // sharing the root with the codex-verbs / supervisor test contract
+    // sharing the root with the engines/codex verbs / supervisor test contract
     // is the safer pattern.
     registryDir = mkdtempSync('/tmp/cmxc-')
     savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']

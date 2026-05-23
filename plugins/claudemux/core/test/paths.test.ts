@@ -9,6 +9,14 @@ import { describe, expect, test } from 'vitest'
 
 import {
   busyMarkerFor,
+  cwdFile,
+  encodeProjectDir,
+  idleDir,
+  idleMarkerFor,
+  lastFileFor,
+  sidFile,
+} from '../src/paths'
+import {
   codexLastSeenFile,
   codexMetaFile,
   codexPidFile,
@@ -17,13 +25,7 @@ import {
   codexStartedAtFile,
   codexTeammateDir,
   codexThreadFile,
-  cwdFile,
-  encodeProjectDir,
-  idleDir,
-  idleMarkerFor,
-  lastFileFor,
-  sidFile,
-} from '../src/paths'
+} from '../src/engines/codex/persistence'
 
 describe('idle-dir builders mirror the hook protocol', () => {
   test('the idle directory is /tmp/claude-idle', () => {
@@ -78,5 +80,10 @@ describe('codex-daemon registry paths', () => {
   test('teammate names with hyphens and digits round-trip into their own dir', () => {
     expect(codexTeammateDir('codex-reviewer-2')).toBe('/tmp/teammate-codex/codex-reviewer-2')
     expect(codexSocketPath('codex-reviewer-2')).toBe('/tmp/teammate-codex/codex-reviewer-2/socket')
+  })
+
+  test('nested teammate names keep their relative directory shape', () => {
+    expect(codexTeammateDir('codex/foo')).toBe('/tmp/teammate-codex/codex/foo')
+    expect(codexSocketPath('codex/foo')).toBe('/tmp/teammate-codex/codex/foo/socket')
   })
 })

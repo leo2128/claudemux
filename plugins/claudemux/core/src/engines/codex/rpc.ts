@@ -25,7 +25,11 @@
 
 import WebSocket, { type RawData } from 'ws'
 
-import type { ClientRequest, ServerNotification, ServerRequest } from './codex-protocol/index.js'
+import type {
+  ClientRequest,
+  ServerNotification,
+  ServerRequest,
+} from '../../codex-protocol/index.js'
 
 interface RequestEnvelope {
   method: string
@@ -200,7 +204,7 @@ export class CodexWsClient {
   /** Tear down. Pending requests reject with the caller's reason. */
   close(): void {
     this.tearDown(new Error('codex client closed by caller'))
-    this.ws.close()
+    this.ws.terminate()
   }
 
   private onFrame(data: RawData): void {

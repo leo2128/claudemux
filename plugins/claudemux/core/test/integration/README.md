@@ -8,8 +8,8 @@ over a unix-socket WebSocket.
 The conformance harness (`test/conformance.test.ts`) pins the migrated verbs to
 `tm`'s behavior with a *faked* tmux and no `claude` process; the unit
 suite for the codex driver fakes the daemon with a node shim that binds
-a socket but never speaks the protocol. The real protocol-layer behavior
-only proves out against the real binaries — that is this suite's job.
+a socket and speaks a minimal protocol subset. The real protocol-layer
+behavior only proves out against the real binaries — that is this suite's job.
 
 ## Files
 

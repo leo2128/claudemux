@@ -4,8 +4,9 @@
  * A real `codex app-server` cannot run in CI; the tests use the
  * `test/fixtures/codex-fake/codex` shim — a node script that accepts the
  * same `app-server --listen unix://<path>` invocation, binds a unix
- * socket, and sleeps. That is enough surface to pin the supervisor's
- * lifecycle contract (spawn, liveness probe, restart, reap).
+ * socket, speaks the minimal JSON-RPC subset used by engine tests, and
+ * sleeps. That is enough surface to pin the supervisor's lifecycle
+ * contract (spawn, liveness probe, restart, reap).
  *
  * The registry root is repointed at a per-test tmp directory via the
  * teammate-name namespacing — we never write under the real
@@ -27,12 +28,12 @@ import {
   reapDaemon,
   readDaemonState,
   spawnDaemon,
-} from '../src/codex-supervisor'
+} from '../src/engines/codex/supervisor'
 import {
   codexPidFile,
   codexSocketPath,
   codexTeammateDir,
-} from '../src/paths'
+} from '../src/engines/codex/persistence'
 import { spawnCapture } from '../src/proc'
 
 /**
@@ -159,6 +160,14 @@ describe('codex-supervisor — spawn + liveness', () => {
     const all = listDaemons()
     expect(all).toContain(a)
     expect(all).toContain(b)
+  })
+
+  test('listDaemons enumerates nested teammate names', async () => {
+    const name = `codex/${nameUnder()}`
+    toReap.push(name)
+    await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    expect(listDaemons()).toContain(name)
   })
 
   test('isProcessAlive returns false for the impossible pid 0', () => {

@@ -42,7 +42,7 @@ explicit record.
 
 `tm spawn`, `tm send`, `tm wait`, and `tm kill` grow a one-line guard at the
 head: if the first positional matches `^codex-`, the verb delegates to
-[`codex-verbs.ts`](/plugins/claudemux/core/src/codex-verbs.ts); otherwise the
+[`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts); otherwise the
 tmux path runs unchanged. Flags that are tmux-bound (`--pane-quiet`,
 `--timeout`, the `tm send --no-wait` semantics) are rejected explicitly on
 the codex side rather than silently accepted, because silent acceptance
@@ -150,8 +150,8 @@ report-only character of doctor is preserved for everything else.
   fixture? — before deeper layers.
 - **Daemon supervision is an explicit, on-disk protocol.** Decision
   0019's intent (no in-memory registry) is realized in
-  [`paths.ts`](/plugins/claudemux/core/src/paths.ts)'s named builders
-  and [`codex-supervisor.ts`](/plugins/claudemux/core/src/codex-supervisor.ts).
+  [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts)'s named builders
+  and [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts).
   A spawn that fails its readiness probe rolls the entry back; a process
   crash before unwind leaves a dead-pid orphan, and doctor reaps it on
   the next pass. There is no "in-flight half-spawned" state to handle

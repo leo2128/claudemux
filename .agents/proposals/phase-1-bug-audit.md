@@ -13,9 +13,9 @@ codex prefix > SessionStart hook > MCP > anything else.
   `codex-` to decide engine. The user named this as the load-bearing
   redesign of this iteration.
 - **Evidence.** `isCodexTarget` is defined at
-  [`core/src/codex-verbs.ts:64`](/plugins/claudemux/core/src/codex-verbs.ts) and
+  [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts) and
   used at four sites in `native.ts` (`1149`, `2051`, `2310`, `2445`) plus
-  the `codexAsk` pool filter at `codex-verbs.ts:371`.
+  the `codexAsk` pool filter in `plugins/claudemux/core/src/engines/codex/verbs.ts`.
 - **Root cause.** [Decision 0022 §1](/.agents/decisions/0022-codex-driver.md)
   committed to the prefix as a one-helper-four-call-sites stage-4
   shortcut. The shortcut is now load-bearing surface contract — the cost
@@ -132,7 +132,7 @@ codex prefix > SessionStart hook > MCP > anything else.
   warning channel is stderr, alongside the existing `spawned: …` /
   `ready: …` lines — no new conventions needed.
 - **`isCodexTarget` is exported.** It's used externally (`native.ts`
-  imports it from `codex-verbs.ts`). When item A lands, the export goes
+  imports it from `plugins/claudemux/core/src/engines/codex/verbs.ts`). When item A lands, the export goes
   away and the resolver in `paths.ts` takes its place. Caught here so
   the implementer doesn't preserve a backwards-compat re-export by
   habit.

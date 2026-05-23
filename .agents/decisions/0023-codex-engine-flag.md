@@ -11,7 +11,7 @@
 
 [Decision 0022 §1](/.agents/decisions/0022-codex-driver.md) chose a **name
 prefix** as the fork: a teammate whose first positional matches `^codex-`
-routes into [`codex-verbs.ts`](/plugins/claudemux/core/src/codex-verbs.ts);
+routes into [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts);
 every other name stays on the tmux + hooks path. The contract is enforced by
 `isCodexTarget(name)` and read at four sites in
 [`native.ts`](/plugins/claudemux/core/src/native.ts) (the heads of `spawn`,
@@ -160,7 +160,7 @@ This rule is enforced by §2's resolver returning non-null.
 
 ### 5. `tm ask` selects by engine, not by name prefix
 
-`codexAsk` ([`codex-verbs.ts:366`](/plugins/claudemux/core/src/codex-verbs.ts))
+`codexAsk` ([`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts))
 filters `listDaemons()` with `isCodexTarget`. Under §2, every entry that
 `listDaemons()` returns lives under `codexTeammateDir(name)`, so the filter
 is **vacuous** — every entry is already engine=codex. The filter is deleted

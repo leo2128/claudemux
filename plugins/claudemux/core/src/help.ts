@@ -88,6 +88,10 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       reply yet" error instead of stale content from an earlier sid.
       The --prompt sync path inherits 'tm send''s stderr ctx echo
       after the first-turn Stop.
+      Codex teammates can be spawned with the legacy codex-<n> /
+      codex/<name> target shape or by passing --engine codex. Their
+      daemon is not a tmux session; --task, --resume, and --no-wait
+      are rejected on that path.
       Every teammate launches with the AskUserQuestion tool disabled
       (this applies to 'tm resume' too). A teammate runs with no
       human at its terminal, and that tool's modal holds the turn
@@ -130,11 +134,10 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       exit 1.
 
       When <repo> is a codex teammate (name starts with 'codex-'),
-      this verb routes into the codex driver instead: only --prompt
-      and --no-wait are accepted, the reply on stdout is the raw
-      Turn JSON, and --no-wait composes with 'tm wait codex-<n>' for
-      the async case. Tmux-bound flags (--pane-quiet, --timeout) are
-      rejected explicitly rather than silently ignored.
+      this verb routes into the codex driver instead: --prompt is
+      required, --timeout is accepted, the reply on stdout is the raw
+      Turn JSON, and --no-wait / --pane-quiet are rejected explicitly
+      rather than silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 

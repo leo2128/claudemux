@@ -3,10 +3,10 @@
  * `hot-path.itest.ts` (which exercises the Claude tmux+hooks driver).
  *
  * The conformance harness fakes everything; the unit suites fake the codex
- * daemon with a node shim that binds a socket but never speaks the
- * protocol. The real protocol-layer behavior — and the supervision
- * substrate the verbs sit on — only proves out against a real
- * `codex app-server`. This suite drives that case.
+ * daemon with a node shim that speaks a minimal protocol subset. The real
+ * protocol-layer behavior — and the supervision substrate the verbs sit on —
+ * only proves out against a real `codex app-server`. This suite drives that
+ * case.
  *
  * What's pinned here is split into two slices:
  *
@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url'
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
-import { isProcessAlive, killProcessGroup } from '../../src/codex-supervisor'
+import { isProcessAlive, killProcessGroup } from '../../src/engines/codex/supervisor'
 import { resolveTmBinary } from '../../src/tm'
 import { spawnCapture } from '../../src/proc'
 

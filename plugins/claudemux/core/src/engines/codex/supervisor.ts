@@ -6,12 +6,12 @@
  * invocation, and with no resident core to hold it, `tm` owns spawning,
  * liveness checking, and reaping. The state lives on the filesystem under
  * `/tmp/teammate-codex/<name>/` — the path builders are in
- * [`paths.ts`](./paths.ts), this module is the *operations* on top.
+ * [`persistence.ts`](./persistence.ts), this module is the *operations* on top.
  *
  * What this module does **not** do:
  *
  *   - It does not talk the protocol. The WebSocket client lives in
- *     [`codex-ws.ts`](./codex-ws.ts); a verb opens a connection to
+ *     [`rpc.ts`](./rpc.ts); a verb opens a connection to
  *     `codexSocketPath(name)` after the supervisor has reconciled the
  *     daemon. Lifecycle and traffic are kept on separate layers so a
  *     verb that fails to deliver a turn does not get confused for a
@@ -26,7 +26,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from 'node:child_process'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   closeSync,
   existsSync,
@@ -48,9 +48,11 @@ import {
   codexRegistryRoot,
   codexSocketPath,
   codexStartedAtFile,
+  codexStderrLogFile,
   codexTeammateDir,
   codexThreadFile,
-} from './paths.js'
+  codexStdoutLogFile,
+} from './persistence.js'
 
 /** Snapshot of one daemon's on-disk state. `null` for a missing entry. */
 export interface DaemonState {
@@ -212,7 +214,18 @@ export function daemonAlive(name: string): boolean {
 /** Names of every registry entry, alive or stale. */
 export function listDaemons(): string[] {
   try {
-    return readdirSync(codexRegistryRoot()).sort()
+    const root = codexRegistryRoot()
+    const names: string[] = []
+    const walk = (dir: string, prefix: string): void => {
+      if (prefix.length > 0 && existsSync(join(dir, 'pid'))) names.push(prefix)
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const childPrefix = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`
+        walk(join(dir, entry.name), childPrefix)
+      }
+    }
+    walk(root, '')
+    return names.sort()
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw e
@@ -229,6 +242,46 @@ export function listDaemons(): string[] {
  */
 export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState> {
   const { name } = opts
+  const dir = codexTeammateDir(name)
+  const socketPath = codexSocketPath(name)
+  const readyTimeoutMs = opts.readyTimeoutMs ?? 10000
+  const spawnLock = `${dir}.spawn.lock`
+  mkdirSync(dirname(spawnLock), { recursive: true })
+  let lockFd: number | null = null
+  try {
+    lockFd = openSync(spawnLock, 'wx', 0o600)
+    writeSync(lockFd, `${process.pid}\n`)
+  } catch {
+    throw new Error(`codex daemon '${name}' is already being spawned`)
+  }
+
+  try {
+    if (daemonAlive(name)) {
+      throw new Error(
+        `codex daemon '${name}' is already alive (pid ${
+          readDaemonState(name)?.pid ?? '?'
+        }); reap it first with tm doctor / tm kill`,
+      )
+    }
+    // Stale entry — torn down first so we never carry a previous pid forward.
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+
+    const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs)
+    return state
+  } finally {
+    if (lockFd !== null) closeSync(lockFd)
+    rmSync(spawnLock, { force: true })
+  }
+}
+
+async function spawnDaemonUnlocked(
+  opts: SpawnDaemonOptions,
+  dir: string,
+  socketPath: string,
+  readyTimeoutMs: number,
+): Promise<DaemonState> {
+  const { name } = opts
   // Precedence: explicit `opts.binPath` (tests) > `CLAUDEMUX_CODEX_BIN`
   // env override (the integration-suite seam) > the default `'codex'`
   // on PATH (production). The env hook lets the live-codex suite point
@@ -241,21 +294,6 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
   // intent to disable the binary, not a default-trigger.
   const binPath =
     opts.binPath ?? (process.env['CLAUDEMUX_CODEX_BIN'] || 'codex')
-  const dir = codexTeammateDir(name)
-  const socketPath = codexSocketPath(name)
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 10000
-
-  if (daemonAlive(name)) {
-    throw new Error(
-      `codex daemon '${name}' is already alive (pid ${
-        readDaemonState(name)?.pid ?? '?'
-      }); reap it first with tm doctor / tm kill`,
-    )
-  }
-  // Stale entry — torn down first so we never carry a previous pid forward.
-  rmSync(dir, { recursive: true, force: true })
-  mkdirSync(dir, { recursive: true })
-
   const args = ['app-server', '--listen', `unix://${socketPath}`, ...(opts.extraArgs ?? [])]
   // Daemon stdio:
   //   stdin  → /dev/null (ignored) — codex app-server is a pure socket server.
@@ -267,8 +305,8 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
   //     under the registry directory so `tail -f /tmp/teammate-codex/<n>/stderr.log`
   //     is one step away. The teammate's reap removes the directory and
   //     the log files with it.
-  const stdoutLog = join(dir, 'stdout.log')
-  const stderrLog = join(dir, 'stderr.log')
+  const stdoutLog = codexStdoutLogFile(name)
+  const stderrLog = codexStderrLogFile(name)
   const stdoutFd = openSync(stdoutLog, 'a', 0o600)
   const stderrFd = openSync(stderrLog, 'a', 0o600)
   const spawnOpts: SpawnOptions = {

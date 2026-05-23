@@ -178,7 +178,7 @@ the harness to committed golden JSON files (see
 | **1 — pivot** | Record [decision 0019](/.agents/decisions/0019-node-cli-orchestrator.md); rewrite this spec. | landed |
 | **2 — structure cleanup** | Stand up the Node CLI front end; remove the MCP modules and tool surface; complete the Bun → Node runtime move. | landed |
 | **3 — hot-path verbs + bash retirement** | Migrate `spawn`/`send`/`wait`/`compact`/`resume`/`doctor` into native code under the live-teammate net (3a, 3b), then retire the Bash [`bin/tm`](/plugins/claudemux/bin/tm) (3c). | landed |
-| **4 — Codex driver** | Add the Codex driver — the self-spawned `app-server`, the WebSocket JSON-RPC client, the daemon process registry, and both interaction modes (§6). | next |
+| **4 — Codex driver** | Add the Codex driver — the self-spawned `app-server`, the WebSocket JSON-RPC client, the daemon process registry, both interaction modes (§6), and the `tm doctor` orphan reap. See [decision 0022](/.agents/decisions/0022-codex-driver.md). | landed |
 
 Stage 3 landed in three sub-stages:
 

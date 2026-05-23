@@ -14,7 +14,6 @@
  */
 
 import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
@@ -45,17 +44,28 @@ const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
 let nameUnder: () => string
 let toReap: string[]
 let suffixDir: string
+let savedRegistryRoot: string | undefined
 
 beforeEach(() => {
-  suffixDir = mkdtempSync(join(tmpdir(), 'codex-test-'))
-  const suffix = suffixDir.split('/').pop()!
+  // Short root under `/tmp` rather than under `$TMPDIR` (macOS deep
+  // path) — the daemon's unix socket lives at
+  // `<root>/<name>/socket` and macOS caps that path at ~104 chars.
+  suffixDir = mkdtempSync('/tmp/cmxs-')
+  // Each test file gets its own registry root so parallel vitest workers
+  // never race over `/tmp/teammate-codex/`. The supervisor reads
+  // `CLAUDEMUX_CODEX_REGISTRY_ROOT` through `codexRegistryRoot()` on
+  // every call.
+  savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = suffixDir
   let counter = 0
-  nameUnder = () => `${suffix}-${counter++}`
+  nameUnder = () => `c-${counter++}`
   toReap = []
 })
 
 afterEach(async () => {
   for (const name of toReap) await reapDaemon(name)
+  if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
   rmSync(suffixDir, { recursive: true, force: true })
 })
 

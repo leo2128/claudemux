@@ -4082,7 +4082,7 @@ function encodeProjectDir(cwd) {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 function codexRegistryRoot() {
-  return "/tmp/teammate-codex";
+  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] ?? "/tmp/teammate-codex";
 }
 function codexTeammateDir(name) {
   return join(codexRegistryRoot(), name);
@@ -4356,6 +4356,14 @@ function daemonAlive(name) {
   const state = readDaemonState(name);
   if (state === null) return false;
   return isProcessAlive(state.pid);
+}
+function listDaemons() {
+  try {
+    return readdirSync(codexRegistryRoot()).sort();
+  } catch (e) {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  }
 }
 async function spawnDaemon(opts) {
   const { name } = opts;
@@ -5780,6 +5788,37 @@ var doctor = async (args, _options, env) => {
     out += kv("count", String(sessionRows.length));
     for (const name of sessionRows) out += `  ${name}
 `;
+  }
+  out += "\n";
+  out += "codex teammates:\n";
+  const codexNames = listDaemons();
+  if (codexNames.length === 0) {
+    out += "  (none \u2014 use 'tm spawn codex-<n>' to launch one)\n";
+  } else {
+    const reaped = [];
+    const live = [];
+    for (const name of codexNames) {
+      const state = readDaemonState(name);
+      if (state === null) {
+        reaped.push(name);
+        await reapDaemon(name);
+      } else if (!isProcessAlive(state.pid)) {
+        reaped.push(name);
+        await reapDaemon(name);
+      } else {
+        live.push({ name, pid: state.pid, startedAt: state.startedAt });
+      }
+    }
+    out += kv("count", String(live.length));
+    for (const t of live) {
+      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})
+`;
+    }
+    if (reaped.length > 0) {
+      out += kv("reaped orphans", String(reaped.length));
+      for (const name of reaped) out += `  ${name}
+`;
+    }
   }
   return { code: 0, stdout: out, stderr: "" };
 };

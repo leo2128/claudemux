@@ -10,7 +10,6 @@
  */
 
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,12 +32,24 @@ let nameUnder: () => string
 let toReap: string[]
 let suffixDir: string
 let savedBin: string | undefined
+let savedRegistryRoot: string | undefined
 
 beforeEach(() => {
-  suffixDir = mkdtempSync(join(tmpdir(), 'codex-verbs-test-'))
-  const suffix = suffixDir.split('/').pop()!
+  // The unix socket nodes the fake daemon binds live under
+  // `<registryRoot>/<name>/socket`. macOS caps unix-socket paths at
+  // ~104 chars, so the registry root must stay short — keep it under
+  // `/tmp` rather than `$TMPDIR` (which is a deep `/var/folders/...`
+  // path on macOS).
+  suffixDir = mkdtempSync('/tmp/cmxv-')
+  // Private registry root + private bin path per-test so parallel test
+  // files never share `/tmp/teammate-codex/` state.
+  savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = suffixDir
   let counter = 0
-  nameUnder = () => `codex-${suffix}-${counter++}`
+  // The `codex-` prefix is part of the codex teammate contract — keep
+  // it so the verb-side messages ("tm spawn codex-…") match what a
+  // production caller would see.
+  nameUnder = () => `codex-${counter++}`
   toReap = []
   savedBin = process.env['CLAUDEMUX_CODEX_BIN']
   process.env['CLAUDEMUX_CODEX_BIN'] = FAKE_CODEX
@@ -48,6 +59,8 @@ afterEach(async () => {
   for (const name of toReap) await reapDaemon(name)
   if (savedBin === undefined) delete process.env['CLAUDEMUX_CODEX_BIN']
   else process.env['CLAUDEMUX_CODEX_BIN'] = savedBin
+  if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
   rmSync(suffixDir, { recursive: true, force: true })
 })
 

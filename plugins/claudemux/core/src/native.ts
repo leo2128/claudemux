@@ -62,6 +62,12 @@ import {
   codexWait,
   isCodexTarget,
 } from './codex-verbs'
+import {
+  isProcessAlive as codexProcessAlive,
+  listDaemons as listCodexDaemons,
+  readDaemonState as readCodexState,
+  reapDaemon as reapCodexDaemon,
+} from './codex-supervisor'
 
 /** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
 const SESSION_PREFIX = 'teammate-'
@@ -1881,6 +1887,44 @@ const doctor: NativeVerb = async (args, _options, env) => {
   } else {
     out += kv('count', String(sessionRows.length))
     for (const name of sessionRows) out += `  ${name}\n`
+  }
+  out += '\n'
+
+  // --- codex teammates ---
+  // The codex driver does not run inside tmux, so its teammates are
+  // enumerated from the FS registry under `codexRegistryRoot()`. A live
+  // entry (pid still answering signal 0) is reported as such; a dead-pid
+  // entry is an orphan from a crashed daemon or an unclean reboot — those
+  // are reaped here as part of the report, because a dead pid file
+  // misleads every subsequent `daemonAlive` check.
+  out += 'codex teammates:\n'
+  const codexNames = listCodexDaemons()
+  if (codexNames.length === 0) {
+    out += "  (none — use 'tm spawn codex-<n>' to launch one)\n"
+  } else {
+    const reaped: string[] = []
+    const live: { name: string; pid: number; startedAt: number }[] = []
+    for (const name of codexNames) {
+      const state = readCodexState(name)
+      if (state === null) {
+        // No usable state — treat as orphan.
+        reaped.push(name)
+        await reapCodexDaemon(name)
+      } else if (!codexProcessAlive(state.pid)) {
+        reaped.push(name)
+        await reapCodexDaemon(name)
+      } else {
+        live.push({ name, pid: state.pid, startedAt: state.startedAt })
+      }
+    }
+    out += kv('count', String(live.length))
+    for (const t of live) {
+      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})\n`
+    }
+    if (reaped.length > 0) {
+      out += kv('reaped orphans', String(reaped.length))
+      for (const name of reaped) out += `  ${name}\n`
+    }
   }
 
   return { code: 0, stdout: out, stderr: '' }

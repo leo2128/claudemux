@@ -86,9 +86,14 @@ export function encodeProjectDir(cwd: string): string {
  * Decision 0019 §5: this registry is `tm`'s authoritative record of the
  * spawned daemon set. There is no in-memory mirror; every invocation
  * reconstructs from these files.
+ *
+ * `CLAUDEMUX_CODEX_REGISTRY_ROOT` overrides the default — the test seam
+ * that gives the supervisor / doctor / verb test files a private root
+ * each, so parallel `vitest` workers never race over the same
+ * `/tmp/teammate-codex/` directory. Production never sets this.
  */
 export function codexRegistryRoot(): string {
-  return '/tmp/teammate-codex'
+  return process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] ?? '/tmp/teammate-codex'
 }
 
 /** This teammate's registry subdirectory — created by `tm spawn codex-<n>`. */

@@ -8,7 +8,9 @@
  * tests here are about wiring (which handler was reached, with which args).
  */
 
-import { describe, expect, test } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import { runCli } from '../src/cli'
 import type { ColumnRunner } from '../src/column'
@@ -219,6 +221,28 @@ describe('doctor — sections fire top-down, never raising', () => {
   // *current* tm binary, which differs between bash `bin/tm` and the native
   // CLI launcher. This pins each section's presence and shape, since byte-
   // for-byte parity with bash is not the migration's intent here.
+
+  // Each parallel vitest worker needs its own codex registry root so
+  // doctor's codex-teammate section does not see entries left behind by
+  // the supervisor / verbs test files.
+  let savedRegistryRoot: string | undefined
+  let registryDir: string
+  beforeAll(() => {
+    // Short `/tmp` root rather than `$TMPDIR` so the supervisor's unix
+    // socket nodes (under `<root>/<name>/socket`) stay under macOS's
+    // ~104-char path limit. Doctor itself does not bind sockets, but
+    // sharing the root with the codex-verbs / supervisor test contract
+    // is the safer pattern.
+    registryDir = mkdtempSync('/tmp/cmxc-')
+    savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+    process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = registryDir
+  })
+  afterAll(() => {
+    if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+    else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
+    rmSync(registryDir, { recursive: true, force: true })
+  })
+
   test('reports every section, in order, and exits 0', async () => {
     const result = await runCli(
       ['doctor'],
@@ -242,6 +266,15 @@ describe('doctor — sections fire top-down, never raising', () => {
     expect(idx('tmux:')).toBeGreaterThan(idx('dispatcher dir:'))
     expect(idx('idle dir (')).toBeGreaterThan(idx('tmux:'))
     expect(idx('active teammates:')).toBeGreaterThan(idx('idle dir ('))
+    expect(idx('codex teammates:')).toBeGreaterThan(idx('active teammates:'))
+  })
+
+  test('the codex section reports "none" when no codex teammates exist', async () => {
+    // With a private registry root (set in beforeAll above) no other test
+    // file can land entries here, so the "none" body is stable.
+    const result = await runCli(['doctor'], fakeEnv())
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/codex teammates:\s*\n  \(none — use 'tm spawn codex-<n>' to launch one\)/)
   })
 
   test('the reported tm executable path is the production launcher, not the dev wrapper', async () => {

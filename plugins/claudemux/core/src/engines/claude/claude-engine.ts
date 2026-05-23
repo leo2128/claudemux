@@ -172,7 +172,13 @@ export class ClaudeEngine implements Engine {
       const colon = line.indexOf(':')
       const session = colon >= 0 ? line.slice(0, colon) : line
       if (!session.startsWith(TMUX_SESSION_PREFIX)) continue
-      const name = session.slice(TMUX_SESSION_PREFIX.length).replace(/__/g, '/')
+      // Strip the tmux prefix but keep the raw session-name suffix as the
+      // listing's `name`. Decoding `__` → `/` here would mis-identify a
+      // legacy single-segment teammate like `flow__1` as a nested name
+      // `flow/1`; Phase 2a-1 listings therefore surface tmux session names
+      // verbatim. Phase 2a-2 reads the base TeammateRecord JSON which
+      // holds the unambiguous raw name and replaces this fallback.
+      const name = session.slice(TMUX_SESSION_PREFIX.length)
       out.push({
         name,
         engine: 'claude',
@@ -193,6 +199,9 @@ export class ClaudeEngine implements Engine {
     let pane: string | null = null
     try {
       const list = await this.env.runTmux(['list-sessions', '-F', '#{session_id} #{session_name}'])
+      if (list.code !== 0) {
+        return { kind: 'failed', message: rstrip(list.stderr) || rstrip(list.stdout) || `tmux list-sessions exit ${list.code}` }
+      }
       for (const line of list.stdout.split('\n')) {
         const space = line.indexOf(' ')
         if (space >= 0 && line.slice(space + 1) === sessionName) {
@@ -200,18 +209,25 @@ export class ClaudeEngine implements Engine {
           break
         }
       }
-    } catch {
-      pane = null
+    } catch (err) {
+      return { kind: 'failed', message: err instanceof Error ? err.message : String(err) }
+    }
+    if (pane === null) {
+      // `hasTmuxSession` saw the session but list-sessions did not return a
+      // matching row — surface this rather than reporting a successful
+      // status without any captured pane content.
+      return { kind: 'failed', message: `tmux session ${sessionName} present in has-session but absent from list-sessions` }
     }
 
-    let capture = ''
-    if (pane !== null) {
-      try {
-        const result = await this.env.runTmux(['capture-pane', '-t', pane, '-p', '-S', `-${linesArg}`])
-        if (result.code === 0) capture = result.stdout
-      } catch {
-        capture = ''
+    let capture: string
+    try {
+      const result = await this.env.runTmux(['capture-pane', '-t', pane, '-p', '-S', `-${linesArg}`])
+      if (result.code !== 0) {
+        return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) || `tmux capture-pane exit ${result.code}` }
       }
+      capture = result.stdout
+    } catch (err) {
+      return { kind: 'failed', message: err instanceof Error ? err.message : String(err) }
     }
 
     return {
@@ -220,7 +236,7 @@ export class ClaudeEngine implements Engine {
       engine: 'claude',
       state: deriveState(req.name),
       cwd: readCwd(req.name) ?? '',
-      pane: capture === '' ? pane : capture,
+      pane: capture,
       diagnostics: {
         tmuxSession: sessionName,
         sid: readSid(req.name) ?? '',

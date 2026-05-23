@@ -49,19 +49,28 @@ import {
 } from '../engines/teammate-record'
 import type { EngineKind, TeammateName } from '../engines/types'
 
-/** Absolute path of the identity JSON for a teammate. */
-export function identityFile(name: TeammateName): string {
-  return `/tmp/teammate-${name}.json`
+/**
+ * The directory the identity files live in. Defaults to `/tmp` (the
+ * cross-process protocol root); tests point this at a fresh temp
+ * directory via `CLAUDEMUX_IDENTITY_ROOT` so a unit test can drive
+ * `reserve` / `read` / `list` without colliding with real dispatcher
+ * state. Resolved per call so a test that sets the env var inside
+ * `beforeEach` is honoured by code paths that captured the module
+ * earlier.
+ */
+function identityRoot(): string {
+  return process.env['CLAUDEMUX_IDENTITY_ROOT'] || '/tmp'
 }
 
-/** The `/tmp` directory the identity files live in. */
-const IDENTITY_ROOT = '/tmp'
+/** Absolute path of the identity JSON for a teammate. */
+export function identityFile(name: TeammateName): string {
+  return `${identityRoot()}/teammate-${name}.json`
+}
+
 /** Regex pinning the top-level identity-file name shape; capture group 1 is the name. */
 const TOP_LEVEL_FILENAME = /^teammate-(.+)\.json$/
 /** Regex pinning the per-nested-segment directory shape under `/tmp`. */
 const NESTED_TOP_DIR = /^teammate-(.+)$/
-/** The codex registry directory — not an identity file root. */
-const CODEX_REGISTRY_DIRNAME = 'teammate-codex'
 
 export type ReserveResult =
   | { kind: 'reserved' }
@@ -124,9 +133,19 @@ export function remove(name: TeammateName): void {
  *    recursively, for `*.json` files whose path back-resolves to a valid
  *    teammate name.
  *
- * The Codex registry directory `/tmp/teammate-codex/` is excluded by
- * name — it holds per-teammate Codex extension files (`pid`, `socket`,
- * `thread`, …), never a top-level identity JSON.
+ * The Codex engine's per-teammate registry directory
+ * (`/tmp/teammate-codex/<name>/`) lives under the same prefix because a
+ * nested teammate `codex/foo` writes its base record at
+ * `/tmp/teammate-codex/foo.json` — the registry root is not a directory
+ * we can skip wholesale without losing every `codex/*` teammate. The
+ * load-bearing defence is the reconstruction check in `walkNested`: a
+ * file is included only if its parsed JSON satisfies the
+ * `TeammateRecordJson` schema AND the recorded `name` field
+ * reconstructs from the path segments. Codex's daemon-state files
+ * (`pid`, `socket`, `thread`, `started-at`, `last-seen`) are not
+ * `.json`; the `meta.json` is `.json` but lacks `engine`/`createdAt`
+ * and its `name` field does not match the path it lives at, so the
+ * parse and reconstruction checks both reject it.
  *
  * Unparseable files are skipped (the caller does not get a partial
  * record).
@@ -135,7 +154,7 @@ export function list(): readonly TeammateRecordJson[] {
   const out: TeammateRecordJson[] = []
   let entries: string[]
   try {
-    entries = readdirSync(IDENTITY_ROOT)
+    entries = readdirSync(identityRoot())
   } catch {
     return []
   }
@@ -143,7 +162,7 @@ export function list(): readonly TeammateRecordJson[] {
     const top = entry.match(TOP_LEVEL_FILENAME)
     if (top !== null) {
       // Single-segment identity file: `teammate-<name>.json`.
-      const raw = readIfPresent(join(IDENTITY_ROOT, entry))
+      const raw = readIfPresent(join(identityRoot(), entry))
       if (raw === null) continue
       const parsed = parse(raw)
       if (parsed !== null) out.push(parsed)
@@ -151,13 +170,12 @@ export function list(): readonly TeammateRecordJson[] {
     }
     const nested = entry.match(NESTED_TOP_DIR)
     if (nested === null) continue
-    if (entry === CODEX_REGISTRY_DIRNAME) continue
     const firstSegment = nested[1]
     if (firstSegment === undefined) continue
     // Possible nested-name root: walk it for `*.json` leaves whose path
     // reconstructs a valid teammate name. Multiple levels are allowed
     // (D9 only specifies "/-segmented", not "two-segment").
-    walkNested(join(IDENTITY_ROOT, entry), [firstSegment], out)
+    walkNested(join(identityRoot(), entry), [firstSegment], out)
   }
   return out
 }

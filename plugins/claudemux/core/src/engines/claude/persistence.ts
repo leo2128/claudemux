@@ -100,7 +100,14 @@ export function tmuxSessionName(name: TeammateName): string {
   return `${TMUX_SESSION_PREFIX}${name.replace(/\//g, '__')}`
 }
 
-/** Inverse of `tmuxSessionName` — `teammate-flow__flow-1` → `flow/flow-1`. */
+/**
+ * Approximate inverse of `tmuxSessionName`. Lossy by construction: a raw
+ * teammate name `flow__1` and a nested name `flow/1` both encode to
+ * `teammate-flow__1`, so the reverse path cannot recover the original
+ * once a `__` appears. Production listing code reads names from the
+ * base TeammateRecord JSON instead; this helper is a convenience for
+ * tests and diagnostics that already know no nested decoding is needed.
+ */
 export function decodeTmuxSessionName(session: string): TeammateName | null {
   if (!session.startsWith(TMUX_SESSION_PREFIX)) return null
   return session.slice(TMUX_SESSION_PREFIX.length).replace(/__/g, '/')

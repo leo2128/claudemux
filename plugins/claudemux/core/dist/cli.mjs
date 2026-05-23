@@ -6932,7 +6932,7 @@ var ClaudeEngine = class {
       const colon = line.indexOf(":");
       const session = colon >= 0 ? line.slice(0, colon) : line;
       if (!session.startsWith(TMUX_SESSION_PREFIX)) continue;
-      const name = session.slice(TMUX_SESSION_PREFIX.length).replace(/__/g, "/");
+      const name = session.slice(TMUX_SESSION_PREFIX.length);
       out.push({
         name,
         engine: "claude",
@@ -6951,6 +6951,9 @@ var ClaudeEngine = class {
     let pane = null;
     try {
       const list = await this.env.runTmux(["list-sessions", "-F", "#{session_id} #{session_name}"]);
+      if (list.code !== 0) {
+        return { kind: "failed", message: rstrip(list.stderr) || rstrip(list.stdout) || `tmux list-sessions exit ${list.code}` };
+      }
       for (const line of list.stdout.split("\n")) {
         const space = line.indexOf(" ");
         if (space >= 0 && line.slice(space + 1) === sessionName) {
@@ -6958,17 +6961,21 @@ var ClaudeEngine = class {
           break;
         }
       }
-    } catch {
-      pane = null;
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
     }
-    let capture = "";
-    if (pane !== null) {
-      try {
-        const result = await this.env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${linesArg}`]);
-        if (result.code === 0) capture = result.stdout;
-      } catch {
-        capture = "";
+    if (pane === null) {
+      return { kind: "failed", message: `tmux session ${sessionName} present in has-session but absent from list-sessions` };
+    }
+    let capture;
+    try {
+      const result = await this.env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${linesArg}`]);
+      if (result.code !== 0) {
+        return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) || `tmux capture-pane exit ${result.code}` };
       }
+      capture = result.stdout;
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
     }
     return {
       kind: "present",
@@ -6976,7 +6983,7 @@ var ClaudeEngine = class {
       engine: "claude",
       state: deriveState(req.name),
       cwd: readCwd(req.name) ?? "",
-      pane: capture === "" ? pane : capture,
+      pane: capture,
       diagnostics: {
         tmuxSession: sessionName,
         sid: readSid(req.name) ?? ""
@@ -7163,8 +7170,11 @@ function removeIfPresent(path) {
 }
 
 // src/persistence/identity-store.ts
+function identityRoot() {
+  return process.env["CLAUDEMUX_IDENTITY_ROOT"] || "/tmp";
+}
 function identityFile(name) {
-  return `/tmp/teammate-${name}.json`;
+  return `${identityRoot()}/teammate-${name}.json`;
 }
 function read(name) {
   const raw = readIfPresent(identityFile(name));
@@ -7204,14 +7214,14 @@ function parse(raw) {
 var SEGMENT_REGEX = /^[A-Za-z0-9._-]+$/;
 function validateTeammateName(raw) {
   if (raw.length === 0) return { kind: "invalid", reason: "empty" };
-  if (raw.includes("__")) {
-    return {
-      kind: "invalid",
-      reason: "'__' is reserved (the Claude engine uses it to encode '/' in tmux session names)"
-    };
-  }
   if (raw.startsWith("/") || raw.endsWith("/")) {
     return { kind: "invalid", reason: "leading or trailing '/'" };
+  }
+  if (raw.includes("/") && raw.includes("__")) {
+    return {
+      kind: "invalid",
+      reason: "a nested name (containing '/') must not also contain '__' \u2014 the Claude engine encodes '/' \u2192 '__' for tmux"
+    };
   }
   const segments = raw.split("/");
   for (const seg of segments) {

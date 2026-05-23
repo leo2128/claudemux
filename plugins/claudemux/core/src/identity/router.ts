@@ -91,6 +91,10 @@ export class LegacyClaudeTmuxRouter implements TeammateRouter {
     if (validateTeammateName(name).kind !== 'ok') return null
     const claude = this.engines.get('claude')
     if (claude === undefined) return null
+    // `replace(/\//g, '__')` is a no-op on a flat raw name like
+    // `flow__1`, so a legacy single-segment session `teammate-flow__1`
+    // still resolves to itself; only names actually containing `/` go
+    // through the nested-name encoding.
     const sessionName = `teammate-${name.replace(/\//g, '__')}`
     if (!(await this.tmuxProbe(sessionName))) return null
     return { name, engine: claude }

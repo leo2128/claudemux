@@ -14,11 +14,15 @@
  *    drawn from `[A-Za-z0-9._-]`. Leading and trailing `/` are rejected;
  *    empty segments (`a//b`) are rejected.
  *
- *  - The name must not contain the literal substring `__`. The Claude
- *    engine encodes `/` → `__` to land on a tmux-safe session name
- *    (`tmuxSessionName` in `engines/claude/persistence.ts`); reserving
- *    `__` in raw names keeps that encoding round-trippable. A name like
- *    `flow__1` would otherwise decode ambiguously to `flow/1`.
+ *  - A name that contains `/` must not also contain the literal
+ *    substring `__`. The Claude engine encodes `/` → `__` to land on a
+ *    tmux-safe session name (`tmuxSessionName` in
+ *    `engines/claude/persistence.ts`); a nested name like `flow__/1`
+ *    would encode to `teammate-flow____1`, which collides with the
+ *    encoding of `flow/_/1` — the simplest way to keep the encoding
+ *    unambiguous is to reject this single overlap rather than reserve
+ *    `__` in every raw name. A flat name like `flow__1` (no `/`) is
+ *    legal and round-trips through the tmux session name unchanged.
  *
  *  - The name must not start with `.` and must not be exactly `.` / `..` —
  *    those collide with filesystem semantics for the engine extension
@@ -52,14 +56,14 @@ export type NameValidationResult = NameValidationOk | NameValidationFailure
  */
 export function validateTeammateName(raw: string): NameValidationResult {
   if (raw.length === 0) return { kind: 'invalid', reason: 'empty' }
-  if (raw.includes('__')) {
-    return {
-      kind: 'invalid',
-      reason: "'__' is reserved (the Claude engine uses it to encode '/' in tmux session names)",
-    }
-  }
   if (raw.startsWith('/') || raw.endsWith('/')) {
     return { kind: 'invalid', reason: "leading or trailing '/'" }
+  }
+  if (raw.includes('/') && raw.includes('__')) {
+    return {
+      kind: 'invalid',
+      reason: "a nested name (containing '/') must not also contain '__' — the Claude engine encodes '/' → '__' for tmux",
+    }
   }
   const segments = raw.split('/')
   for (const seg of segments) {

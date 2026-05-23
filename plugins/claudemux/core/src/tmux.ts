@@ -29,8 +29,14 @@ export interface TmuxResult {
  * Runs one `tmux` invocation. Injectable: native verbs depend on this type,
  * not on the concrete function, so a conformance fixture can supply a fake
  * tmux without touching the verb logic.
+ *
+ * The optional `stdin` is the bytes piped to tmux's standard input — what
+ * `tmux load-buffer -b <name> -` reads to stage a paste buffer.
  */
-export type TmuxRunner = (args: readonly string[]) => Promise<TmuxResult>
+export type TmuxRunner = (
+  args: readonly string[],
+  options?: { stdin?: string },
+) => Promise<TmuxResult>
 
 /**
  * Resolve the `tmux` executable. `CLAUDEMUX_TMUX` overrides it (the tests
@@ -47,5 +53,5 @@ export function resolveTmuxBinary(): string {
  * The production `TmuxRunner`: spawn `tmux`, forward the argument vector
  * verbatim, and capture exit code, stdout, and stderr without interpretation.
  */
-export const runTmux: TmuxRunner = (args) =>
-  spawnCapture([resolveTmuxBinary(), ...args])
+export const runTmux: TmuxRunner = (args, options) =>
+  spawnCapture([resolveTmuxBinary(), ...args], options)

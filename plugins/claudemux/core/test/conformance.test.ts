@@ -51,7 +51,6 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -116,7 +115,12 @@ beforeAll(() => {
   savedSessions = process.env.FAKE_TMUX_SESSIONS
   savedCapture = process.env.FAKE_TMUX_CAPTURE
 
-  scratchDir = mkdtempSync(join(tmpdir(), 'claudemux-conf-'))
+  // /tmp, not os.tmpdir(): on macOS the per-user temp dir (`/var/folders/.../T`)
+  // carries `_` in its hash, and Claude Code's project-dir encoding folds `_`
+  // to `-` (any char outside `[A-Za-z0-9-]` does, see `encodeProjectDir`). A
+  // scratch dir under `/tmp` is alphanumeric-clean, so every encoded fixture
+  // path lands at exactly one directory on either OS.
+  scratchDir = mkdtempSync(join('/tmp', 'claudemux-conf-'))
   sessionsFile = join(scratchDir, 'tmux-sessions')
   writeFileSync(sessionsFile, '')
   captureFile = join(scratchDir, 'tmux-capture')
@@ -1480,6 +1484,240 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             snapshot: () =>
               snapshotPaths([...reloadWorld(running), ...reloadWorld(stopped)]),
           }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'spawn',
+    // The full happy path needs a real `claude` and a real tmux that
+    // accepts `new-session -P -F` — neither is in this harness. The
+    // live-teammate integration suite (`test/integration/hot-path.itest.ts`)
+    // covers the round-trip; these scenarios pin every `cmd_spawn` exit
+    // before the `tmux new-session` call.
+    scenarios: [
+      {
+        name: 'no repo argument → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: [uniqueName(), '--bogus'] }),
+      },
+      {
+        name: '--prompt with no value → the requires-a-value error',
+        setup: () => ({ args: [uniqueName(), '--prompt'] }),
+      },
+      {
+        name: '--no-wait without --prompt → the validation error',
+        setup: () => ({ args: [uniqueName(), '--no-wait'] }),
+      },
+      {
+        name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: '--task with no usable characters → the slug-empty error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          // `?!@#` has no chars in the allowlist; sanitization yields '' and
+          // both implementations reject before touching tmux.
+          return { args: [repo, '--task', '?!@#'] }
+        },
+      },
+      {
+        name: 'a session already running, with --prompt → the atomic-bootstrap-rejected error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [repo, '--prompt', 'hi'] }
+        },
+      },
+      {
+        name: 'a session already running, no --prompt → the "already exists" notice, exit 0',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [repo] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'send',
+    // The full round-trip (send + wait for Stop + print reply) needs a real
+    // teammate and is exercised by the live-teammate integration suite. These
+    // scenarios pin every flag-validation path and the `--no-wait` happy path
+    // that fires against the fake tmux.
+    scenarios: [
+      {
+        name: 'no arguments → the missing-repo error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'a repo but no --prompt → the missing-prompt error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus', uniqueName(), '--prompt', 'hi'] }),
+      },
+      {
+        name: '--prompt with no value → the requires-a-value error',
+        setup: () => ({ args: [uniqueName(), '--prompt'] }),
+      },
+      {
+        name: '--timeout with no value → the requires-a-value error',
+        setup: () => ({ args: [uniqueName(), '--prompt', 'hi', '--timeout'] }),
+      },
+      {
+        name: 'no tmux session → the no-such-session error',
+        setup: () => {
+          setSessions('')
+          return { args: [uniqueName(), '--prompt', 'hi'] }
+        },
+      },
+      {
+        name: '--no-wait against a running fake teammate → the send-at marker is touched',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          return {
+            args: [repo, '--no-wait', '--prompt', 'hi'],
+            snapshot: () => snapshotPaths([sendAtFile(repo)]),
+          }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'wait',
+    // The blocking idle-marker poll is covered by the live-teammate suite;
+    // here we pin every early-exit path (arg parsing + require_session).
+    scenarios: [
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus', uniqueName()] }),
+      },
+      {
+        name: 'no tmux session → the no-such-session error',
+        setup: () => {
+          setSessions('')
+          return { args: [uniqueName()] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'compact',
+    // The PostCompact poll and pane refusal detection are covered by the
+    // live-teammate suite; here we pin every early-exit path.
+    scenarios: [
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus', uniqueName()] }),
+      },
+      {
+        name: 'no tmux session → the no-such-session error',
+        setup: () => {
+          setSessions('')
+          return { args: [uniqueName()] }
+        },
+      },
+      {
+        name: 'a running session but no sid file → the no-sid error',
+        setup: () => {
+          const repo = uniqueName()
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [repo] }
+        },
+      },
+    ],
+  },
+  {
+    verb: 'resume',
+    // The full resume path needs a real `claude` and tmux; the live-teammate
+    // suite covers it. These scenarios pin every `cmd_resume` exit before the
+    // `cmd_spawn --resume` handoff.
+    scenarios: [
+      {
+        name: 'no arguments → the usage error',
+        setup: () => ({ args: [] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: [uniqueName(), '--bogus'] }),
+      },
+      {
+        name: '--no-wait without --prompt → the validation error',
+        setup: () => ({ args: [uniqueName(), '--no-wait'] }),
+      },
+      {
+        name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'too many positional arguments → the too-many-positionals error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'extra'] }
+        },
+      },
+      {
+        name: 'a session already running → the already-running error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          setSessions(`${sessionLine(repo)}\n`)
+          return { args: [repo] }
+        },
+      },
+      {
+        name: 'no project dir, no sid → the "has anyone ever run claude" error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: [repo] }
+        },
+      },
+      // Skipped: "project dir exists but holds no jsonl, no sid" — bash
+      // dies silently (exit 1, empty stderr) because `set -e` aborts at the
+      // `ls "$dir"/*.jsonl` no-match before the next-line `die` fires. Native
+      // produces the intended `no .jsonl transcripts ...` line; that is a
+      // user-facing improvement, not bug-for-bug, so it does not pass the
+      // differential check and is not scenarioed here.
+      {
+        name: 'explicit sid with no transcript at the target → the no-transcript error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          mkdirSync(historyProjectDir(repo), { recursive: true })
+          return { args: [repo, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'] }
+        },
+      },
+      {
+        name: 'a non-uuid sid that has a transcript → the invalid-uuid error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          // 8+ hex chars passes `cmd_history`'s prefix regex but fails the
+          // `cmd_resume` strict UUID check — seed a transcript so the
+          // existence guard does not fire first.
+          mkdirSync(historyProjectDir(repo), { recursive: true })
+          writeFileSync(join(historyProjectDir(repo), 'not-a-uuid.jsonl'), '')
+          return { args: [repo, 'not-a-uuid'] }
         },
       },
     ],

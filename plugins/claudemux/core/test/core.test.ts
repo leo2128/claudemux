@@ -48,7 +48,13 @@ function fakeEnv(runTm: TmRunner, over: Partial<NativeEnv> = {}): NativeEnv {
   }
 }
 
-describe('every not-yet-migrated verb shells out to tm', () => {
+describe('a non-native verb shells out to tm', () => {
+  // After stage 3 every TM_VERB is migrated, so the shell-out path is reached
+  // only for verb names not in `NATIVE_VERBS`. A synthetic name below pins the
+  // wiring without depending on which verbs are migrated yet. (The verb-loop
+  // covers every still-unmigrated TM_VERB if any remain.)
+  const UNMIGRATED = '__core_test_unmigrated_verb__'
+
   for (const verb of TM_VERBS.filter((v) => !isNativeVerb(v.name))) {
     test(`${verb.name} reaches tm with its verb name and arguments`, async () => {
       const runner = fakeRunner()
@@ -61,20 +67,19 @@ describe('every not-yet-migrated verb shells out to tm', () => {
 
   test('a verb with no args forwards an empty argument vector', async () => {
     const runner = fakeRunner()
-    await runVerb('doctor', [], undefined, fakeEnv(runner.run))
+    await runVerb(UNMIGRATED, [], undefined, fakeEnv(runner.run))
     expect(runner.calls[0]?.args).toEqual([])
   })
 
   test('stdin is forwarded to the runner', async () => {
     const runner = fakeRunner()
-    // `compact` still shells out — it exercises the stdin plumbing into `runTm`.
-    await runVerb('compact', [], { stdin: 'task-9' }, fakeEnv(runner.run))
+    await runVerb(UNMIGRATED, [], { stdin: 'task-9' }, fakeEnv(runner.run))
     expect(runner.calls[0]?.stdin).toBe('task-9')
   })
 
   test('the verb result is returned unshaped', async () => {
     const runner = fakeRunner({ code: 2, stdout: 'partial', stderr: 'it broke' })
-    const result = await runVerb('send', ['acme'], undefined, fakeEnv(runner.run))
+    const result = await runVerb(UNMIGRATED, ['acme'], undefined, fakeEnv(runner.run))
     expect(result).toEqual({ code: 2, stdout: 'partial', stderr: 'it broke' })
   })
 })
@@ -120,15 +125,14 @@ describe('a migrated verb runs natively, not through tm', () => {
     expect(result.stdout + result.stderr).toContain('__coretest_argv_probe__')
   })
 
-  test('reload runs natively, fanning out over `tm send`', async () => {
+  test('reload runs natively and never reaches the tm shell-out', async () => {
     const runner = fakeRunner()
-    // The native `reload` shells out, but to `tm send` per repo — never to
-    // `tm reload`; the call shape pins the fan-out.
+    // After stage 3 `reload` fans out to the in-process native `send`, not a
+    // `tm send` subprocess. The native `send` here will die (no tmux session
+    // for `repo-x`), but the verb is reached natively and stops at that — the
+    // shell-out runner stays untouched, and the arrow line still prints.
     const result = await runVerb('reload', ['repo-x'], undefined, fakeEnv(runner.run))
-    expect(runner.calls).toHaveLength(1)
-    expect(runner.calls[0]?.verb).toBe('send')
-    expect(runner.calls[0]?.args).toEqual(['--no-wait', 'repo-x', '--prompt', '/reload-plugins'])
-    expect(result.code).toBe(0)
+    expect(runner.calls).toHaveLength(0)
     expect(result.stdout).toContain('→ repo-x: /reload-plugins')
   })
 })
@@ -154,6 +158,49 @@ describe('a --help invocation shells out even for a migrated verb', () => {
     )
     expect(runner.calls).toHaveLength(0)
     expect(result.code).not.toBe(0)
+  })
+})
+
+describe('doctor — sections fire top-down, never raising', () => {
+  // `doctor` is not in the conformance harness: it reports the path to the
+  // *current* tm binary, which differs between bash `bin/tm` and the native
+  // CLI wrapper. The probe below exercises the native verb directly and
+  // pins each section's presence and shape, since byte-for-byte parity with
+  // bash is not the migration's intent here.
+  test('reports every section, in order, and exits 0', async () => {
+    const runner = fakeRunner()
+    const result = await runVerb(
+      'doctor',
+      [],
+      undefined,
+      fakeEnv(runner.run, {
+        // A tmux probe that succeeds; the section just needs the version line.
+        runTmux: async (args) => {
+          const verb = args[0]
+          if (verb === '-V') return { code: 0, stdout: 'tmux 3.4\n', stderr: '' }
+          if (verb === 'info') return { code: 0, stdout: '', stderr: '' }
+          if (verb === 'ls') return { code: 1, stdout: '', stderr: 'no server' }
+          return { code: 0, stdout: '', stderr: '' }
+        },
+      }),
+    )
+    expect(runner.calls).toHaveLength(0)
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    // Sections in order; the heading text is the load-bearing contract.
+    const idx = (heading: string): number => result.stdout.indexOf(heading)
+    expect(idx('tm executable:')).toBeGreaterThanOrEqual(0)
+    expect(idx('dispatcher dir:')).toBeGreaterThan(idx('tm executable:'))
+    expect(idx('tmux:')).toBeGreaterThan(idx('dispatcher dir:'))
+    expect(idx('idle dir (')).toBeGreaterThan(idx('tmux:'))
+    expect(idx('active teammates:')).toBeGreaterThan(idx('idle dir ('))
+  })
+
+  test('rejects positional arguments with the usage error', async () => {
+    const runner = fakeRunner()
+    const result = await runVerb('doctor', ['extra'], undefined, fakeEnv(runner.run))
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('tm doctor: takes no arguments')
   })
 })
 

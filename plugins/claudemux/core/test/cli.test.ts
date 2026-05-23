@@ -49,33 +49,37 @@ function fakeDeps(
   return { deps, tmCalls, rawCalls }
 }
 
-describe('a not-yet-migrated verb shells out to tm', () => {
+describe('a non-native verb shells out to tm', () => {
+  // After stage 3 every TM_VERB is migrated, so the shell-out path is reached
+  // only when the verb name is not in `NATIVE_VERBS`. The synthetic name below
+  // pins that path without depending on which verbs are migrated yet.
+  const UNMIGRATED = '__cli_test_unmigrated_verb__'
+
   test('the verb name and its arguments reach the tm shell-out', async () => {
     const { deps, tmCalls, rawCalls } = fakeDeps()
-    await runCli(['send', 'acme', '--flag', 'beta'], deps)
+    await runCli([UNMIGRATED, 'acme', '--flag', 'beta'], deps)
     expect(tmCalls).toHaveLength(1)
-    expect(tmCalls[0]?.verb).toBe('send')
+    expect(tmCalls[0]?.verb).toBe(UNMIGRATED)
     expect(tmCalls[0]?.args).toEqual(['acme', '--flag', 'beta'])
     expect(rawCalls).toHaveLength(0)
   })
 
   test('a verb with no arguments shells out an empty argument vector', async () => {
     const { deps, tmCalls } = fakeDeps()
-    await runCli(['doctor'], deps)
-    expect(tmCalls[0]?.verb).toBe('doctor')
+    await runCli([UNMIGRATED], deps)
+    expect(tmCalls[0]?.verb).toBe(UNMIGRATED)
     expect(tmCalls[0]?.args).toEqual([])
   })
 
   test('stdin is forwarded to the shell-out', async () => {
     const { deps, tmCalls } = fakeDeps()
-    // `compact` still shells out — it exercises the stdin plumbing into `runTm`.
-    await runCli(['compact'], deps, 'task-9')
+    await runCli([UNMIGRATED], deps, 'task-9')
     expect(tmCalls[0]?.stdin).toBe('task-9')
   })
 
   test('the verb result is returned faithfully', async () => {
     const { deps } = fakeDeps({}, { code: 2, stdout: 'partial', stderr: 'it broke' })
-    const result = await runCli(['send', 'acme'], deps)
+    const result = await runCli([UNMIGRATED, 'acme'], deps)
     expect(result).toEqual({ code: 2, stdout: 'partial', stderr: 'it broke' })
   })
 })

@@ -61,15 +61,17 @@ export function readyFile(repo: string): string {
  * Encode a filesystem path into Claude Code's project-dir segment — the name
  * of the directory under `~/.claude/projects/` that holds a cwd's transcripts.
  *
- * Claude Code derives that name by replacing every `/` and `.` in the cwd
- * with `-`. This is an Anthropic-controlled contract, and this is its one
+ * Claude Code derives that name by replacing every character that is not
+ * ASCII-alphanumeric or `-` with `-`. The rule was probed empirically: cwds
+ * containing `_`, `+`, `.`, `,`, `:`, `!`, `@`, `;`, or a literal space all
+ * land at the same `-bar` directory; only `A-Z`, `a-z`, `0-9`, and `-` survive
+ * verbatim. This is an Anthropic-controlled contract, and this is its one
  * source of truth on the TypeScript side (decision 0004): every site that
  * locates a project dir routes through here, or the same repo ends up
- * addressed by two different strings — a `/`-only replacement once silently
- * dropped the dots from a path like `~/Development/foo.bar/repo`.
+ * addressed by two different strings.
  */
 export function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/[./]/g, '-')
+  return cwd.replace(/[^A-Za-z0-9-]/g, '-')
 }
 
 /** The core's own state directory — persistent, under `~/.claude/`. */

@@ -14,14 +14,17 @@ are the domain spec,
 this document is the **component** view — what the `core/` modules are and what
 contracts they hold.
 
-> **Status — the CLI front end stands; the hot path still shells out.** The
-> structure is in place (domain-spec stage 2): the CLI front end dispatches
-> every verb, the resident-MCP scaffolding is gone, and the runtime is Node.
-> 11 of the 17 `tm` verbs run as native TypeScript; the remaining six — the
-> racy hot path (`spawn`, `send`, `wait`, `compact`, `resume`) and `doctor` —
-> still shell out to the Bash `tm`. Stage 3 migrates those and retires
-> [`bin/tm`](/plugins/claudemux/bin/tm); stage 4 adds the Codex driver. The
-> Bash `tm` is unchanged and fully usable on its own throughout.
+> **Status — every verb runs natively; the bash `tm` lives on as the user-
+> facing PATH entry.** All 17 `tm` verbs (including the racy hot path —
+> `spawn`, `send`, `wait`, `compact`, `resume` — and `doctor`) are
+> reimplemented in TypeScript. A Bash launcher at
+> [`core/bin/tm`](/plugins/claudemux/core/bin/tm) runs the CLI through `tsx`;
+> the live-teammate integration suite re-aims at native by pointing
+> `CLAUDEMUX_TM` at it. The user-installed PATH entry is still the bash
+> [`bin/tm`](/plugins/claudemux/bin/tm), and its help heredoc remains the
+> single source of truth for `--help` output — both are retired in stage 3c
+> alongside the conformance harness's bash oracle. Stage 4 adds the Codex
+> driver.
 
 ## Module layout
 
@@ -89,9 +92,12 @@ code. A bare `tm` (no verb) shells the empty argument vector out to the Bash
 `tm`, which owns the no-verb help screen. Only `archive` reads stdin, so the
 entry slurps `process.stdin` for that verb alone.
 
-The front end is not yet wired as the installed `tm` — that is stage 3, where
-the hot-path verbs migrate and the Bash [`bin/tm`](/plugins/claudemux/bin/tm)
-is retired.
+The Node CLI is reachable today through the Bash launcher at
+[`core/bin/tm`](/plugins/claudemux/core/bin/tm), which `exec`s `tsx` against
+[`cli.ts`](/plugins/claudemux/core/src/cli.ts) — the seam the live-teammate
+suite uses by pointing `CLAUDEMUX_TM` at it. The user-installed PATH entry
+remains the Bash [`bin/tm`](/plugins/claudemux/bin/tm); replacing it with the
+Node CLI (and dropping `tsx` for a TS-free runtime) is stage 3c.
 
 ## Native verbs and the conformance harness
 
@@ -121,6 +127,20 @@ for `archive`, the dispatcher's memory directory. The harness snapshots the
 world, runs the oracle, snapshots the effect, resets the world, runs native,
 and asserts the two post-states match (as well as the two `TmResult`s).
 
+The hot-path verbs (`spawn`, `send`, `wait`, `compact`, `resume`) cannot run
+their full round-trip under the conformance fake — there is no real `claude`
+REPL, and the fake `tmux` does not model `send-keys` / `load-buffer` /
+`paste-buffer` faithfully. They are conformance-checked only at every exit
+*before* the tmux send path: argument parsing, validation errors, the
+`require_session` / `repo not found` paths, and `send --no-wait` (which
+returns as soon as the keys are dispatched). The full round-trip is the
+[live-teammate suite's](/plugins/claudemux/core/test/integration) job.
+
+`doctor` is migrated but not in the conformance harness: it reports the path
+to the *current* `tm` binary, which differs between Bash `bin/tm` and the
+Node CLI launcher. A native-only unit test in `core.test.ts` pins the verb's
+output structure.
+
 ## The live-teammate integration harness
 
 The conformance harness fakes tmux and runs no `claude`, so it cannot reach the
@@ -139,11 +159,17 @@ framework: a temp-dispatcher fixture, a `tm` runner, the `~/.claude.json`
 directory-trust seeding a teammate needs to boot past the workspace-trust
 dialog, and a precondition probe that *skips* the suite — rather than failing
 it — when no live teammate can run. Every `tm` call resolves through
-`resolveTmBinary` / `CLAUDEMUX_TM`, so stage 3's hot-path verb migration
-re-aims the suite at the native verbs by pointing that override. Why trust is
-seeded by a targeted
-write rather than an isolated config dir is
-[decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md);
+`resolveTmBinary` / `CLAUDEMUX_TM`, so pointing that override at
+[`core/bin/tm`](/plugins/claudemux/core/bin/tm) re-aims the suite at the
+native CLI:
+
+```bash
+cd plugins/claudemux/core
+CLAUDEMUX_TM=$(pwd)/bin/tm npx vitest run --config vitest.integration.config.ts
+```
+
+Why trust is seeded by a targeted write rather than an isolated config dir
+is [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md);
 the run instructions are the suite's own
 [README](/plugins/claudemux/core/test/integration/README.md).
 

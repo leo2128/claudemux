@@ -26,6 +26,8 @@
  */
 
 import {
+  existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -34,12 +36,15 @@ import {
   writeFileSync,
   type Stats,
 } from 'node:fs'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import {
   busyMarkerFor,
   cwdFile,
   encodeProjectDir,
+  idleDir,
   idleMarkerFor,
   lastFileFor,
   readyFile,
@@ -1368,8 +1373,8 @@ const archive: NativeVerb = async (args, options, env) => {
  * `tm reload` — fan `/reload-plugins` out to one, many, or all teammates.
  *
  * The verb is sugar over `tm send --no-wait <repo> --prompt /reload-plugins`.
- * Argument parsing and the repo fan-out are native; each teammate's send is
- * delegated to a `tm send` subprocess, because `send` is not yet migrated.
+ * Argument parsing and the repo fan-out are native; each teammate's send
+ * dispatches into the native `send` handler in-process — no subprocess.
  *
  * `cmd_reload`'s `(failed — ...)` line and keep-iterating `rc` are dead code:
  * `cmd_send`'s `_send_keys` `die`s (`exit 1`) for a non-running teammate
@@ -1400,18 +1405,1224 @@ const reload: NativeVerb = async (args, _options, env) => {
   let stdout = ''
   for (const repo of repos) {
     stdout += `→ ${repo}: /reload-plugins\n`
-    let sent: TmResult
-    try {
-      sent = await env.runTm('send', ['--no-wait', repo, '--prompt', '/reload-plugins'])
-    } catch {
-      // A `tm send` that cannot even start is the same as a non-zero exit.
-      sent = { code: 1, stdout: '', stderr: '' }
-    }
+    const sent = await send(['--no-wait', repo, '--prompt', '/reload-plugins'], undefined, env)
     // A non-zero `tm send` is the `_send_keys` `die` that ends `tm reload`;
     // its own stderr went to `cmd_reload`'s `>/dev/null`, so it is dropped.
     if (sent.code !== 0) return { code: sent.code, stdout, stderr: '' }
   }
   return { code: 0, stdout, stderr: '' }
+}
+
+// --- shared helpers for the hot-path verbs --------------------------------
+//
+// `spawn`, `send`, `wait`, `compact`, and `resume` drive a real `claude` REPL
+// through tmux and the `/tmp/claude-idle` protocol. They share three building
+// blocks that mirror `bin/tm`'s `_send_keys`, `_wait_idle_signal`, and
+// `_print_last_or_empty` — kept in one place so a future fix lands across
+// every verb that composes them.
+
+/** `resolveSid` that dies with `tm`'s shared error when the sid is missing. */
+function resolveSidOrDie(repo: string): { sid: string } | { error: TmResult } {
+  const sid = resolveSid(repo)
+  if (sid === null) {
+    return {
+      error: die(
+        `no sid file for ${repo} at ${sidFile(repo)} — was this teammate ` +
+          "spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)",
+      ),
+    }
+  }
+  return { sid }
+}
+
+/** `tm`'s `new_sid`: a lowercase UUID — Claude Code normalizes sids to lower. */
+function newSid(): string {
+  return randomUUID().toLowerCase()
+}
+
+/** `tm`'s `rand_suffix`: 4 chars drawn from `[a-z0-9]`. */
+function randSuffix(): string {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = randomBytes(4)
+  let out = ''
+  for (let i = 0; i < 4; i++) out += alphabet[bytes[i]! % alphabet.length]
+  return out
+}
+
+/**
+ * `tm`'s `sanitize_task_slug`: lowercase ASCII alnum + CJK Unified Ideographs
+ * (U+4E00–U+9FFF) survive; every other code point collapses to a single `-`.
+ * Leading/trailing `-` stripped, capped at 30 code points (re-trimmed if the
+ * cap landed inside a run of separators). Empty result → empty string; the
+ * caller checks for that and rejects the slug.
+ */
+function sanitizeTaskSlug(task: string): string {
+  let s = task.toLowerCase()
+  // The character class mirrors the perl regex: ASCII a-z0-9 plus the CJK
+  // Unified Ideographs block. Any other code point — punctuation, whitespace,
+  // hiragana, katakana, hangul, emoji — becomes a single `-`.
+  s = s.replace(/[^a-z0-9一-鿿]+/g, '-')
+  s = s.replace(/^-+|-+$/g, '')
+  const cps = [...s]
+  if (cps.length > 30) {
+    s = cps.slice(0, 30).join('')
+    s = s.replace(/-+$/, '')
+  }
+  return s
+}
+
+/** Resolve after `ms` milliseconds — same helper poll-based verbs reach for. */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Epoch seconds, sampled once — `tm`'s `$(date +%s)`. */
+function nowSec(): number {
+  return Math.floor(Date.now() / 1000)
+}
+
+/**
+ * Whether `value` is a valid non-negative integer string (the shape `tm`'s
+ * `[[ "$timeout" =~ ^[0-9]+$ ]]` accepts). `tm` does not validate timeouts
+ * itself before passing them to `date +%s` / `sleep`; the native check is a
+ * narrower guard so a malformed `--timeout` does not become a NaN loop.
+ */
+function isNonNegativeInteger(value: string): boolean {
+  return /^[0-9]+$/.test(value)
+}
+
+/**
+ * The runtime knobs `_send_keys` reads from the environment — the bounded
+ * defaults are the same constants `bin/tm` uses, and the env vars override
+ * them at the same names (`TM_SEND_INLINE_MAX`, `TM_SEND_GAP`).
+ */
+interface SendKeysConfig {
+  /** Max prompt size (in chars) to take the inline `send-keys -l + Enter` path. */
+  inlineMax: number
+  /** Optional override (in seconds) for the post-paste settle gap. */
+  gapOverride: string | null
+}
+
+/**
+ * Parse the env knobs for `_send_keys` once per call — `tm`'s validation
+ * mirrored verbatim: a malformed value dies up front rather than crashing
+ * the script mid-flow (which would strand the prompt in the input box).
+ */
+function readSendKeysConfig(): SendKeysConfig | TmResult {
+  const inlineRaw = process.env.TM_SEND_INLINE_MAX ?? ''
+  const inlineMax = inlineRaw === '' ? 200 : Number(inlineRaw)
+  if (inlineRaw !== '' && !/^[0-9]+$/.test(inlineRaw)) {
+    return die(
+      `TM_SEND_INLINE_MAX must be a non-negative integer (got: '${inlineRaw}')`,
+    )
+  }
+  const gapRaw = process.env.TM_SEND_GAP ?? ''
+  if (gapRaw !== '' && !/^[0-9]+(\.[0-9]+)?$/.test(gapRaw)) {
+    return die(
+      `TM_SEND_GAP must be a non-negative number of seconds (got: '${gapRaw}')`,
+    )
+  }
+  return {
+    inlineMax,
+    gapOverride: gapRaw === '' ? null : gapRaw,
+  }
+}
+
+/** `tm`'s size-based default paste-buffer settle gap, in seconds. */
+function defaultPasteGapSec(promptLength: number): number {
+  if (promptLength <= 256) return 0.2
+  if (promptLength <= 1024) return 0.5
+  if (promptLength <= 4096) return 1.0
+  if (promptLength <= 16384) return 2.0
+  return 4.0
+}
+
+/**
+ * `tm`'s `_send_keys`: push a prompt into the teammate's pane.
+ *
+ * Two delivery modes by size — short single-line prompts take the inline
+ * `send-keys -l + Enter` fast path; larger or multi-line prompts stage the
+ * bytes in a named tmux buffer and `paste-buffer -p -r` them in a single
+ * bracketed-paste sequence, then send Enter after the trailing `\e[201~`
+ * marker so the TUI submits the buffered text as one prompt. Both modes
+ * clear the idle/.last/.busy baseline first and touch `<repo>.send-at`.
+ *
+ * Returns the `TmResult` that `cmd_send`'s "sent to ..." preamble plus the
+ * "sid=..." line make up; the verb wrapper appends its own follow-on lines.
+ */
+async function sendKeys(
+  repo: string,
+  prompt: string,
+  env: NativeEnv,
+): Promise<TmResult> {
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+
+  const pane = await resolvePaneTarget(repo, env.runTmux)
+  if (pane === '') return die(`could not resolve pane target for ${repo}`)
+
+  const cfg = readSendKeysConfig()
+  if ('code' in cfg) return cfg
+
+  // Clear the idle baseline before sending so the subsequent wait reflects
+  // THIS turn, not a prior one. A no-sid case is the fresh-spawn path where
+  // there is no prior turn to clear.
+  const sid = resolveSid(repo)
+  if (sid !== null) clearIdle(sid)
+
+  // `tm`'s `: > "$(send_at_file "$repo")"` — touch the marker. mkdir the
+  // parent in case /tmp/teammate-*.send-at is somehow on a non-/tmp path.
+  const sa = sendAtFile(repo)
+  mkdirSync(dirname(sa), { recursive: true })
+  writeFileSync(sa, '')
+
+  const n = prompt.length
+  const inlinePath = n <= cfg.inlineMax && !prompt.includes('\n')
+
+  const name = `${SESSION_PREFIX}${repo}`
+  let stderr = `sent to ${repo} (tmux=${name})\n`
+  if (sid !== null) stderr += `sid=${sid}\n`
+
+  if (inlinePath) {
+    await env.runTmux(['send-keys', '-t', pane, '-l', prompt])
+    await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+    return { code: 0, stdout: '', stderr }
+  }
+
+  const gap = cfg.gapOverride !== null ? Number(cfg.gapOverride) : defaultPasteGapSec(n)
+  const buf = `tm-send-${process.pid}-${randomBytes(2).toString('hex')}`
+  let loaded = false
+  try {
+    await env.runTmux(['load-buffer', '-b', buf, '-'], { stdin: prompt })
+    loaded = true
+    await env.runTmux(['paste-buffer', '-p', '-r', '-d', '-b', buf, '-t', pane])
+    // `paste-buffer -d` deletes the buffer on success; `loaded` is reset so
+    // the finally block's defensive delete is a no-op for the normal path.
+    loaded = false
+    await sleepMs(Math.round(gap * 1000))
+    await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+  } finally {
+    // Mirror `tm`'s RETURN trap: a `paste-buffer` that failed after
+    // `load-buffer` succeeded would otherwise leak a named buffer entry.
+    if (loaded) {
+      try {
+        await env.runTmux(['delete-buffer', '-b', buf])
+      } catch {
+        // Best effort — `tm` swallows this too (`2>/dev/null || true`).
+      }
+    }
+  }
+  return { code: 0, stdout: '', stderr }
+}
+
+/**
+ * `tm`'s `_wait_idle_signal`: block until `/tmp/claude-idle/<sid>` exists, or
+ * `timeoutSec` elapses. Returns the resolved `TmResult` on early-out
+ * (no-such-session / no-sid), or `{ ok }` once the loop has its verdict.
+ */
+async function waitIdleSignal(
+  repo: string,
+  timeoutSec: number,
+  fresh: boolean,
+  env: NativeEnv,
+): Promise<TmResult | { ok: boolean }> {
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+  const sidR = resolveSidOrDie(repo)
+  if ('error' in sidR) return sidR.error
+  if (fresh) clearIdle(sidR.sid)
+
+  const end = nowSec() + timeoutSec
+  const marker = idleMarkerFor(sidR.sid)
+  while (nowSec() < end) {
+    if (existsSync(marker)) return { ok: true }
+    await sleepMs(3000)
+  }
+  return { ok: false }
+}
+
+/**
+ * `tm`'s `_wait_pane_quiet`: block until the teammate's pane has shown no
+ * busy marker for ~4s AND at least 3s have passed since the last send.
+ * Returns the resolved `TmResult` on early-out or `{ ok }` once decided.
+ */
+async function waitPaneQuiet(
+  repo: string,
+  timeoutSec: number,
+  env: NativeEnv,
+): Promise<TmResult | { ok: boolean }> {
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+
+  let sendAt = 0
+  try {
+    const sa = sendAtFile(repo)
+    sendAt = Math.floor(statSync(sa).mtimeMs / 1000)
+  } catch {
+    sendAt = 0
+  }
+
+  const end = nowSec() + timeoutSec
+  let quietStreak = 0
+  while (nowSec() < end) {
+    const sid = resolveSid(repo)
+    const isBusy = sid !== null && isRegularFile(busyMarkerFor(sid))
+    if (isBusy) quietStreak = 0
+    else quietStreak += 1
+    if (quietStreak >= 2 && nowSec() - sendAt >= 3) return { ok: true }
+    await sleepMs(2000)
+  }
+  return { ok: false }
+}
+
+/**
+ * `tm`'s `_print_last_or_empty`: print the teammate's `<sid>.last` to stdout,
+ * or — when the file is missing or zero-byte — the documented sentinel line.
+ * Always exit 0; the verb wrapper decides what code to ship.
+ */
+function printLastOrEmpty(repo: string): string {
+  const sid = resolveSid(repo)
+  if (sid === null) return `(no sid for ${repo})\n`
+  const reply = readIfNonEmpty(lastFileFor(sid))
+  if (reply === null) {
+    return '(no text reply this turn — tool-only, /compact, /clear, or fresh spawn)\n'
+  }
+  // `cat` does not append a newline; the file's own trailing newline is what
+  // shapes the printed line. Reproduce that verbatim.
+  return reply
+}
+
+/**
+ * `tm`'s `_echo_ctx_to_stderr`: the teammate's post-turn ctx line, prefixed
+ * with `ctx: `, on stderr. Soft-fails: an unreadable transcript or a sid that
+ * cannot be resolved drops the line silently (`tm`'s `2>/dev/null`).
+ */
+function echoCtxToStderr(repo: string, env: NativeEnv): string {
+  // Reuse `ctxLine` — its `?` diagnostic shape would also be a soft-fail, so
+  // any `repo:` prefix indicates an unreadable transcript; only the formatted
+  // success line is echoed (the part after `<repo>: `).
+  const body = ctxLine(repo, '', env)
+  // The diagnostic forms always start with `<repo>: ?`; the success form
+  // starts with `<repo>: <digits> tokens · ...`.
+  if (body.includes(': ? (')) return ''
+  const prefix = `${repo}: `
+  const data = body.startsWith(prefix) ? body.slice(prefix.length) : body
+  return `ctx: ${data}\n`
+}
+
+// --- doctor ---------------------------------------------------------------
+
+/**
+ * `tm`'s `cmd_doctor` — a read-only environment self-check. Sections fire
+ * top-down: the `tm` executable, the dispatcher dir, tmux, the idle dir,
+ * and the active teammate list. Soft-fails throughout (every probe is
+ * guarded) and always exits 0; output is meant to be eyeballed, not parsed.
+ *
+ * The path the "tm executable" section reports is this module's own
+ * `bin/tm` wrapper (`core/bin/tm`), not the bash `bin/tm`. Bash is the
+ * stage-3 oracle; once stage 3c retires it, the Node CLI is the only `tm`
+ * binary that exists.
+ */
+const doctor: NativeVerb = async (args, _options, env) => {
+  if (args.length > 0) {
+    return die(`tm doctor: takes no arguments (got: ${args.join(' ')})`)
+  }
+
+  // The kv row: a 20-character padded label, then the value — matches
+  // `cmd_doctor`'s `printf '  %-20s%s\n'`. One source of truth here keeps
+  // alignment immune to label renames.
+  const kv = (label: string, value: string): string => {
+    const padded = `${label}:`.padEnd(20, ' ')
+    return `  ${padded}${value}\n`
+  }
+
+  let out = ''
+
+  // --- tm executable ---
+  // This module lives at `core/src/native.ts`; the Node CLI wrapper sits at
+  // `core/bin/tm`, and the plugin manifest at `<plugin-root>/.claude-plugin/
+  // plugin.json`. Resolve both relative to this file so the answer survives
+  // a renamed plugin directory.
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const tmWrapper = join(moduleDir, '..', 'bin', 'tm')
+  const pluginJson = join(moduleDir, '..', '..', '.claude-plugin', 'plugin.json')
+  let version = 'unknown'
+  let pluginJsonPresent = false
+  try {
+    if (statSync(pluginJson).isFile()) {
+      pluginJsonPresent = true
+      const parsed = JSON.parse(readFileSync(pluginJson, 'utf8')) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.length > 0) {
+        version = parsed.version
+      }
+    }
+  } catch {
+    pluginJsonPresent = false
+  }
+  out += 'tm executable:\n'
+  out += kv('path', tmWrapper)
+  out += kv('version', version)
+  if (!pluginJsonPresent) out += kv('note', `plugin.json not found at ${pluginJson}`)
+  out += '\n'
+
+  // --- dispatcher dir ---
+  out += 'dispatcher dir:\n'
+  out += kv('resolved', env.dispatcherDir)
+  const envSet = process.env.TM_DISPATCHER_DIR
+  if (envSet !== undefined && envSet.length > 0) {
+    out += kv('TM_DISPATCHER_DIR', `set (= ${envSet})`)
+  } else {
+    out += kv(
+      'TM_DISPATCHER_DIR',
+      'unset — falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)',
+    )
+  }
+  const pwd = process.cwd()
+  out += kv('$PWD', pwd)
+  if (env.dispatcherDir !== pwd) {
+    out += kv(
+      'status',
+      'DIVERGED — dispatcher dir != $PWD; env override is currently keeping tm correct despite the drifted PWD',
+    )
+  } else {
+    out += kv('status', 'matched')
+  }
+  if (!isDirectory(env.dispatcherDir)) {
+    out += kv('warning', `${env.dispatcherDir} does not exist as a directory`)
+  }
+  out += '\n'
+
+  // --- tmux ---
+  out += 'tmux:\n'
+  let tmuxVersionOk = false
+  let tmuxVersionLine = ''
+  try {
+    const versionResult = await env.runTmux(['-V'])
+    if (versionResult.code === 0) {
+      tmuxVersionOk = true
+      tmuxVersionLine = versionResult.stdout.split('\n')[0] ?? '?'
+    }
+  } catch {
+    tmuxVersionOk = false
+  }
+  if (!tmuxVersionOk) {
+    out += kv('installed', 'no (tmux not on PATH — claudemux teammate workflow needs it)')
+  } else {
+    out += kv('installed', `yes (${tmuxVersionLine})`)
+    let serverRunning = false
+    try {
+      serverRunning = (await env.runTmux(['info'])).code === 0
+    } catch {
+      serverRunning = false
+    }
+    if (serverRunning) out += kv('server', 'running')
+    else out += kv('server', "not running (no sessions exist yet — that's fine pre-spawn)")
+    const insideTmux = process.env.TMUX ?? ''
+    if (insideTmux.length > 0) out += kv('in tmux', `yes (TMUX=${insideTmux})`)
+    else out += kv('in tmux', 'no — tm is being run from outside a tmux session')
+  }
+  out += '\n'
+
+  // --- idle dir ---
+  out += `idle dir (${idleDir()}):\n`
+  if (isDirectory(idleDir())) {
+    let count = 0
+    try {
+      count = readdirSync(idleDir()).length
+    } catch {
+      count = 0
+    }
+    out += kv('exists', `yes (${count} file(s))`)
+  } else {
+    out += kv('exists', 'no — gets created on first tm spawn / scripts/setup.sh')
+  }
+  out += '\n'
+
+  // --- active teammates ---
+  out += 'active teammates:\n'
+  const repos = await iterRepos(env.runTmux)
+  if (repos.length === 0) {
+    out += "  (none — use 'tm spawn <repo>' to launch one)\n"
+  } else {
+    // The bash report uses the full `tmux ls` line; reconstruct one here so
+    // the report is human-meaningful (a bare repo name reads as cryptic).
+    let listing = ''
+    try {
+      listing = (await env.runTmux(['ls'])).stdout
+    } catch {
+      listing = ''
+    }
+    const rows = listing
+      .split('\n')
+      .filter((line) => sessionField(line).startsWith(SESSION_PREFIX))
+    out += kv('count', String(rows.length))
+    for (const row of rows) out += `  - ${row}\n`
+  }
+
+  return { code: 0, stdout: out, stderr: '' }
+}
+
+// --- spawn ----------------------------------------------------------------
+
+/** Parsed arg vector for `tm spawn`, after `parseSpawnArgs`. */
+interface SpawnArgs {
+  resumeSid: string
+  task: string
+  prompt: string
+  hasPrompt: boolean
+  noWait: boolean
+}
+
+/** Parse `cmd_spawn`'s flag set; `error` on a malformed vector. */
+function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult } {
+  let resumeSid = ''
+  let task = ''
+  let prompt = ''
+  let hasPrompt = false
+  let noWait = false
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!
+    if (arg === '--resume') {
+      if (i + 1 >= rest.length) return { error: die('tm spawn: --resume requires a value') }
+      resumeSid = rest[i + 1]!
+      i++
+    } else if (arg === '--task') {
+      if (i + 1 >= rest.length) return { error: die('tm spawn: --task requires a value') }
+      task = rest[i + 1]!
+      i++
+    } else if (arg.startsWith('--task=')) {
+      task = arg.slice('--task='.length)
+    } else if (arg === '--prompt') {
+      if (i + 1 >= rest.length) return { error: die('tm spawn: --prompt requires a value') }
+      prompt = rest[i + 1]!
+      hasPrompt = true
+      i++
+    } else if (arg.startsWith('--prompt=')) {
+      prompt = arg.slice('--prompt='.length)
+      hasPrompt = true
+    } else if (arg === '--no-wait') {
+      noWait = true
+    } else {
+      return { error: die(`unknown flag: ${arg}`) }
+    }
+  }
+  return { resumeSid, task, prompt, hasPrompt, noWait }
+}
+
+/**
+ * Single-quote-escape a string for safe embedding in a bash command line.
+ * `tm`'s shell-out builds the `claude --session-id ... -n '...'` string and
+ * passes it to `tmux send-keys`; the native form constructs the same string
+ * so the running REPL's argv is byte-equal to bash's.
+ */
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * `tm`'s `teammate_launch_flags`: the flag string between `claude --session-id|
+ * --resume <sid>` and an optional `-n '<name>'`. A bare tool name in
+ * `--disallowedTools` drops it from the model's context entirely — see the
+ * `help_spawn` text for the AskUserQuestion rationale.
+ */
+function teammateLaunchFlags(mdExcludes: string): string {
+  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion`
+}
+
+/** Whether a session of this name is currently up — `has-session -t "=NAME"`. */
+async function sessionExists(name: string, runTmux: TmuxRunner): Promise<boolean> {
+  try {
+    return (await runTmux(['has-session', '-t', `=${name}`])).code === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Run `tm spawn`'s readiness poll: block until `<repo>.ready` appears or 18s
+ * (60 × 0.3s) elapse. Returns the ms it took to fire, or `null` on timeout —
+ * the caller prints the verb's stderr accordingly.
+ */
+async function pollReady(repo: string): Promise<number | null> {
+  const rf = readyFile(repo)
+  for (let i = 1; i <= 60; i++) {
+    if (existsSync(rf)) return i * 300
+    await sleepMs(300)
+  }
+  return null
+}
+
+/**
+ * `tm spawn` — launch a teammate (or relaunch via `--resume <sid>`), record
+ * its sid + cwd, and either return as soon as `SessionStart` fires or hand
+ * off to a sync `tm send` when `--prompt` is set.
+ *
+ * Repository discipline: this verb writes the `<repo>.cwd` / `<repo>.sid`
+ * markers and the empty `<sid>.last` sentinel; the SessionStart hook
+ * separately produces the `<repo>.ready` marker the poll above blocks on.
+ * Tearing those apart is what makes `tm spawn --prompt` atomic — the
+ * pre-send sleep happens against a REPL that has already booted.
+ */
+const spawn: NativeVerb = async (args, _options, env) => {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) {
+    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
+  }
+  const parsed = parseSpawnArgs(args.slice(1))
+  if ('error' in parsed) return parsed.error
+  const { resumeSid, task, prompt, hasPrompt, noWait } = parsed
+
+  if (noWait && !hasPrompt) {
+    return die(
+      'tm spawn: --no-wait is only valid with --prompt (a fresh spawn without ' +
+        'a prompt already returns as soon as the REPL is ready)',
+    )
+  }
+
+  const path = join(env.dispatcherDir, repo)
+  if (!isDirectory(path)) return dieRepoNotFound('spawn', repo, path, env.dispatcherDir)
+
+  // Physical-path normalization (`cd && pwd -P`) — the SessionStart hook
+  // byte-matches against the cwd Claude Code emits in its hook payload,
+  // which is always the physical path (macOS resolves `/tmp` → `/private/
+  // tmp` at that level), so the recorded `.cwd` must be physical too.
+  const cwdPhys = realpathSync(path)
+  const dispatcherPhys = realpathSync(env.dispatcherDir)
+  const mdExcludes = JSON.stringify({
+    claudeMdExcludes: [
+      `${dispatcherPhys}/CLAUDE.md`,
+      `${dispatcherPhys}/CLAUDE.local.md`,
+    ],
+  })
+
+  // Display-name selection: `--task` → `<repo>-<sanitized>`, else
+  // `<repo>-<rand4>` for a fresh spawn, else empty (preserve on `--resume`).
+  let displayName = ''
+  if (task.length > 0) {
+    const slug = sanitizeTaskSlug(task)
+    if (slug.length === 0) {
+      return die(
+        `tm spawn: --task '${task}' has no usable characters after sanitization ` +
+          '(allowlist: ASCII letters/digits + CJK Unified Ideographs)',
+      )
+    }
+    displayName = `${repo}-${slug}`
+  } else if (resumeSid.length === 0) {
+    displayName = `${repo}-${randSuffix()}`
+  }
+
+  const name = `${SESSION_PREFIX}${repo}`
+  if (await sessionExists(name, env.runTmux)) {
+    if (hasPrompt) {
+      return die(
+        `${repo} already exists (tmux=${name}) — atomic bootstrap rejected ` +
+          'because the teammate is already running. Use ' +
+          `'tm send ${repo} --prompt "…"' to drive an existing teammate, or ` +
+          `'tm kill ${repo}' first to start over.`,
+      )
+    }
+    return {
+      code: 0,
+      stdout:
+        `${repo} already exists (tmux=${name}; use 'tm status ${repo}' to view, ` +
+        `or 'tm kill ${repo}' first)\n`,
+      stderr: '',
+    }
+  }
+
+  // Clear the readiness signal BEFORE launching `claude`. The SessionStart
+  // hook re-touches the file once the REPL is up; the poll below blocks on it.
+  const rf = readyFile(repo)
+  rmSync(rf, { force: true })
+
+  // Record the teammate's physical cwd in place *before* spawning so the
+  // hook fires can find it on its first attempt.
+  const cf = cwdFile(repo)
+  mkdirSync(dirname(cf), { recursive: true })
+  writeFileSync(cf, `${cwdPhys}\n`)
+
+  // `-P -F '#{session_id}'` returns the new session's internal id; use it
+  // as the subsequent `send-keys` target so prefix-match cannot wrong-route.
+  // `-e CLAUDEMUX_TEAMMATE_REPO=...` is the positive identity gate the
+  // on-session-start hook reads to discriminate "this teammate" from "the
+  // dispatcher happens to share the cwd".
+  let paneId = ''
+  try {
+    const newSession = await env.runTmux([
+      'new-session',
+      '-d',
+      '-s',
+      name,
+      '-c',
+      cwdPhys,
+      '-e',
+      `CLAUDEMUX_TEAMMATE_REPO=${repo}`,
+      '-P',
+      '-F',
+      '#{session_id}',
+    ])
+    if (newSession.code !== 0) {
+      return die(`tmux new-session failed: ${newSession.stderr.trim() || newSession.stdout.trim()}`)
+    }
+    paneId = newSession.stdout.split('\n')[0] ?? ''
+  } catch (err) {
+    return die(`tmux new-session failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (paneId.length === 0) return die(`tmux new-session returned no session id for ${repo}`)
+
+  const sid = resumeSid.length > 0 ? resumeSid : newSid()
+  const launchFlags = teammateLaunchFlags(mdExcludes)
+  const nameArg = displayName.length > 0 ? ` -n ${shellSingleQuote(displayName)}` : ''
+  const launchCmd =
+    resumeSid.length > 0
+      ? `claude --resume ${sid} ${launchFlags}${nameArg}`
+      : `claude --session-id ${sid} ${launchFlags}${nameArg}`
+  await env.runTmux(['send-keys', '-t', paneId, launchCmd, 'Enter'])
+
+  let stderr = ''
+  if (resumeSid.length > 0) {
+    const nameNote = displayName.length > 0 ? `, name=${displayName}` : ''
+    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, resumed sid=${sid}${nameNote})\n`
+  } else {
+    const nameNote = displayName.length > 0 ? `, name=${displayName}` : ''
+    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, sid=${sid}${nameNote})\n`
+  }
+
+  const sf = sidFile(repo)
+  mkdirSync(dirname(sf), { recursive: true })
+  writeFileSync(sf, `${sid}\n`)
+  clearIdle(sid)
+
+  // Fresh-spawn `.last` sentinel — keeps `tm last` reporting "no reply yet"
+  // until the first real Stop. Resume mode skips this: the resumed session's
+  // last-turn text is context the dispatcher may want to re-read.
+  if (resumeSid.length === 0) {
+    mkdirSync(idleDir(), { recursive: true })
+    writeFileSync(lastFileFor(sid), '')
+  }
+
+  const readyAfter = await pollReady(repo)
+  if (readyAfter !== null) {
+    stderr += `ready: ${repo} (tmux=${name}, SessionStart fired after ~${readyAfter} ms)\n`
+  } else {
+    stderr +=
+      `WARN: ${repo} (tmux=${name}) did not signal ready within 18s ` +
+      "(no SessionStart hook fire — the plugin's on-session-start.sh may not " +
+      'be loaded, or claude failed to boot). Continuing, but if the REPL is ' +
+      "actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / " +
+      "'tm compact' will block until its --timeout expires (default 1800s). " +
+      `'tm status ${repo}' shows the live pane if you need to verify.\n`
+  }
+
+  if (!hasPrompt) {
+    return { code: 0, stdout: '', stderr }
+  }
+
+  // Atomic bootstrap: settle, then hand off to `tm send`. `cmd_send`'s
+  // stdout (and its `ctx:` stderr echo) become the spawn verb's stdout/stderr
+  // so the dispatcher sees one round-trip's worth of output for the whole
+  // sequence.
+  await sleepMs(3000)
+  const sendArgs: string[] = []
+  if (noWait) sendArgs.push('--no-wait')
+  sendArgs.push(repo, '--prompt', prompt)
+  const sendResult = await send(sendArgs, undefined, env)
+  return {
+    code: sendResult.code,
+    stdout: sendResult.stdout,
+    stderr: stderr + sendResult.stderr,
+  }
+}
+
+// --- send -----------------------------------------------------------------
+
+/** Parsed arg vector for `tm send`, after `parseSendArgs`. */
+interface SendArgs {
+  repo: string
+  prompt: string
+  hasPrompt: boolean
+  noWait: boolean
+  paneQuiet: boolean
+  timeout: string
+}
+
+/**
+ * `cmd_send`'s arg loop. Catches the legacy "tm send repo run tests" form
+ * with a dedicated error — pre-0.3.0 callers passed prompts as positional
+ * args, and this catches that habit explicitly rather than swallowing the
+ * trailing positionals as a confusing "unknown arg".
+ */
+function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } {
+  let noWait = false
+  let paneQuiet = false
+  let timeout = '1800'
+  let repo = ''
+  let prompt = ''
+  let hasPrompt = false
+  let i = 0
+  while (i < args.length) {
+    const arg = args[i]!
+    if (arg === '--no-wait') {
+      noWait = true
+      i++
+    } else if (arg === '--pane-quiet') {
+      paneQuiet = true
+      i++
+    } else if (arg === '--timeout') {
+      if (i + 1 >= args.length) return { error: die('tm send: --timeout requires a value') }
+      timeout = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--timeout=')) {
+      timeout = arg.slice('--timeout='.length)
+      i++
+    } else if (arg === '--prompt') {
+      if (i + 1 >= args.length) return { error: die('tm send: --prompt requires a value') }
+      prompt = args[i + 1]!
+      hasPrompt = true
+      i += 2
+    } else if (arg.startsWith('--prompt=')) {
+      prompt = arg.slice('--prompt='.length)
+      hasPrompt = true
+      i++
+    } else if (arg === '--') {
+      i++
+      repo = args[i] ?? ''
+      i++
+      break
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm send: unknown flag: ${arg}`) }
+    } else if (repo === '') {
+      repo = arg
+      i++
+    } else {
+      // Legacy form: `tm send <repo> <free text>`. Echo the whole remaining
+      // argv so the suggested rewrite preserves every token. The escape uses
+      // POSIX-safe shell single-quoting (no `printf %q` portable equivalent).
+      const tail = args.slice(i).join(' ')
+      return {
+        error: die(
+          'tm send: prompt is now a --prompt flag, not a positional arg. ' +
+            `Did you mean: tm send ${repo} --prompt ${shellSingleQuote(tail)} ?`,
+        ),
+      }
+    }
+  }
+  return { repo, prompt, hasPrompt, noWait, paneQuiet, timeout }
+}
+
+/**
+ * `tm send` — atomic round-trip by default: send a prompt, block on the
+ * Stop hook (or pane-quiet fallback), print the reply to stdout. The
+ * stdout/stderr split is load-bearing for piping: status lines (the "sent
+ * to ..." preamble, the post-turn ctx echo) ride stderr exclusively.
+ */
+const send: NativeVerb = async (args, _options, env) => {
+  const parsed = parseSendArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
+  if (repo === '') {
+    return die(
+      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+        '[--pane-quiet] [--timeout N]',
+    )
+  }
+  if (!hasPrompt) {
+    return die(
+      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+        '[--pane-quiet] [--timeout N]',
+    )
+  }
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
+  }
+
+  const sentResult = await sendKeys(repo, prompt, env)
+  if (sentResult.code !== 0) return sentResult
+
+  if (noWait) return sentResult
+
+  const timeoutSec = Number(timeout)
+  const verdict = paneQuiet
+    ? await waitPaneQuiet(repo, timeoutSec, env)
+    : await waitIdleSignal(repo, timeoutSec, false, env)
+  if ('code' in verdict) return verdict
+  if (!verdict.ok) {
+    const kind = paneQuiet ? 'pane-quiet' : 'Stop hook'
+    return {
+      code: 1,
+      stdout: printLastOrEmpty(repo),
+      stderr: sentResult.stderr + `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}\n`,
+    }
+  }
+
+  let trailingStderr = ''
+  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env)
+  return {
+    code: 0,
+    stdout: printLastOrEmpty(repo),
+    stderr: sentResult.stderr + trailingStderr,
+  }
+}
+
+// --- wait -----------------------------------------------------------------
+
+/** Parsed arg vector for `tm wait`, after `parseWaitArgs`. */
+interface WaitArgs {
+  repo: string
+  timeout: string
+  fresh: boolean
+  paneQuiet: boolean
+}
+
+/** `cmd_wait`'s arg loop; positional after `<repo>` is a positional timeout. */
+function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } {
+  let repo = ''
+  let timeout = '1800'
+  let fresh = false
+  let paneQuiet = false
+  let i = 0
+  while (i < args.length) {
+    const arg = args[i]!
+    if (arg === '--fresh') {
+      fresh = true
+      i++
+    } else if (arg === '--pane-quiet') {
+      paneQuiet = true
+      i++
+    } else if (arg === '--timeout') {
+      // Bash quirk: `${2:-}` accepts a missing value as empty — mirror it so
+      // a `tm wait <repo> --timeout` (no value) advances normally.
+      timeout = i + 1 < args.length ? args[i + 1]! : ''
+      i += 2
+    } else if (arg.startsWith('--timeout=')) {
+      timeout = arg.slice('--timeout='.length)
+      i++
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm wait: unknown flag: ${arg}`) }
+    } else if (repo === '') {
+      repo = arg
+      i++
+    } else {
+      timeout = arg
+      i++
+    }
+  }
+  return { repo, timeout, fresh, paneQuiet }
+}
+
+/**
+ * `tm wait` — block on the Stop-hook idle marker (default) or pane-quiet
+ * fallback, then print the teammate's reply. Same output contract as
+ * `tm send`. `--fresh` clears the baseline up front so it is the *next*
+ * Stop that wakes the wait, not a prior one.
+ */
+const wait: NativeVerb = async (args, _options, env) => {
+  const parsed = parseWaitArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { repo, timeout, fresh, paneQuiet } = parsed
+  if (repo === '') {
+    return die(
+      'usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]',
+    )
+  }
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
+  }
+
+  const timeoutSec = Number(timeout)
+  const verdict = paneQuiet
+    ? await waitPaneQuiet(repo, timeoutSec, env)
+    : await waitIdleSignal(repo, timeoutSec, fresh, env)
+  if ('code' in verdict) return verdict
+  if (!verdict.ok) {
+    return {
+      code: 1,
+      stdout: printLastOrEmpty(repo),
+      stderr: `tm wait: timed out after ${timeout}s on ${repo}\n`,
+    }
+  }
+
+  let trailingStderr = ''
+  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env)
+  return {
+    code: 0,
+    stdout: printLastOrEmpty(repo),
+    stderr: trailingStderr,
+  }
+}
+
+// --- compact --------------------------------------------------------------
+
+/** Parsed arg vector for `tm compact`, after `parseCompactArgs`. */
+interface CompactArgs {
+  repo: string
+  timeout: string
+}
+
+/** `cmd_compact`'s arg loop: same positional-then-flag rule as `wait`. */
+function parseCompactArgs(args: readonly string[]): CompactArgs | { error: TmResult } {
+  let repo = ''
+  let timeout = '1800'
+  let i = 0
+  while (i < args.length) {
+    const arg = args[i]!
+    if (arg === '--timeout') {
+      timeout = i + 1 < args.length ? args[i + 1]! : ''
+      i += 2
+    } else if (arg.startsWith('--timeout=')) {
+      timeout = arg.slice('--timeout='.length)
+      i++
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm compact: unknown flag: ${arg}`) }
+    } else if (repo === '') {
+      repo = arg
+      i++
+    } else {
+      timeout = arg
+      i++
+    }
+  }
+  return { repo, timeout }
+}
+
+/** The visible pane line `cmd_compact` anchors its "too short" detection on. */
+const COMPACT_REFUSAL_MARK = '⎿  Error: Not enough messages to compact'
+
+/**
+ * `tm compact` — send `/compact` and verify PostCompact fired. Reports the
+ * one-line `compacted` on stdout when it did. Two failure modes, both exit 1:
+ *
+ * - Claude Code refuses with the "Not enough messages to compact" tool-result
+ *   block. That path fires no Stop/PostCompact hook, so the visible pane is
+ *   scanned alongside the idle-marker poll to detect it.
+ * - PostCompact never fires within `--timeout` — compaction hung or the hook
+ *   is misconfigured.
+ */
+const compact: NativeVerb = async (args, _options, env) => {
+  const parsed = parseCompactArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { repo, timeout } = parsed
+  if (repo === '') return die('usage: tm compact <repo> [timeout=1800] [--timeout N]')
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm compact: --timeout must be a non-negative integer (got: '${timeout}')`)
+  }
+
+  const sessionMissing = await requireSession(repo, env.runTmux)
+  if (sessionMissing !== null) return sessionMissing
+  const sidR = resolveSidOrDie(repo)
+  if ('error' in sidR) return sidR.error
+  const sid = sidR.sid
+  const pane = await resolvePaneTarget(repo, env.runTmux)
+  if (pane === '') return die(`could not resolve pane target for ${repo}`)
+
+  let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)\n`
+
+  const sent = await sendKeys(repo, '/compact', env)
+  if (sent.code !== 0) {
+    return { code: sent.code, stdout: sent.stdout, stderr: stderr + sent.stderr }
+  }
+
+  const timeoutSec = Number(timeout)
+  const end = nowSec() + timeoutSec
+  const marker = idleMarkerFor(sid)
+  while (nowSec() < end) {
+    if (existsSync(marker)) {
+      return { code: 0, stdout: 'compacted\n', stderr }
+    }
+    try {
+      const captured = await env.runTmux(['capture-pane', '-t', pane, '-p'])
+      if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            stderr +
+            `tm compact: ${repo} refused /compact — Claude Code reported ` +
+            "'Not enough messages to compact' (transcript too short).\n",
+        }
+      }
+    } catch {
+      // A capture failure is a transient tmux error; the idle marker is the
+      // primary signal — keep polling.
+    }
+    await sleepMs(3000)
+  }
+  return {
+    code: 1,
+    stdout: '',
+    stderr:
+      stderr +
+      `tm compact: ${repo} did not signal PostCompact within ${timeout}s — ` +
+      "compaction may still be running, or the Stop hook is misconfigured. " +
+      `Check 'tm status ${repo}' and ${marker}.\n`,
+  }
+}
+
+// --- resume ---------------------------------------------------------------
+
+/** Parsed arg vector for `tm resume`, after `parseResumeArgs`. */
+interface ResumeArgs {
+  repo: string
+  sid: string
+  task: string
+  prompt: string
+  hasPrompt: boolean
+  noWait: boolean
+}
+
+/** `cmd_resume`'s arg loop; two positionals (`<repo> [<sid>]`) plus flags. */
+function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResult } {
+  let repo = ''
+  let sid = ''
+  let task = ''
+  let prompt = ''
+  let hasPrompt = false
+  let noWait = false
+  let i = 0
+  while (i < args.length) {
+    const arg = args[i]!
+    if (arg === '--prompt') {
+      if (i + 1 >= args.length) return { error: die('tm resume: --prompt requires a value') }
+      prompt = args[i + 1]!
+      hasPrompt = true
+      i += 2
+    } else if (arg.startsWith('--prompt=')) {
+      prompt = arg.slice('--prompt='.length)
+      hasPrompt = true
+      i++
+    } else if (arg === '--task') {
+      if (i + 1 >= args.length) return { error: die('tm resume: --task requires a value') }
+      task = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--task=')) {
+      task = arg.slice('--task='.length)
+      i++
+    } else if (arg === '--no-wait') {
+      noWait = true
+      i++
+    } else if (arg === '--') {
+      i++
+      break
+    } else if (arg.startsWith('-')) {
+      return { error: die(`unknown flag: ${arg}`) }
+    } else if (repo === '') {
+      repo = arg
+      i++
+    } else if (sid === '') {
+      sid = arg
+      i++
+    } else {
+      return {
+        error: die(
+          `tm resume: too many positional args (got '${arg}' after ` +
+            `repo='${repo}' sid='${sid}')`,
+        ),
+      }
+    }
+  }
+  return { repo, sid, task, prompt, hasPrompt, noWait }
+}
+
+/** A UUID — the format `tm resume` requires for a resolved sid. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * `tm resume` — relaunch a prior conversation. With no sid the verb falls
+ * back to "newest jsonl by mtime" (a stderr warning prompts the caller to
+ * pass an explicit sid from the dispatcher's task ledger). With a sid it
+ * proves the transcript exists, then delegates to `spawn --resume`.
+ */
+const resume: NativeVerb = async (args, _options, env) => {
+  const parsed = parseResumeArgs(args)
+  if ('error' in parsed) return parsed.error
+  let { sid } = parsed
+  const { repo, task, prompt, hasPrompt, noWait } = parsed
+  if (repo === '') {
+    return die(
+      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]  ' +
+        '(sid from ledger preferred; auto-pick on omit; --task relabels the resumed ' +
+        'conversation; --no-wait only with --prompt)',
+    )
+  }
+  if (noWait && !hasPrompt) {
+    return die('tm resume: --no-wait is only valid with --prompt')
+  }
+
+  const path = join(env.dispatcherDir, repo)
+  if (!isDirectory(path)) return dieRepoNotFound('resume', repo, path, env.dispatcherDir)
+
+  const name = `${SESSION_PREFIX}${repo}`
+  if (await sessionExists(name, env.runTmux)) {
+    return die(
+      `${repo} already running (tmux=${name}) — 'tm kill ${repo}' first ` +
+        'if you really want to start over',
+    )
+  }
+
+  const projectDir = projectDirForRepo(repo, env)
+  let autoPickStderr = ''
+
+  if (sid === '') {
+    if (!isDirectory(projectDir)) {
+      return die(
+        `no project dir at ${projectDir} — has anyone ever run claude inside ` +
+          `${path}? Try 'tm spawn ${repo}' first.`,
+      )
+    }
+    let names: string[] = []
+    try {
+      names = readdirSync(projectDir).filter((file) => file.endsWith('.jsonl'))
+    } catch {
+      names = []
+    }
+    if (names.length === 0) {
+      return die(`no .jsonl transcripts under ${projectDir} — try 'tm spawn ${repo}' to start fresh.`)
+    }
+    const stats = names.map((file) => {
+      let mtime = 0
+      try {
+        mtime = Math.floor(statSync(join(projectDir, file)).mtimeMs / 1000)
+      } catch {
+        mtime = 0
+      }
+      return { file, mtime }
+    })
+    stats.sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+    const latest = stats[0]!
+    sid = latest.file.replace(/\.jsonl$/, '')
+    autoPickStderr =
+      `tm resume: no sid given — auto-picked ${sid} (jsonl mtime ` +
+      `${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.\n`
+  } else {
+    const target = join(projectDir, `${sid}.jsonl`)
+    if (!isRegularFile(target)) {
+      return die(
+        `no transcript at ${target} — wrong repo for this sid, or sid does not ` +
+          `exist. Check 'ls ${projectDir}/'.`,
+      )
+    }
+  }
+
+  if (!UUID_RE.test(sid)) return die(`sid is not a valid uuid: ${sid}`)
+
+  // Delegate the rest of the launch to `spawn` via its `--resume` path. This
+  // mirrors `cmd_resume`'s `cmd_spawn` recursion: the launch flags and the
+  // optional `--prompt` follow-up are spawn's concern, not resume's.
+  const spawnArgs: string[] = [repo, '--resume', sid]
+  if (task.length > 0) {
+    spawnArgs.push('--task', task)
+  }
+  if (hasPrompt) {
+    if (noWait) spawnArgs.push('--no-wait')
+    spawnArgs.push('--prompt', prompt)
+  }
+  const result = await spawn(spawnArgs, undefined, env)
+  return {
+    code: result.code,
+    stdout: result.stdout,
+    stderr: autoPickStderr + result.stderr,
+  }
 }
 
 /** Every natively-migrated verb, keyed by verb name. */
@@ -1427,6 +2638,12 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   kill,
   archive,
   reload,
+  doctor,
+  spawn,
+  send,
+  wait,
+  compact,
+  resume,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

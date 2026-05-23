@@ -1513,6 +1513,14 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         setup: () => ({ args: [uniqueName(), '--no-wait'] }),
       },
       {
+        name: 'a bare --task with no value → tm exits 1 with no output',
+        setup: () => ({ args: [uniqueName(), '--task'] }),
+      },
+      {
+        name: 'a bare --resume with no value → tm exits 1 with no output',
+        setup: () => ({ args: [uniqueName(), '--resume'] }),
+      },
+      {
         name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
         setup: () => ({ args: [uniqueName()] }),
       },
@@ -1613,6 +1621,10 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           return { args: [uniqueName()] }
         },
       },
+      {
+        name: 'a bare --timeout with no value → tm exits 1 with no output',
+        setup: () => ({ args: [uniqueName(), '--timeout'] }),
+      },
     ],
   },
   {
@@ -1643,6 +1655,10 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           return { args: [repo] }
         },
       },
+      {
+        name: 'a bare --timeout with no value → tm exits 1 with no output',
+        setup: () => ({ args: [uniqueName(), '--timeout'] }),
+      },
     ],
   },
   {
@@ -1662,6 +1678,10 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
       {
         name: '--no-wait without --prompt → the validation error',
         setup: () => ({ args: [uniqueName(), '--no-wait'] }),
+      },
+      {
+        name: 'a bare --task with no value → tm exits 1 with no output',
+        setup: () => ({ args: [uniqueName(), '--task'] }),
       },
       {
         name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',

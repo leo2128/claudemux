@@ -62,9 +62,14 @@ function productionDeps(): CliDeps {
     runTmux,
     runColumn,
     runGrep,
-    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or the cwd;
-    // the projects dir mirrors `tm`'s use of `$HOME` for `~/.claude/projects`.
-    dispatcherDir: process.env.TM_DISPATCHER_DIR ?? process.cwd(),
+    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or `$PWD`
+    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). `$PWD` is the *logical* cwd —
+    // it preserves the symlink the user `cd`'d through, where Node's
+    // `process.cwd()` would return the symlink-resolved physical path; the
+    // two differ on a symlinked dispatcher tree and `~/.claude/projects`
+    // lookups would diverge between bash and native. Match bash by
+    // preferring `$PWD`.
+    dispatcherDir: process.env.TM_DISPATCHER_DIR ?? process.env.PWD ?? process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
   }
 }

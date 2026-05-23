@@ -1111,7 +1111,11 @@ const poll: NativeVerb = async (args, _options, env) => {
   const pane = await resolvePaneTarget(repo, env.runTmux)
   if (pane === '') return die(`could not resolve pane target for ${repo}`)
 
-  const end = Math.floor(Date.now() / 1000) + bashNum(timeoutArg)
+  // `bashNum('3.5')` returns 0 silently; bash's `(( end = ... + 3.5 ))` dies
+  // under `set -e` with no output. Match the silent-fail by validating with
+  // the same guard `send` / `wait` / `compact` use for their `--timeout`.
+  if (!isNonNegativeInteger(timeoutArg)) return { code: 1, stdout: '', stderr: '' }
+  const end = Math.floor(Date.now() / 1000) + Number(timeoutArg)
   while (Math.floor(Date.now() / 1000) < end) {
     const capture = await env.runTmux(['capture-pane', '-t', pane, '-p', '-S', '-300'])
     if (capture.code === 0 && (await env.runGrep(pattern, capture.stdout)) === 0) {
@@ -1583,9 +1587,22 @@ async function sendKeys(
   let stderr = `sent to ${repo} (tmux=${name})\n`
   if (sid !== null) stderr += `sid=${sid}\n`
 
+  // `bin/tm` runs under `set -euo pipefail`, so a failed `tmux send-keys` /
+  // `load-buffer` / `paste-buffer` aborts the script before the verb claims
+  // success. Mirror that: any non-zero tmux exit fails the verb so the
+  // dispatcher does not later block on a Stop hook that will never fire.
+  const tmuxOk = (result: { code: number; stderr: string }, what: string): TmResult | null =>
+    result.code === 0
+      ? null
+      : die(`tmux ${what} failed: ${result.stderr.trim() || 'non-zero exit'}`)
+
   if (inlinePath) {
-    await env.runTmux(['send-keys', '-t', pane, '-l', prompt])
-    await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+    const sent = await env.runTmux(['send-keys', '-t', pane, '-l', prompt])
+    const sentErr = tmuxOk(sent, 'send-keys')
+    if (sentErr !== null) return sentErr
+    const enter = await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+    const enterErr = tmuxOk(enter, 'send-keys Enter')
+    if (enterErr !== null) return enterErr
     return { code: 0, stdout: '', stderr }
   }
 
@@ -1593,14 +1610,29 @@ async function sendKeys(
   const buf = `tm-send-${process.pid}-${randomBytes(2).toString('hex')}`
   let loaded = false
   try {
-    await env.runTmux(['load-buffer', '-b', buf, '-'], { stdin: prompt })
+    const loadResult = await env.runTmux(['load-buffer', '-b', buf, '-'], { stdin: prompt })
+    const loadErr = tmuxOk(loadResult, 'load-buffer')
+    if (loadErr !== null) return loadErr
     loaded = true
-    await env.runTmux(['paste-buffer', '-p', '-r', '-d', '-b', buf, '-t', pane])
+    const pasteResult = await env.runTmux([
+      'paste-buffer',
+      '-p',
+      '-r',
+      '-d',
+      '-b',
+      buf,
+      '-t',
+      pane,
+    ])
+    const pasteErr = tmuxOk(pasteResult, 'paste-buffer')
+    if (pasteErr !== null) return pasteErr
     // `paste-buffer -d` deletes the buffer on success; `loaded` is reset so
     // the finally block's defensive delete is a no-op for the normal path.
     loaded = false
     await sleepMs(Math.round(gap * 1000))
-    await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+    const enter = await env.runTmux(['send-keys', '-t', pane, 'Enter'])
+    const enterErr = tmuxOk(enter, 'send-keys Enter')
+    if (enterErr !== null) return enterErr
   } finally {
     // Mirror `tm`'s RETURN trap: a `paste-buffer` that failed after
     // `load-buffer` succeeded would otherwise leak a named buffer entry.
@@ -1839,24 +1871,26 @@ const doctor: NativeVerb = async (args, _options, env) => {
   out += '\n'
 
   // --- active teammates ---
+  // `cmd_doctor` projects each `tmux ls` row to its session field (`awk -F:
+  // ... {print $1}`) and prints it with a two-space indent — bare session
+  // name, not the full row. Mirror that exactly so the report stays
+  // byte-compatible with the bash form for this section.
   out += 'active teammates:\n'
-  const repos = await iterRepos(env.runTmux)
-  if (repos.length === 0) {
+  let listing = ''
+  try {
+    listing = (await env.runTmux(['ls'])).stdout
+  } catch {
+    listing = ''
+  }
+  const sessionRows = listing
+    .split('\n')
+    .map((line) => sessionField(line))
+    .filter((name) => name.startsWith(SESSION_PREFIX))
+  if (sessionRows.length === 0) {
     out += "  (none — use 'tm spawn <repo>' to launch one)\n"
   } else {
-    // The bash report uses the full `tmux ls` line; reconstruct one here so
-    // the report is human-meaningful (a bare repo name reads as cryptic).
-    let listing = ''
-    try {
-      listing = (await env.runTmux(['ls'])).stdout
-    } catch {
-      listing = ''
-    }
-    const rows = listing
-      .split('\n')
-      .filter((line) => sessionField(line).startsWith(SESSION_PREFIX))
-    out += kv('count', String(rows.length))
-    for (const row of rows) out += `  - ${row}\n`
+    out += kv('count', String(sessionRows.length))
+    for (const name of sessionRows) out += `  ${name}\n`
   }
 
   return { code: 0, stdout: out, stderr: '' }
@@ -1873,8 +1907,15 @@ interface SpawnArgs {
   noWait: boolean
 }
 
-/** Parse `cmd_spawn`'s flag set; `error` on a malformed vector. */
+/**
+ * `cmd_spawn`'s arg loop. `--prompt` is the only value-bearing flag bash
+ * validates explicitly (`[[ $# -ge 2 ]] || die`); `--task` and `--resume`
+ * use `"${2:-}"; shift 2`, which under `set -e` exits silently when the
+ * value is missing because `shift 2` past the end returns non-zero — the
+ * conformance ledger calls this the "tm exits 1 with no output" shape.
+ */
 function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult } {
+  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let resumeSid = ''
   let task = ''
   let prompt = ''
@@ -1883,11 +1924,11 @@ function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!
     if (arg === '--resume') {
-      if (i + 1 >= rest.length) return { error: die('tm spawn: --resume requires a value') }
+      if (i + 1 >= rest.length) return { error: SILENT }
       resumeSid = rest[i + 1]!
       i++
     } else if (arg === '--task') {
-      if (i + 1 >= rest.length) return { error: die('tm spawn: --task requires a value') }
+      if (i + 1 >= rest.length) return { error: SILENT }
       task = rest[i + 1]!
       i++
     } else if (arg.startsWith('--task=')) {
@@ -2274,8 +2315,13 @@ interface WaitArgs {
   paneQuiet: boolean
 }
 
-/** `cmd_wait`'s arg loop; positional after `<repo>` is a positional timeout. */
+/**
+ * `cmd_wait`'s arg loop; positional after `<repo>` is a positional timeout.
+ * `--timeout` with no value is bash's silent-exit-1 case (`${2:-}; shift 2`
+ * trips `set -e`); mirror it so the conformance differential stays clean.
+ */
 function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } {
+  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let repo = ''
   let timeout = '1800'
   let fresh = false
@@ -2290,9 +2336,8 @@ function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } 
       paneQuiet = true
       i++
     } else if (arg === '--timeout') {
-      // Bash quirk: `${2:-}` accepts a missing value as empty — mirror it so
-      // a `tm wait <repo> --timeout` (no value) advances normally.
-      timeout = i + 1 < args.length ? args[i + 1]! : ''
+      if (i + 1 >= args.length) return { error: SILENT }
+      timeout = args[i + 1]!
       i += 2
     } else if (arg.startsWith('--timeout=')) {
       timeout = arg.slice('--timeout='.length)
@@ -2359,15 +2404,20 @@ interface CompactArgs {
   timeout: string
 }
 
-/** `cmd_compact`'s arg loop: same positional-then-flag rule as `wait`. */
+/**
+ * `cmd_compact`'s arg loop: same positional-then-flag rule as `wait`.
+ * `--timeout` with no value is bash's silent-exit-1 case; mirror that.
+ */
 function parseCompactArgs(args: readonly string[]): CompactArgs | { error: TmResult } {
+  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let repo = ''
   let timeout = '1800'
   let i = 0
   while (i < args.length) {
     const arg = args[i]!
     if (arg === '--timeout') {
-      timeout = i + 1 < args.length ? args[i + 1]! : ''
+      if (i + 1 >= args.length) return { error: SILENT }
+      timeout = args[i + 1]!
       i += 2
     } else if (arg.startsWith('--timeout=')) {
       timeout = arg.slice('--timeout='.length)
@@ -2418,8 +2468,12 @@ const compact: NativeVerb = async (args, _options, env) => {
   let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)\n`
 
   const sent = await sendKeys(repo, '/compact', env)
+  // `bin/tm:1139` runs `_send_keys >/dev/null`, redirecting *stdout* only;
+  // the `sent to ...` / `sid=...` lines `_send_keys` writes to stderr reach
+  // the user. Preserve them by carrying `sent.stderr` on every return path.
+  stderr += sent.stderr
   if (sent.code !== 0) {
-    return { code: sent.code, stdout: sent.stdout, stderr: stderr + sent.stderr }
+    return { code: sent.code, stdout: sent.stdout, stderr }
   }
 
   const timeoutSec = Number(timeout)
@@ -2429,21 +2483,26 @@ const compact: NativeVerb = async (args, _options, env) => {
     if (existsSync(marker)) {
       return { code: 0, stdout: 'compacted\n', stderr }
     }
-    try {
-      const captured = await env.runTmux(['capture-pane', '-t', pane, '-p'])
-      if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
-        return {
-          code: 1,
-          stdout: '',
-          stderr:
-            stderr +
-            `tm compact: ${repo} refused /compact — Claude Code reported ` +
-            "'Not enough messages to compact' (transcript too short).\n",
+    // `bin/tm`'s refusal scan is `[[ -n "$pane" ]] && tmux capture-pane ...`
+    // — if the pane is gone the verb silently disables refusal detection and
+    // keeps polling the idle marker. Mirror that.
+    if (pane.length > 0) {
+      try {
+        const captured = await env.runTmux(['capture-pane', '-t', pane, '-p'])
+        if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
+          return {
+            code: 1,
+            stdout: '',
+            stderr:
+              stderr +
+              `tm compact: ${repo} refused /compact — Claude Code reported ` +
+              "'Not enough messages to compact' (transcript too short).\n",
+          }
         }
+      } catch {
+        // A capture failure is a transient tmux error; the idle marker is
+        // the primary signal — keep polling.
       }
-    } catch {
-      // A capture failure is a transient tmux error; the idle marker is the
-      // primary signal — keep polling.
     }
     await sleepMs(3000)
   }
@@ -2470,8 +2529,13 @@ interface ResumeArgs {
   noWait: boolean
 }
 
-/** `cmd_resume`'s arg loop; two positionals (`<repo> [<sid>]`) plus flags. */
+/**
+ * `cmd_resume`'s arg loop; two positionals (`<repo> [<sid>]`) plus flags.
+ * Like `cmd_spawn`, `--task` is bash's silent-exit-1 path (no `[[ $# -ge 2 ]]`
+ * guard); `--prompt` is the explicit-die path.
+ */
 function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResult } {
+  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let repo = ''
   let sid = ''
   let task = ''
@@ -2491,7 +2555,7 @@ function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResul
       hasPrompt = true
       i++
     } else if (arg === '--task') {
-      if (i + 1 >= args.length) return { error: die('tm resume: --task requires a value') }
+      if (i + 1 >= args.length) return { error: SILENT }
       task = args[i + 1]!
       i += 2
     } else if (arg.startsWith('--task=')) {

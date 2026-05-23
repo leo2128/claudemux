@@ -31,6 +31,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0020](/.agents/decisions/0020-live-teammate-integration-harness.md) | Live-teammate integration tests seed directory trust by a targeted `~/.claude.json` write | Accepted |
 | [0021](/.agents/decisions/0021-node-cli-committed-bundle.md) | `tm` ships as a committed esbuild bundle + thin Node launcher | Accepted |
 | [0022](/.agents/decisions/0022-codex-driver.md) | Codex teammates ship as a `codex-` prefixed driver with a vendored protocol schema, FS-backed supervision, and an ask-mode borrow on the named pool | Accepted |
+| [0023](/.agents/decisions/0023-codex-engine-flag.md) | The codex teammate kind moves from a `codex-` name prefix to an explicit `tm spawn --engine` flag, with one-minor deprecation | Proposed |
 
 ## When to add a record
 

@@ -124,9 +124,16 @@ export interface TurnCollector {
  *
  * This collector subscribes to both streams, filters by `threadId`, and
  * buckets `item/completed` notifications by their `turnId`. When
- * `turn/completed` arrives it merges the matching bucket into `turn.items`
- * and flips `turn.itemsView` to `"full"` ("the client has accumulated every
- * item the daemon emitted for this turn") before resolving.
+ * `turn/completed` arrives it merges the matching bucket into `turn.items`.
+ * `itemsView` is set to `"full"` only when the bucket has at least one
+ * item: the client cannot prove "full" if it never observed anything for
+ * the turn, and an empty bucket on a completed turn means events fired
+ * before this connection was subscribed (the `codexWait` window — see the
+ * note below). Mid-turn subscription that catches *some* events still
+ * stamps `"full"`, which is technically optimistic but the dispatcher
+ * has no signal that distinguishes "saw every event" from "saw most" at
+ * the protocol level; the lying-with-zero case is the only one that
+ * actually shows up in practice.
  *
  * **Subscribe before sending `turn/start`.** A turn that completes in one
  * round-trip (cached prompt, fast model) can deliver `turn/completed`
@@ -135,14 +142,21 @@ export interface TurnCollector {
  * the subscribe + send dance in that order; do not reorder.
  *
  * **Ordering invariant.** ItemCompleted and TurnCompleted go through the
- * same `OutgoingMessageSender` mpsc channel in the daemon, and the
- * TurnCompleted emit is `.await`ed in `handle_turn_complete` (not
- * `tokio::spawn`'d), so every ItemCompleted for a turn lands on the wire
- * before that turn's TurnCompleted. The collector relies on this — no
- * post-turn debounce, no late-item buffering. If a future codex version
- * spawns the turn-completed emit, this collector is the first thing that
- * breaks; `codex-rs/app-server/src/bespoke_event_handling.rs:1290-1316`
- * is the line of code that holds the invariant.
+ * same per-thread mpsc channel in the daemon. The TurnCompleted emit is
+ * `.await`ed in `handle_turn_complete` (`bespoke_event_handling.rs:1488`),
+ * and `handle_turn_complete` runs after every spawned item-callback path
+ * has resolved its own ItemCompleted emit — `complete_command_execution_item`
+ * at line 1399, the approval callback paths starting around line 535/649/
+ * 699/756/797/837 — because the daemon does not transition to
+ * "turn-complete" until those resolve. Concretely: every ItemCompleted
+ * for a turn lands on the wire before that turn's TurnCompleted. The
+ * collector relies on this — no post-turn debounce, no late-item
+ * buffering. If a future codex version emits TurnCompleted before some
+ * approval callback finishes, late ItemCompleteds will land in
+ * `itemsByTurn` after the collector has already resolved; the merged
+ * Turn is then truthful about what reached the wire by completion time,
+ * but incomplete. Re-validate this paragraph when bumping the pinned
+ * codex version.
  *
  * **Item-type coverage.** Not every `ThreadItem` variant emits a started+
  * completed pair — reasoning summary text streams as deltas only. Every
@@ -152,19 +166,48 @@ export interface TurnCollector {
  * outside this collector's surface — a future streaming consumer can
  * subscribe to `item/agentMessage/delta` etc. directly.
  *
- * The notification handler stays installed for the lifetime of the
- * underlying `CodexWsClient` — `onNotification` has no remove counterpart.
- * The `done` flag short-circuits every further dispatch after resolve;
- * the per-call client closes shortly after, garbage-collecting the closure.
+ * **Single-use, per-call client.** The collector assumes a fresh
+ * `CodexWsClient` per `tm` invocation — every codex verb in this file
+ * builds one in `openInitialized` and closes it in its `finally`. The
+ * notification handler stays installed for the lifetime of the client
+ * (`onNotification` has no remove counterpart), and `itemsByTurn` is
+ * never trimmed; both are unrooted at client close. A future caller
+ * that shares a client across turns must build a new collector per
+ * turn and accept that the prior collector's handler keeps dispatching
+ * — `done` short-circuits it cheaply, but the closure stays linked.
+ *
+ * `awaitTurn()` caches its Promise: a second call returns the same
+ * Promise (or the resolved value), so repeat-await on the same
+ * collector is idempotent rather than silently overwriting the
+ * resolver.
  */
 export function subscribeTurnCollection(
   client: CodexWsClient,
   threadId: string,
 ): TurnCollector {
   const itemsByTurn = new Map<string, ThreadItem[]>()
-  let resolveTurn: ((turn: TurnCompletedNotification) => void) | null = null
   let cached: TurnCompletedNotification | null = null
+  let awaiting: Promise<TurnCompletedNotification> | null = null
+  let resolveTurn: ((turn: TurnCompletedNotification) => void) | null = null
   let done = false
+
+  const onResolve = (params: TurnCompletedNotification): void => {
+    const items = itemsByTurn.get(params.turn.id) ?? []
+    // `'full'` claims the client has every item the daemon emitted; an
+    // empty bucket on a completed turn means events fired before this
+    // connection was a subscriber, so the honest label is `"notLoaded"`
+    // — same value the daemon shipped in the original envelope.
+    const itemsView = items.length > 0 ? 'full' : 'notLoaded'
+    const merged: TurnCompletedNotification = {
+      ...params,
+      turn: { ...params.turn, items, itemsView },
+    }
+    cached = merged
+    if (resolveTurn !== null) {
+      resolveTurn(merged)
+      resolveTurn = null
+    }
+  }
 
   client.onNotification((notif) => {
     if (done) return
@@ -178,22 +221,18 @@ export function subscribeTurnCollection(
       const params = notif.params as TurnCompletedNotification
       if (params.threadId !== threadId) return
       done = true
-      const items = itemsByTurn.get(params.turn.id) ?? []
-      const merged: TurnCompletedNotification = {
-        ...params,
-        turn: { ...params.turn, items, itemsView: 'full' },
-      }
-      if (resolveTurn !== null) resolveTurn(merged)
-      else cached = merged
+      onResolve(params)
     }
   })
 
   return {
     awaitTurn(): Promise<TurnCompletedNotification> {
       if (cached !== null) return Promise.resolve(cached)
-      return new Promise<TurnCompletedNotification>((res) => {
+      if (awaiting !== null) return awaiting
+      awaiting = new Promise<TurnCompletedNotification>((res) => {
         resolveTurn = res
       })
+      return awaiting
     },
   }
 }
@@ -337,11 +376,26 @@ export async function codexSend(
 }
 
 /**
- * `tm wait codex-<n>` — block until the teammate's next `turn/completed`
- * (an in-progress turn driven by some other caller).
+ * `tm wait codex-<n>` — block until the teammate's next `turn/completed`.
  *
- * The dispatcher uses this when it has issued an asynchronous `turn/start`
- * elsewhere — typically a `tm send --no-wait` — and now needs the result.
+ * **Known limitation: the prior `--no-wait` turn may already be gone.**
+ * The intended composition is `tm send codex-<n> --no-wait` → `tm wait
+ * codex-<n>`. The codex daemon's `ThreadScopedOutgoingMessageSender`
+ * only forwards a thread's events to the `connection_ids` *currently*
+ * subscribed; it does not replay events to a connection that joins
+ * later. When `tm send --no-wait` closes its WebSocket immediately
+ * after `turn/start`, the daemon drops that connection from the set —
+ * and if the turn's `item/completed`/`turn/completed` fire before this
+ * `tm wait` has finished its `thread/resume`, those events were sent
+ * to a disconnected peer and the dispatcher cannot recover them. This
+ * verb then blocks until the *next* turn completes (or its caller
+ * cancels).
+ *
+ * In practice the `send --no-wait` → `wait` window is short enough that
+ * a long turn arrives back fine, but a fast turn (cached prompt) is
+ * irrecoverable. A future fix needs a daemon-side replay buffer, a
+ * connection that stays open across the verbs, or a separate
+ * pull-history RPC; none of these is in scope here.
  */
 export async function codexWait(name: string): Promise<TmResult> {
   if (!daemonAlive(name)) {

@@ -344,6 +344,76 @@ describe('subscribeTurnCollection — turn/item stream merge', () => {
     expect(resolved.turn.items[0]).toMatchObject({ id: 'm1', text: 'real' })
   })
 
+  test('a turn/completed with no observed items resolves with itemsView "notLoaded"', async () => {
+    // The wait path can subscribe after the daemon has already finished
+    // emitting the turn's items (the `tm send --no-wait` window — events
+    // fired to a disconnected peer and the dispatcher cannot recover
+    // them). In that case the bucket stays empty, and stamping
+    // `"full"` would be a lie. `"notLoaded"` is the same value the
+    // daemon originally shipped — it says "the client does not have a
+    // complete view of this turn", which is exactly the truth.
+    const { client, emit } = makeFakeClient()
+    const collector = subscribeTurnCollection(client, 'thread-1')
+
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-empty',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 0,
+          completedAt: 1,
+          durationMs: 1,
+        },
+      },
+    } as never)
+
+    const resolved = await collector.awaitTurn()
+    expect(resolved.turn.items.length).toBe(0)
+    expect(resolved.turn.itemsView).toBe('notLoaded')
+  })
+
+  test('awaitTurn() is idempotent — a second call returns the same promise', async () => {
+    // The interface is exported and a future caller might naturally
+    // `await` twice (or branch on whether they hold a Promise yet). The
+    // collector caches the wait Promise so a second call cannot
+    // orphan the first.
+    const { client, emit } = makeFakeClient()
+    const collector = subscribeTurnCollection(client, 'thread-1')
+
+    const p1 = collector.awaitTurn()
+    const p2 = collector.awaitTurn()
+    expect(p1).toBe(p2)
+
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-A',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 0,
+          completedAt: 0,
+          durationMs: 0,
+        },
+      },
+    } as never)
+
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1).toBe(r2)
+
+    // A third call after resolve returns the cached value (still the same).
+    const r3 = await collector.awaitTurn()
+    expect(r3).toBe(r1)
+  })
+
   test('turn/completed addressed to a different thread does not resolve the wait', async () => {
     const { client, emit } = makeFakeClient()
     const collector = subscribeTurnCollection(client, 'thread-1')

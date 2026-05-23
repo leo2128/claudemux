@@ -99,6 +99,19 @@ const tmpFiles: string[] = []
 let savedTmux: string | undefined
 let savedSessions: string | undefined
 let savedCapture: string | undefined
+let savedTz: string | undefined
+
+// Pin the timezone for the whole conformance file — set at module load so
+// the FIXED_NOW Date literal below resolves under UTC, before any Date
+// operation reaches the OS's local zone. `tm history`'s detail page formats
+// `last_seen` with `new Date(...).getHours()` / `.getMinutes()` etc, which
+// honor the process timezone; without this pin the goldens shift between
+// the dev machine (UTC+8 on the author's box) and CI (UTC). Node consults
+// `process.env.TZ` via `tzset()` on each Date construction, so writing it
+// here takes effect on subsequent Date operations even though Node has
+// already started.
+savedTz = process.env.TZ
+process.env.TZ = 'UTC'
 
 /**
  * The wall-clock the harness pins. `tm history`'s detail page renders an
@@ -145,6 +158,8 @@ afterAll(() => {
   else process.env.FAKE_TMUX_SESSIONS = savedSessions
   if (savedCapture === undefined) delete process.env.FAKE_TMUX_CAPTURE
   else process.env.FAKE_TMUX_CAPTURE = savedCapture
+  if (savedTz === undefined) delete process.env.TZ
+  else process.env.TZ = savedTz
   if (existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })
 })
 

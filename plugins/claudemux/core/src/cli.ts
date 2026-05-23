@@ -34,8 +34,13 @@ import { join } from 'node:path'
  * or the first non-flag positional stops it (help text must not swallow
  * prompt data that happens to contain `--help`). Mirrors the bash `main`
  * pre-scan that this layer replaces.
+ *
+ * Exported because `main.ts` needs it too: a verb that reads stdin (only
+ * `archive`) must not slurp stdin when the invocation is going to print
+ * help, since the help dispatch never reaches the reader and a pipe held
+ * open by an upstream producer would block the launcher forever.
  */
-function triggersHelp(args: readonly string[]): boolean {
+export function triggersHelp(args: readonly string[]): boolean {
   for (const arg of args) {
     if (arg === '-h' || arg === '--help') return true
     if (arg === '--prompt' || arg.startsWith('--prompt=')) return false
@@ -63,6 +68,11 @@ function unknownVerb(verb: string): TmResult {
  * arm: known verb (including `help` itself, since bash's `help_help` calls
  * `cmd_help`) prints that verb's detail page; unknown verb prints a stderr
  * line + the overview + exits 1; no argument prints the overview + exits 0.
+ *
+ * Every table lookup goes through `Object.hasOwn` — a bare `HELP_TEXTS[verb]`
+ * walks the prototype chain, so a verb named `toString` / `constructor` /
+ * `hasOwnProperty` would yield a function from `Object.prototype` and crash
+ * the writer when the result's `stdout` is shoved at `process.stdout.write`.
  */
 function runHelpVerb(rest: readonly string[]): TmResult {
   const target = rest[0]
@@ -70,8 +80,9 @@ function runHelpVerb(rest: readonly string[]): TmResult {
   if (target === 'help' || target === '-h' || target === '--help') {
     return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
   }
-  const text = HELP_TEXTS[target]
-  if (text !== undefined) return { code: 0, stdout: text, stderr: '' }
+  if (Object.hasOwn(HELP_TEXTS, target)) {
+    return { code: 0, stdout: HELP_TEXTS[target]!, stderr: '' }
+  }
   return {
     code: 1,
     stdout: OVERVIEW_HELP,
@@ -97,8 +108,11 @@ export async function runCli(
   stdin?: string,
 ): Promise<TmResult> {
   const [verb, ...rest] = argv
-  // 1. Bare `tm` — bash sets `sub="${1:-help}"`, falls into the help case.
-  if (verb === undefined) return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  // 1. Bare `tm` (or `tm ""`, mirroring bash `${1:-help}` which fires on
+  //    both unset and null/empty) — fall through to the overview.
+  if (verb === undefined || verb === '') {
+    return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  }
 
   // 2. The `help` / `-h` / `--help` verb forms.
   if (verb === 'help' || verb === '-h' || verb === '--help') {
@@ -109,18 +123,24 @@ export async function runCli(
   //    `--help`) prints that verb's detail. Unknown verb in this position
   //    falls through to the overview, matching bash's `declare -F help_<verb>`
   //    fallback to `cmd_help`.
+  //
+  //    Every dispatch-table lookup below uses `Object.hasOwn` so a verb name
+  //    that collides with an Object.prototype key (`toString`, `constructor`,
+  //    `hasOwnProperty`, `__proto__`) does not walk the prototype chain and
+  //    return a function the writer then crashes on.
   if (triggersHelp(rest)) {
-    const text = HELP_TEXTS[verb]
-    return { code: 0, stdout: text ?? OVERVIEW_HELP, stderr: '' }
+    const text = Object.hasOwn(HELP_TEXTS, verb) ? HELP_TEXTS[verb]! : OVERVIEW_HELP
+    return { code: 0, stdout: text, stderr: '' }
   }
 
   // 4. Removed verbs — migration error on stderr, exit 2.
-  const removedMessage = REMOVED_VERB_MESSAGES[verb]
-  if (removedMessage !== undefined) return removedVerb(removedMessage)
+  if (Object.hasOwn(REMOVED_VERB_MESSAGES, verb)) {
+    return removedVerb(REMOVED_VERB_MESSAGES[verb]!)
+  }
 
   // 5. Native dispatch. After 3c every verb is in `NATIVE_VERBS`.
-  const handler = NATIVE_VERBS[verb]
-  if (handler !== undefined) {
+  if (Object.hasOwn(NATIVE_VERBS, verb)) {
+    const handler = NATIVE_VERBS[verb]!
     const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined
     return handler(rest, options, env)
   }
@@ -136,13 +156,19 @@ export function productionEnv(): NativeEnv {
     runColumn,
     runGrep,
     // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or `$PWD`
-    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). `$PWD` is the *logical* cwd —
-    // it preserves the symlink the user `cd`'d through, where Node's
-    // `process.cwd()` would return the symlink-resolved physical path; the
-    // two differ on a symlinked dispatcher tree and `~/.claude/projects`
-    // lookups would diverge between bash and native. Match bash by
-    // preferring `$PWD`.
-    dispatcherDir: process.env.TM_DISPATCHER_DIR ?? process.env.PWD ?? process.cwd(),
+    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter here:
+    //   - `$PWD` is the *logical* cwd, preserving the symlink the user
+    //     `cd`'d through; Node's `process.cwd()` would return the
+    //     symlink-resolved physical path, and `~/.claude/projects` lookups
+    //     would diverge between bash and native on a symlinked dispatcher
+    //     tree.
+    //   - bash `${VAR:-default}` triggers the default on *unset* OR *empty*,
+    //     so `||` (which treats empty strings as falsy) is the right
+    //     operator — `??` would let an accidentally-empty
+    //     `TM_DISPATCHER_DIR` through and resolve `<repo>` paths against
+    //     `""`, while `tm doctor`'s own check treats empty as unset and
+    //     reports the opposite of what the verbs saw.
+    dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
   }
 }

@@ -1428,7 +1428,7 @@ var doctor = async (args, _options, env) => {
   };
   let out = "";
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const tmWrapper = join2(moduleDir, "..", "bin", "tm");
+  const tmWrapper = join2(moduleDir, "..", "..", "bin", "tm");
   const pluginJson = join2(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
   let version = "unknown";
   let pluginJsonPresent = false;
@@ -2134,8 +2134,9 @@ function runHelpVerb(rest) {
   if (target === "help" || target === "-h" || target === "--help") {
     return { code: 0, stdout: OVERVIEW_HELP, stderr: "" };
   }
-  const text = HELP_TEXTS[target];
-  if (text !== void 0) return { code: 0, stdout: text, stderr: "" };
+  if (Object.hasOwn(HELP_TEXTS, target)) {
+    return { code: 0, stdout: HELP_TEXTS[target], stderr: "" };
+  }
   return {
     code: 1,
     stdout: OVERVIEW_HELP,
@@ -2145,18 +2146,21 @@ function runHelpVerb(rest) {
 }
 async function runCli(argv, env, stdin) {
   const [verb, ...rest] = argv;
-  if (verb === void 0) return { code: 0, stdout: OVERVIEW_HELP, stderr: "" };
+  if (verb === void 0 || verb === "") {
+    return { code: 0, stdout: OVERVIEW_HELP, stderr: "" };
+  }
   if (verb === "help" || verb === "-h" || verb === "--help") {
     return runHelpVerb(rest);
   }
   if (triggersHelp(rest)) {
-    const text = HELP_TEXTS[verb];
-    return { code: 0, stdout: text ?? OVERVIEW_HELP, stderr: "" };
+    const text = Object.hasOwn(HELP_TEXTS, verb) ? HELP_TEXTS[verb] : OVERVIEW_HELP;
+    return { code: 0, stdout: text, stderr: "" };
   }
-  const removedMessage = REMOVED_VERB_MESSAGES[verb];
-  if (removedMessage !== void 0) return removedVerb(removedMessage);
-  const handler = NATIVE_VERBS[verb];
-  if (handler !== void 0) {
+  if (Object.hasOwn(REMOVED_VERB_MESSAGES, verb)) {
+    return removedVerb(REMOVED_VERB_MESSAGES[verb]);
+  }
+  if (Object.hasOwn(NATIVE_VERBS, verb)) {
+    const handler = NATIVE_VERBS[verb];
     const options = stdin != null ? { stdin } : void 0;
     return handler(rest, options, env);
   }
@@ -2168,13 +2172,19 @@ function productionEnv() {
     runColumn,
     runGrep,
     // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or `$PWD`
-    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). `$PWD` is the *logical* cwd —
-    // it preserves the symlink the user `cd`'d through, where Node's
-    // `process.cwd()` would return the symlink-resolved physical path; the
-    // two differ on a symlinked dispatcher tree and `~/.claude/projects`
-    // lookups would diverge between bash and native. Match bash by
-    // preferring `$PWD`.
-    dispatcherDir: process.env.TM_DISPATCHER_DIR ?? process.env.PWD ?? process.cwd(),
+    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter here:
+    //   - `$PWD` is the *logical* cwd, preserving the symlink the user
+    //     `cd`'d through; Node's `process.cwd()` would return the
+    //     symlink-resolved physical path, and `~/.claude/projects` lookups
+    //     would diverge between bash and native on a symlinked dispatcher
+    //     tree.
+    //   - bash `${VAR:-default}` triggers the default on *unset* OR *empty*,
+    //     so `||` (which treats empty strings as falsy) is the right
+    //     operator — `??` would let an accidentally-empty
+    //     `TM_DISPATCHER_DIR` through and resolve `<repo>` paths against
+    //     `""`, while `tm doctor`'s own check treats empty as unset and
+    //     reports the opposite of what the verbs saw.
+    dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join3(process.env.HOME ?? homedir(), ".claude", "projects")
   };
 }
@@ -2188,7 +2198,8 @@ async function readStdin() {
 }
 async function main() {
   const argv = process.argv.slice(2);
-  const stdin = argv[0] === "archive" ? await readStdin() : void 0;
+  const needsStdin = argv[0] === "archive" && !triggersHelp(argv.slice(1));
+  const stdin = needsStdin ? await readStdin() : void 0;
   const result = await runCli(argv, productionEnv(), stdin);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);

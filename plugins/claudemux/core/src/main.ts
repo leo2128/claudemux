@@ -8,7 +8,7 @@
  * `tsx` with no rebuild step.
  */
 
-import { productionEnv, runCli } from './cli'
+import { productionEnv, runCli, triggersHelp } from './cli'
 
 /** Read all of stdin; `undefined` on an interactive TTY so we never block on a never-arriving EOF. */
 async function readStdin(): Promise<string | undefined> {
@@ -20,9 +20,13 @@ async function readStdin(): Promise<string | undefined> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
-  // `archive` is the only verb that reads stdin; reading it for any other verb
-  // risks blocking on a pipe that is open but never written.
-  const stdin = argv[0] === 'archive' ? await readStdin() : undefined
+  // `archive` is the only verb that reads stdin. Slurp it only when the
+  // invocation will actually reach the verb handler — `tm archive --help` /
+  // `tm archive -h` route to the help branch and read no stdin in bash, so
+  // we must skip the slurp there too or the launcher blocks indefinitely on
+  // any caller whose stdin is a pipe an upstream producer holds open.
+  const needsStdin = argv[0] === 'archive' && !triggersHelp(argv.slice(1))
+  const stdin = needsStdin ? await readStdin() : undefined
   const result = await runCli(argv, productionEnv(), stdin)
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)

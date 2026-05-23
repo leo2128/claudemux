@@ -18,7 +18,22 @@
 
 set -eu
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+# Follow the script's own symlink chain. BSD `readlink` (macOS) has no `-f`,
+# so we loop manually — necessary when a user symlinks this launcher into
+# their PATH (`ln -s .../plugins/claudemux/bin/tm ~/.local/bin/tm`): a plain
+# `dirname "$0"` resolves to the symlink's directory, not the real script's,
+# and the relative `../core/dist/cli.mjs` lookup misses.
+SCRIPT="$0"
+while [[ -L "$SCRIPT" ]]; do
+    LINK_DIR="$(cd "$(dirname "$SCRIPT")" && pwd -P)"
+    LINK_TARGET="$(readlink "$SCRIPT")"
+    if [[ "$LINK_TARGET" = /* ]]; then
+        SCRIPT="$LINK_TARGET"
+    else
+        SCRIPT="$LINK_DIR/$LINK_TARGET"
+    fi
+done
+HERE="$(cd "$(dirname "$SCRIPT")" && pwd -P)"
 BUNDLE="$HERE/../core/dist/cli.mjs"
 
 if ! command -v node >/dev/null 2>&1; then

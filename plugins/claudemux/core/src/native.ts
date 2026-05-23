@@ -1749,12 +1749,16 @@ const doctor: NativeVerb = async (args, _options, env) => {
   let out = ''
 
   // --- tm executable ---
-  // This module lives at `core/src/native.ts`; the Node CLI wrapper sits at
-  // `core/bin/tm`, and the plugin manifest at `<plugin-root>/.claude-plugin/
-  // plugin.json`. Resolve both relative to this file so the answer survives
-  // a renamed plugin directory.
+  // This module lives at `core/src/native.ts` (source) or, in the production
+  // bundle, at `core/dist/cli.mjs` — both are one directory below `core/`.
+  // The user-facing PATH entry is the launcher at
+  // `<plugin-root>/bin/tm`, two `..` segments above either of those. The
+  // plugin manifest lives at `<plugin-root>/.claude-plugin/plugin.json`,
+  // also two `..` up. Resolving both relative to this file means the answer
+  // survives a renamed plugin directory and reaches the same path whether
+  // the bundle or the source file is the entry.
   const moduleDir = dirname(fileURLToPath(import.meta.url))
-  const tmWrapper = join(moduleDir, '..', 'bin', 'tm')
+  const tmWrapper = join(moduleDir, '..', '..', 'bin', 'tm')
   const pluginJson = join(moduleDir, '..', '..', '.claude-plugin', 'plugin.json')
   let version = 'unknown'
   let pluginJsonPresent = false

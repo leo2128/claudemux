@@ -40,6 +40,13 @@ describe('bare tm and the help verb', () => {
     expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
 
+  test('an empty-string verb (tm "") is the same as a bare tm — matches bash ${1:-help}', async () => {
+    // Bash `${1:-help}` substitutes the default on unset *or* empty; a dispatcher
+    // script that builds argv from a possibly-empty shell variable must not get
+    // an "unknown subcommand" surprise.
+    expect(await runCli([''], fakeEnv())).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+  })
+
   test('tm help with no argument prints the overview and exits 0', async () => {
     expect(await runCli(['help'], fakeEnv())).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
@@ -136,6 +143,41 @@ describe('unknown verb', () => {
     expect(result.stderr).toBe('tm: unknown subcommand: fubar\n')
     expect(result.stdout).toBe(OVERVIEW_HELP)
   })
+
+  // A bare `NATIVE_VERBS[verb]` lookup walks the prototype chain, so verbs
+  // like `toString` / `constructor` / `hasOwnProperty` / `__proto__` would
+  // yield a function (or object) from `Object.prototype` instead of
+  // `undefined` — dispatch would then call that function as a NativeVerb (or
+  // shove it into `stdout`) and crash the launcher's writer. Same surface
+  // exists on `HELP_TEXTS[verb]` and `REMOVED_VERB_MESSAGES[verb]`; gate them
+  // with `Object.hasOwn`.
+  test.each(['toString', 'constructor', 'hasOwnProperty', '__proto__'])(
+    'verb "%s" (Object.prototype key) is treated as unknown, not dispatched',
+    async (verb) => {
+      const result = await runCli([verb], fakeEnv())
+      expect(result.code).toBe(1)
+      expect(result.stderr).toBe(`tm: unknown subcommand: ${verb}\n`)
+      expect(result.stdout).toBe(OVERVIEW_HELP)
+    },
+  )
+
+  test.each(['toString', 'constructor', 'hasOwnProperty', '__proto__'])(
+    '`tm help %s` (Object.prototype key) is treated as an unknown help target',
+    async (verb) => {
+      const result = await runCli(['help', verb], fakeEnv())
+      expect(result.code).toBe(1)
+      expect(result.stderr).toBe(`tm: no help for unknown verb: ${verb}\n`)
+      expect(result.stdout).toBe(OVERVIEW_HELP)
+    },
+  )
+
+  test.each(['toString', 'constructor', 'hasOwnProperty', '__proto__'])(
+    '`tm %s --help` (Object.prototype key in pre-scan) falls through to the overview',
+    async (verb) => {
+      const result = await runCli([verb, '--help'], fakeEnv())
+      expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+    },
+  )
 })
 
 describe('native dispatch', () => {
@@ -200,6 +242,19 @@ describe('doctor — sections fire top-down, never raising', () => {
     expect(idx('tmux:')).toBeGreaterThan(idx('dispatcher dir:'))
     expect(idx('idle dir (')).toBeGreaterThan(idx('tmux:'))
     expect(idx('active teammates:')).toBeGreaterThan(idx('idle dir ('))
+  })
+
+  test('the reported tm executable path is the production launcher, not the dev wrapper', async () => {
+    // Doctor's job is to tell the user which `tm` actually runs — if it
+    // reports the dev `tsx`-based launcher when the production node-bundle
+    // launcher is what's on PATH, a confused user follows a path that won't
+    // start (no `tsx` outside the dev tree). Pin that the path ends at the
+    // production launcher under `<plugin-root>/bin/tm`, never the dev one
+    // at `core/bin/tm`.
+    const result = await runCli(['doctor'], fakeEnv())
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/path:\s+.*\/plugins\/claudemux\/bin\/tm$/m)
+    expect(result.stdout).not.toMatch(/path:\s+.*\/core\/bin\/tm/m)
   })
 
   test('rejects positional arguments with the usage error', async () => {

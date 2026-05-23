@@ -50,6 +50,32 @@ async function pgidMembers(pgid: number): Promise<number[]> {
     .filter((n) => Number.isFinite(n) && n > 0)
 }
 
+/**
+ * Poll `produce` every 25ms until `predicate` returns true or `timeoutMs`
+ * elapses. Returns the last produced value; throws if the predicate is
+ * never satisfied within the budget. Replaces single hard-coded sleeps
+ * in tests that wait for an asynchronous side effect (a spawned child
+ * appearing in a process group, a pid file being written, etc).
+ */
+async function pollFor<T>(
+  produce: () => Promise<T> | T,
+  predicate: (value: T) => boolean,
+  timeoutMs: number,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  let value = await produce()
+  while (!predicate(value)) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `pollFor: predicate not satisfied within ${timeoutMs}ms (last value: ${JSON.stringify(value)})`,
+      )
+    }
+    await new Promise((res) => setTimeout(res, 25))
+    value = await produce()
+  }
+  return value
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
 
@@ -187,11 +213,15 @@ describe('codex-supervisor — reap', () => {
       readyTimeoutMs: 5000,
       env: { ...process.env, CODEX_FAKE_SPAWN_CHILD: '1' },
     })
-    // Wait briefly so the fake's spawn() of the child resolves and the
-    // child's pid exists. `pgrep -g <pgid>` is the cross-platform way
-    // to enumerate group members.
-    await new Promise((res) => setTimeout(res, 200))
-    const childrenBefore = await pgidMembers(state.pid)
+    // Poll for the fake's child to appear in the group. A fixed sleep
+    // would flake on a slow CI runner where the spawn round-trip
+    // occasionally takes longer than the wait; polling stays cheap on
+    // the common path and only stretches when needed.
+    const childrenBefore = await pollFor(
+      () => pgidMembers(state.pid),
+      (members) => members.length >= 2,
+      3000,
+    )
     expect(childrenBefore.length).toBeGreaterThanOrEqual(2)
     expect(childrenBefore).toContain(state.pid)
 

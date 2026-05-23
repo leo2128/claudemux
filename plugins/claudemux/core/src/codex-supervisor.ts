@@ -167,10 +167,12 @@ export function isProcessAlive(pid: number): boolean {
  *
  * Posix `kill(-pgid, sig)` delivers to every process in the group,
  * including the reparented child. Node's `process.kill` passes the
- * negative pid through unchanged. ESRCH (empty group) is the
- * expected idempotent case; EPERM means the leader died and a child
- * the kernel resolved out of our uid — also nothing more we can do
- * here. Either is success from this function's point of view.
+ * negative pid through unchanged. ESRCH (empty group, every member
+ * has exited) is the expected idempotent case; EPERM (the caller's
+ * uid cannot signal the target — rare for processes we spawned, but
+ * possible if a process has setuid'd to a different uid post-spawn)
+ * is also swallowed as "nothing more we can do from here". Both
+ * count as success from this function's point of view.
  */
 export function killProcessGroup(pgid: number, signal: NodeJS.Signals | number): void {
   if (!Number.isFinite(pgid) || pgid <= 0) return

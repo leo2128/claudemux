@@ -338,7 +338,7 @@ flowchart TB
     csend[".send-at"]
   end
 
-  subgraph CX_EXT["CodexTeammateRecord — engines/codex/persistence.ts"]
+  subgraph CX_EXT["CodexTeammateRecord — plugins/claudemux/core/src/engines/codex/persistence.ts"]
     xroot["/tmp/teammate-codex/&lt;name&gt;/"]
     xpid["pid"]
     xsock["socket"]

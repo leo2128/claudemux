@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm history: invalid sid prefix 'XYZ-not-hex' — must match ^[0-9a-f-]{1,36}$\n"
+}

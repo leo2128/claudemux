@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: no active ledger at <HOME>/.claude/projects/-tmp-claudemux-conf-test-dispatcher/memory/active-dispatcher-tasks.md\n"
+}

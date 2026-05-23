@@ -1,5 +1,0 @@
-tm ls
-
-      List running teammate-<repo> sessions. Shows tmux's raw session
-      row (name, window count, attached state). For a richer "who's
-      doing what" view, prefer `tm states`.

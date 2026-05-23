@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm history: no session matching 'bbbbbbbb' in claudemux-conftest-1555b8f00ff0\n"
+}

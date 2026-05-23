@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "claudemux-conftest-b7b86d4e441b already exists (tmux=teammate-claudemux-conftest-b7b86d4e441b; use 'tm status claudemux-conftest-b7b86d4e441b' to view, or 'tm kill claudemux-conftest-b7b86d4e441b' first)\n",
+  "stderr": ""
+}

@@ -14,32 +14,35 @@ are the domain spec,
 this document is the **component** view — what the `core/` modules are and what
 contracts they hold.
 
-> **Status — every verb runs natively; the bash `tm` lives on as the user-
-> facing PATH entry.** All 17 `tm` verbs (including the racy hot path —
-> `spawn`, `send`, `wait`, `compact`, `resume` — and `doctor`) are
-> reimplemented in TypeScript. A Bash launcher at
-> [`core/bin/tm`](/plugins/claudemux/core/bin/tm) runs the CLI through `tsx`;
-> the live-teammate integration suite re-aims at native by pointing
-> `CLAUDEMUX_TM` at it. The user-installed PATH entry is still the bash
-> [`bin/tm`](/plugins/claudemux/bin/tm), and its help heredoc remains the
-> single source of truth for `--help` output — both are retired in stage 3c
-> alongside the conformance harness's bash oracle. Stage 4 adds the Codex
-> driver.
+> **Status — the bash `tm` is retired; the orchestrator is a pure Node CLI.**
+> All 17 `tm` verbs (including the racy hot path — `spawn`, `send`, `wait`,
+> `compact`, `resume` — and `doctor`) are reimplemented in TypeScript and
+> dispatched by [`cli.ts`](/plugins/claudemux/core/src/cli.ts); help text
+> lives natively in [`help.ts`](/plugins/claudemux/core/src/help.ts). The
+> user-installed [`bin/tm`](/plugins/claudemux/bin/tm) is a small bash
+> launcher that `exec`s `node` against the esbuild bundle committed at
+> [`core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs); a dev launcher
+> at [`core/bin/tm`](/plugins/claudemux/core/bin/tm) runs the same code
+> through `tsx` so source edits need no rebuild. The conformance harness
+> compares native output to committed golden JSON files under
+> [`core/test/goldens/`](/plugins/claudemux/core/test/goldens) rather than a
+> bash oracle. Stage 4 adds the Codex driver.
 
 ## Module layout
 
 Every module under [`core/src/`](/plugins/claudemux/core/src) is small and
-single-purpose; the dispatch logic is kept separate from the process wiring.
+single-purpose; routing, verb code, and process wiring each have their own home.
 
 | Module | Role |
 |---|---|
-| `cli.ts` | The CLI front end and process entry — parse the argument vector, run the verb through `runVerb`, write its stdout/stderr to the process streams, exit with its code. |
-| `core.ts` | `runVerb` — the verb dispatch: per verb, run native TypeScript or shell out to `tm`. |
-| `native.ts` | Native verb implementations — the verbs reimplemented in TypeScript. |
+| `main.ts` | The process entrypoint — read `process.argv` / `process.stdin`, hand to `runCli`, write the result's streams to `process`, set `process.exitCode`. esbuild bundles this file for production; the dev launcher runs it through `tsx`. |
+| `cli.ts` | `runCli` and `productionEnv` — the per-invocation router (help pre-scan, `help <verb>` form, removed-verb migration messages, native dispatch, unknown-verb error) and the production backend wiring. |
+| `help.ts` | `HELP_TEXTS`, `OVERVIEW_HELP`, `REMOVED_VERB_MESSAGES` — the user-facing help strings, the single source of truth that `tm <verb> --help` and `tm help <verb>` print. |
+| `native.ts` | Every verb's implementation, plus `NATIVE_VERBS` keyed by verb name and `NativeEnv` (the injected backends). |
 | `verbs.ts` | `TM_VERBS` — the catalog of the 17 `tm` verbs. |
 | `proc.ts` | `spawnCapture` — the `node:child_process` spawn primitive every shell-out backend is built on. |
-| `tm.ts` | The `tm` shell-out backend — `runTm` spawns the Bash `tm` for verbs not yet migrated; `runTmRaw` spawns it for a bare `tm`. It is also the backend the native `reload` fans out over. |
-| `tmux.ts` | The `tmux` backend — `runTmux`, for natively-migrated verbs that still query tmux. |
+| `tm.ts` | `TmResult` / `TmRunOptions` types, and `resolveTmBinary` — the live-teammate harness's seam for locating the user-installed `tm` PATH entry (honors `CLAUDEMUX_TM`). |
+| `tmux.ts` | The `tmux` backend — `runTmux`, used by every verb that queries tmux. |
 | `column.ts` | The `column` backend — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs. |
 | `grep.ts` | The `grep` backend — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
 | `paths.ts` | Path builders for every `/tmp` protocol file and `~/.claude/projects` path — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) on the TypeScript side. |
@@ -52,21 +55,24 @@ marker protocol, and `~/.claude/projects`. See
 
 ## Verb dispatch
 
-`runVerb` ([`core.ts`](/plugins/claudemux/core/src/core.ts)) is the one place
-that decides, per verb, whether to run native code or shell out:
+`runCli` ([`cli.ts`](/plugins/claudemux/core/src/cli.ts)) is the one place
+that routes one CLI invocation. The order mirrors the bash `main` it replaced:
 
-- A **migrated** verb is a `NativeVerb` in
-  [`native.ts`](/plugins/claudemux/core/src/native.ts); `runVerb` looks it up
-  in `NATIVE_VERBS` and calls it.
-- Every **other** verb shells out to the Bash `tm` through
-  [`tm.ts`](/plugins/claudemux/core/src/tm.ts).
-- A **`--help`** invocation shells out even for a migrated verb — `tm`'s own
-  dispatcher prints the per-verb help, and a native handler carries no help
-  text.
+1. Bare `tm` → `OVERVIEW_HELP`, exit 0.
+2. `tm help` / `tm -h` / `tm --help` / `tm help <verb>` → the matching entry
+   from `HELP_TEXTS`, or `OVERVIEW_HELP`; an unknown verb here writes a
+   stderr line plus the overview and exits 1.
+3. Help pre-scan on the verb's argument list — a `-h`/`--help` before the
+   first positional or before `--prompt` prints that verb's help; otherwise
+   the scan stops and dispatch proceeds.
+4. Removed verb (`ask`, `wait-idle`, `wait-quiet`) → the migration message
+   from `REMOVED_VERB_MESSAGES`, exit 2.
+5. Native verb → `NATIVE_VERBS[verb]` is called with the argument tail.
+6. Unknown verb → stderr line plus overview, exit 1.
 
-Either path produces the same `{code, stdout, stderr}` `TmResult`, so the CLI
-front end shapes a verb's output one way regardless — that is what keeps the
-migration drop-in.
+Every path produces the same `{code, stdout, stderr}` `TmResult`. The process
+entry in [`main.ts`](/plugins/claudemux/core/src/main.ts) writes that result
+to `process.stdout` / `process.stderr` and exits with its code.
 
 A native verb keeps its *logic* in the core but may still shell out to a
 session, presentation, or matching backend: the tmux-querying verbs reach
@@ -77,55 +83,59 @@ regex match to the real `grep -qE` ([`grep.ts`](/plugins/claudemux/core/src/grep
 `column` and `grep` are not reimplemented in TypeScript — how `column` measures
 a field's width and what `grep -E`'s POSIX dialect matches are implementation-
 and platform-dependent, and the migration must preserve the installed binary's
-exact behavior. `reload` itself shells out to a `tm send` subprocess: it is
-sugar over `tm send`, which is not yet migrated. Every shell-out goes through
-`spawnCapture` ([`proc.ts`](/plugins/claudemux/core/src/proc.ts)), the one
+exact behavior. `reload` calls native `send` in-process (no subprocess); every
+remaining shell-out goes through `spawnCapture`
+([`proc.ts`](/plugins/claudemux/core/src/proc.ts)), the one
 `node:child_process` primitive.
 
-## The CLI front end
+## Two launchers
 
-[`cli.ts`](/plugins/claudemux/core/src/cli.ts) is `tm` as a per-invocation
-command. `runCli` takes the argument vector, splits off the verb, runs it
-through `runVerb`, and returns the verb's `TmResult`; the process entry writes
-that result's streams to `process.stdout` / `process.stderr` and exits with its
-code. A bare `tm` (no verb) shells the empty argument vector out to the Bash
-`tm`, which owns the no-verb help screen. Only `archive` reads stdin, so the
-entry slurps `process.stdin` for that verb alone.
+Two thin shell scripts reach the same TypeScript code through different
+runtimes:
 
-The Node CLI is reachable today through the Bash launcher at
-[`core/bin/tm`](/plugins/claudemux/core/bin/tm), which `exec`s `tsx` against
-[`cli.ts`](/plugins/claudemux/core/src/cli.ts) — the seam the live-teammate
-suite uses by pointing `CLAUDEMUX_TM` at it. The user-installed PATH entry
-remains the Bash [`bin/tm`](/plugins/claudemux/bin/tm); replacing it with the
-Node CLI (and dropping `tsx` for a TS-free runtime) is stage 3c.
+- **Production**: [`bin/tm`](/plugins/claudemux/bin/tm) at the plugin root
+  `exec`s `node` against the committed esbuild bundle
+  [`core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs). A marketplace
+  install of the plugin does not run `npm install`, so the bundle is
+  committed to the repo and the launcher needs only `node` on `PATH`. CI
+  rebuilds the bundle from current source and asserts
+  `git diff --exit-code dist/` so a feature commit cannot leave a stale
+  bundle.
+- **Development**: [`core/bin/tm`](/plugins/claudemux/core/bin/tm) `exec`s
+  `tsx` against `core/src/main.ts` — source edits take effect immediately
+  with no rebuild step. The live-teammate integration suite points
+  `CLAUDEMUX_TM` here to drive the native verbs against a real teammate.
 
 ## Native verbs and the conformance harness
 
-**The migration is behavior-preserving.** A native verb reproduces what `tm`
-does today, down to the exact text of an error line, bug for bug; fixing a `tm`
-behavior is a separate change, never folded into the migration. This is
-enforced by the **conformance harness**
-([`test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts)):
-for each migrated verb and a set of fixture scenarios it runs the real
-`bin/tm` and the native handler against the *same* fixture and asserts their
-`TmResult` values — exit code, stdout, and stderr — are equal. The oracle is
-the live `tm`, re-derived on every run, not a golden file. tmux is faked — a
-script both sides reach (`tm` through `PATH`, the native verb through
-`CLAUDEMUX_TMUX`) — so the harness needs no real tmux.
+The **conformance harness**
+([`test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts))
+pins each native verb's behavior against a committed **golden** JSON file
+per scenario at
+[`test/goldens/<verb>/<slug>.json`](/plugins/claudemux/core/test/goldens). For
+each scenario the harness runs the native handler once and asserts its
+`{code, stdout, stderr}` matches the golden; a mutating verb (`kill`,
+`archive`, `reload`) additionally pins its post-state to a sibling
+`<slug>.fs.json`. tmux is faked — the native verb reaches it through
+`CLAUDEMUX_TMUX` — so the harness needs no real tmux. The wall clock and the
+per-scenario name generator are both deterministic, so goldens are byte-
+stable across runs.
 
-Most scenarios are OS-agnostic, but not all: `tm history`'s detail view formats
-a timestamp with BSD `date -r`, which is not portable to GNU, so those
-scenarios are macOS-gated. The `claudemux-core` CI job therefore runs on both
-Linux and macOS — the harness shells out to `tm`, whose cross-platform behavior
-is itself what it pins.
+To regenerate the goldens from current source (after an intended behavior
+change) run:
 
-A *mutating* verb cannot be checked by running the oracle and the native
-handler against the same fixture: the oracle changes the world the native run
-would then see. Such a scenario instead supplies a `snapshot` closure capturing
-its "world" — for `kill`, its `/tmp` files, idle markers, and the session list;
-for `archive`, the dispatcher's memory directory. The harness snapshots the
-world, runs the oracle, snapshots the effect, resets the world, runs native,
-and asserts the two post-states match (as well as the two `TmResult`s).
+```bash
+UPDATE_GOLDENS=1 npx vitest run test/conformance.test.ts
+```
+
+and review the `git diff` before committing.
+
+Most scenarios are OS-agnostic, but not all: `tm history`'s detail view
+formats a timestamp with platform-flavored helpers, so those scenarios are
+macOS-gated. The `claudemux-core` CI job therefore runs on both Linux and
+macOS — the native verbs themselves still shell out to platform-sensitive
+binaries (`column`, `grep`), and that surface is what the cross-platform
+matrix pins.
 
 The hot-path verbs (`spawn`, `send`, `wait`, `compact`, `resume`) cannot run
 their full round-trip under the conformance fake — there is no real `claude`
@@ -137,9 +147,15 @@ returns as soon as the keys are dispatched). The full round-trip is the
 [live-teammate suite's](/plugins/claudemux/core/test/integration) job.
 
 `doctor` is migrated but not in the conformance harness: it reports the path
-to the *current* `tm` binary, which differs between Bash `bin/tm` and the
-Node CLI launcher. A native-only unit test in `core.test.ts` pins the verb's
-output structure.
+to the *current* `tm` binary, which differs between the production launcher
+and the dev launcher. A native-only unit test in `cli.test.ts` pins the
+verb's output structure.
+
+Help text and removed-verb migration messages are pinned by `cli.test.ts`'s
+assertions against `HELP_TEXTS` / `OVERVIEW_HELP` / `REMOVED_VERB_MESSAGES`
+in [`help.ts`](/plugins/claudemux/core/src/help.ts) — that module is itself
+the golden. A reviewer sees help changes as `help.ts` diffs in the same
+commit that changes the verb.
 
 ## The live-teammate integration harness
 

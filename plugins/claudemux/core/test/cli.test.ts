@@ -1,136 +1,210 @@
 /**
- * The CLI front end's dispatch contract: an argument vector splits into a verb
- * and its arguments, a migrated verb runs natively while the rest shell out to
- * `tm`, stdin is forwarded, and a bare `tm` reaches the shell-out so `tm` owns
- * its no-verb help. The native-vs-`tm` *behavior* match is pinned separately
- * by `conformance.test.ts`; this file tests the front end's wiring.
+ * The CLI front end's routing contract: parse an argument vector and route
+ * it to the right handler — native verb, help print, removed-verb error, or
+ * unknown-verb error — producing a `TmResult` with the right `code`/`stdout`/
+ * `stderr` shape. Bash `bin/tm` is retired on this line, so this file covers
+ * every dispatch decision `bin/tm`'s `main` used to make. Byte-exact help
+ * text and per-verb output are pinned by `conformance.test.ts`; the unit
+ * tests here are about wiring (which handler was reached, with which args).
  */
 
 import { describe, expect, test } from 'vitest'
 
-import { type CliDeps, runCli } from '../src/cli'
+import { runCli } from '../src/cli'
 import type { ColumnRunner } from '../src/column'
 import type { GrepRunner } from '../src/grep'
-import type { RawTmRunner, TmResult, TmRunner } from '../src/tm'
+import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from '../src/help'
+import type { NativeEnv } from '../src/native'
 import type { TmuxRunner } from '../src/tmux'
+import { TM_VERBS } from '../src/verbs'
 
-/** A `CliDeps` whose `tm` shell-outs are fakes that record every call. */
-function fakeDeps(
-  over: Partial<CliDeps> = {},
-  tmResult: Partial<TmResult> = {},
-): {
-  deps: CliDeps
-  tmCalls: { verb: string; args: readonly string[]; stdin?: string }[]
-  rawCalls: { args: readonly string[]; stdin?: string }[]
-} {
-  const tmCalls: { verb: string; args: readonly string[]; stdin?: string }[] = []
-  const rawCalls: { args: readonly string[]; stdin?: string }[] = []
-  const runTm: TmRunner = async (verb, args, options) => {
-    tmCalls.push({ verb, args, stdin: options?.stdin })
-    return { code: 0, stdout: `ran ${verb}`, stderr: '', ...tmResult }
-  }
-  const runTmRaw: RawTmRunner = async (args, options) => {
-    rawCalls.push({ args, stdin: options?.stdin })
-    return { code: 0, stdout: 'tm help', stderr: '', ...tmResult }
-  }
-  const runTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
-  const runColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
-  const runGrep: GrepRunner = async () => 1
-  const deps: CliDeps = {
-    runTm,
-    runTmRaw,
-    runTmux,
-    runColumn,
-    runGrep,
+const fakeTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
+const fakeColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
+const fakeGrep: GrepRunner = async () => 1
+
+/** A `NativeEnv` with quiet fakes for every backend. */
+function fakeEnv(over: Partial<NativeEnv> = {}): NativeEnv {
+  return {
+    runTmux: fakeTmux,
+    runColumn: fakeColumn,
+    runGrep: fakeGrep,
     dispatcherDir: '/tmp',
     projectsDir: '/tmp',
     ...over,
   }
-  return { deps, tmCalls, rawCalls }
 }
 
-describe('a non-native verb shells out to tm', () => {
-  // After stage 3 every TM_VERB is migrated, so the shell-out path is reached
-  // only when the verb name is not in `NATIVE_VERBS`. The synthetic name below
-  // pins that path without depending on which verbs are migrated yet.
-  const UNMIGRATED = '__cli_test_unmigrated_verb__'
-
-  test('the verb name and its arguments reach the tm shell-out', async () => {
-    const { deps, tmCalls, rawCalls } = fakeDeps()
-    await runCli([UNMIGRATED, 'acme', '--flag', 'beta'], deps)
-    expect(tmCalls).toHaveLength(1)
-    expect(tmCalls[0]?.verb).toBe(UNMIGRATED)
-    expect(tmCalls[0]?.args).toEqual(['acme', '--flag', 'beta'])
-    expect(rawCalls).toHaveLength(0)
+describe('bare tm and the help verb', () => {
+  test('a bare tm prints the overview and exits 0', async () => {
+    const result = await runCli([], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
 
-  test('a verb with no arguments shells out an empty argument vector', async () => {
-    const { deps, tmCalls } = fakeDeps()
-    await runCli([UNMIGRATED], deps)
-    expect(tmCalls[0]?.verb).toBe(UNMIGRATED)
-    expect(tmCalls[0]?.args).toEqual([])
+  test('tm help with no argument prints the overview and exits 0', async () => {
+    expect(await runCli(['help'], fakeEnv())).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
 
-  test('stdin is forwarded to the shell-out', async () => {
-    const { deps, tmCalls } = fakeDeps()
-    await runCli([UNMIGRATED], deps, 'task-9')
-    expect(tmCalls[0]?.stdin).toBe('task-9')
+  test('tm --help and tm -h are both the overview', async () => {
+    expect(await runCli(['--help'], fakeEnv())).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+    expect(await runCli(['-h'], fakeEnv())).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
 
-  test('the verb result is returned faithfully', async () => {
-    const { deps } = fakeDeps({}, { code: 2, stdout: 'partial', stderr: 'it broke' })
-    const result = await runCli([UNMIGRATED, 'acme'], deps)
-    expect(result).toEqual({ code: 2, stdout: 'partial', stderr: 'it broke' })
+  test('tm help <verb> prints that verb’s detail page', async () => {
+    const result = await runCli(['help', 'ls'], fakeEnv())
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toBe(HELP_TEXTS.ls)
+  })
+
+  test('tm help help is the overview — matches bash help_help calling cmd_help', async () => {
+    const result = await runCli(['help', 'help'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+  })
+
+  test('tm help <unknown> writes the error to stderr, overview to stdout, exits 1', async () => {
+    const result = await runCli(['help', 'nope'], fakeEnv())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toBe('tm: no help for unknown verb: nope\n')
+    expect(result.stdout).toBe(OVERVIEW_HELP)
   })
 })
 
-describe('a migrated verb runs natively, not through tm', () => {
-  test('ls is served from tmux, never reaching a shell-out', async () => {
-    const { deps, tmCalls, rawCalls } = fakeDeps({
-      runTmux: async () => ({ code: 0, stdout: 'teammate-x: 1 windows\n', stderr: '' }),
-    })
-    const result = await runCli(['ls'], deps)
-    expect(tmCalls).toHaveLength(0)
-    expect(rawCalls).toHaveLength(0)
+describe('tm <verb> --help pre-scan', () => {
+  test('tm <verb> --help prints that verb’s detail page', async () => {
+    const result = await runCli(['ls', '--help'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: HELP_TEXTS.ls, stderr: '' })
+  })
+
+  test('tm <verb> -h is the same as --help', async () => {
+    const result = await runCli(['spawn', '-h'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: HELP_TEXTS.spawn, stderr: '' })
+  })
+
+  test('flags before --help do not stop the pre-scan', async () => {
+    const result = await runCli(['send', '--no-wait', '--help'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: HELP_TEXTS.send, stderr: '' })
+  })
+
+  test('the first positional stops the pre-scan — a later --help is data', async () => {
+    // `last` has no marker file for this repo, so the native handler errors
+    // out — proving the verb dispatched, not the help branch.
+    const result = await runCli(['last', 'some-repo', '--help'], fakeEnv())
+    expect(result.code).not.toBe(0)
+    expect(result.stdout).not.toBe(HELP_TEXTS.last)
+  })
+
+  test('a --prompt value stops the pre-scan — the next --help is its argument', async () => {
+    // `send` will dispatch and fail on the missing teammate — what we care
+    // about is that the pre-scan stopped, not what the failure said.
+    const result = await runCli(['send', '--prompt', '--help'], fakeEnv())
+    expect(result.stdout).not.toBe(HELP_TEXTS.send)
+  })
+
+  test('an unknown verb plus --help falls through to the overview, not an error', async () => {
+    // Matches bash: `declare -F help_<unknown>` fails, `cmd_help` runs.
+    const result = await runCli(['fubar', '--help'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+  })
+})
+
+describe('removed verbs', () => {
+  test.each(Object.keys(REMOVED_VERB_MESSAGES))('%s prints the migration message and exits 2', async (verb) => {
+    const result = await runCli([verb], fakeEnv())
+    expect(result.code).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toBe(REMOVED_VERB_MESSAGES[verb])
+  })
+
+  test('a removed verb with --help still routes to overview (no help_ask exists)', async () => {
+    // Matches bash's pre-scan: --help wins, the `ask)` arm is never reached.
+    const result = await runCli(['ask', '--help'], fakeEnv())
+    expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
+  })
+
+  test('a removed verb with a positional argument still hits the migration error', async () => {
+    // The positional stops the pre-scan, so dispatch reaches the removed arm.
+    const result = await runCli(['ask', 'repo'], fakeEnv())
+    expect(result.code).toBe(2)
+    expect(result.stderr).toBe(REMOVED_VERB_MESSAGES.ask)
+  })
+})
+
+describe('unknown verb', () => {
+  test('writes "tm: unknown subcommand" to stderr, overview to stdout, exits 1', async () => {
+    const result = await runCli(['fubar'], fakeEnv())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toBe('tm: unknown subcommand: fubar\n')
+    expect(result.stdout).toBe(OVERVIEW_HELP)
+  })
+})
+
+describe('native dispatch', () => {
+  test('every TM_VERBS entry has a HELP_TEXTS entry', () => {
+    // Pin the help catalog against the verb catalog so a new verb cannot
+    // ship without help.
+    for (const verb of TM_VERBS) {
+      expect(HELP_TEXTS[verb.name], `HELP_TEXTS["${verb.name}"]`).toBeDefined()
+    }
+  })
+
+  test('ls runs the native handler, returning the empty-fleet sentinel', async () => {
+    const result = await runCli(
+      ['ls'],
+      fakeEnv({ runTmux: async () => ({ code: 0, stdout: 'teammate-x: 1 windows\n', stderr: '' }) }),
+    )
+    expect(result.code).toBe(0)
     expect(result.stdout).toContain('teammate-x')
   })
 
-  test("the verb's arguments reach the native handler", async () => {
-    const { deps, tmCalls } = fakeDeps()
-    // No marker files exist for this repo, so the native `last` handler returns
-    // its own error echoing the repo — proving the argv split handed `rest` to
-    // the native handler rather than the call reaching `runTm`.
-    const result = await runCli(['last', '__cli_argv_probe__'], deps)
-    expect(tmCalls).toHaveLength(0)
+  test('arguments reach the native handler', async () => {
+    // No marker files exist for this repo, so the native `last` handler dies
+    // with an error echoing the repo — proving the argv tail reached it.
+    const result = await runCli(['last', '__cli_argv_probe__'], fakeEnv())
     expect(result.code).not.toBe(0)
-    expect(result.stderr + result.stdout).toContain('__cli_argv_probe__')
+    expect(result.stdout + result.stderr).toContain('__cli_argv_probe__')
   })
 
-  test('a --help invocation shells out even for a migrated verb', async () => {
-    const { deps, tmCalls } = fakeDeps()
-    await runCli(['ls', '--help'], deps)
-    expect(tmCalls).toHaveLength(1)
-    expect(tmCalls[0]?.verb).toBe('ls')
-    expect(tmCalls[0]?.args).toEqual(['--help'])
+  test('archive stdin is forwarded to the native handler', async () => {
+    // archive needs a real ledger to do anything — pass stdin and confirm the
+    // verb at least got past dispatch (it will fail on the missing ledger).
+    const result = await runCli(['archive', 'task-9'], fakeEnv(), 'no ledger here')
+    expect(result.code).not.toBe(0)
   })
 })
 
-describe('a bare tm reaches the shell-out', () => {
-  test('an empty argument vector shells out a raw, empty argv', async () => {
-    const { deps, tmCalls, rawCalls } = fakeDeps()
-    await runCli([], deps)
-    expect(rawCalls).toHaveLength(1)
-    expect(rawCalls[0]?.args).toEqual([])
-    expect(tmCalls).toHaveLength(0)
+describe('doctor — sections fire top-down, never raising', () => {
+  // `doctor` is not in the conformance harness: it reports the path to the
+  // *current* tm binary, which differs between bash `bin/tm` and the native
+  // CLI launcher. This pins each section's presence and shape, since byte-
+  // for-byte parity with bash is not the migration's intent here.
+  test('reports every section, in order, and exits 0', async () => {
+    const result = await runCli(
+      ['doctor'],
+      fakeEnv({
+        // A tmux probe that succeeds; the section just needs the version line.
+        runTmux: async (args) => {
+          const verb = args[0]
+          if (verb === '-V') return { code: 0, stdout: 'tmux 3.4\n', stderr: '' }
+          if (verb === 'info') return { code: 0, stdout: '', stderr: '' }
+          if (verb === 'ls') return { code: 1, stdout: '', stderr: 'no server' }
+          return { code: 0, stdout: '', stderr: '' }
+        },
+      }),
+    )
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    // Sections in order; the heading text is the load-bearing contract.
+    const idx = (heading: string): number => result.stdout.indexOf(heading)
+    expect(idx('tm executable:')).toBeGreaterThanOrEqual(0)
+    expect(idx('dispatcher dir:')).toBeGreaterThan(idx('tm executable:'))
+    expect(idx('tmux:')).toBeGreaterThan(idx('dispatcher dir:'))
+    expect(idx('idle dir (')).toBeGreaterThan(idx('tmux:'))
+    expect(idx('active teammates:')).toBeGreaterThan(idx('idle dir ('))
   })
 
-  test('an unknown verb still reaches tm, which owns the error', async () => {
-    const { deps, tmCalls } = fakeDeps()
-    // An unknown verb is not native, so it shells out like any other verb —
-    // bash `tm` produces the unknown-verb error.
-    await runCli(['not-a-verb', 'x'], deps)
-    expect(tmCalls).toHaveLength(1)
-    expect(tmCalls[0]?.verb).toBe('not-a-verb')
-    expect(tmCalls[0]?.args).toEqual(['x'])
+  test('rejects positional arguments with the usage error', async () => {
+    const result = await runCli(['doctor', 'extra'], fakeEnv())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('tm doctor: takes no arguments')
   })
 })

@@ -29,6 +29,7 @@ future agent reads these to avoid re-litigating a settled question.
 | [0018](/.agents/decisions/0018-mcp-native-orchestration-core.md) | The `next` line replaces `tm` with an MCP-native orchestration core hosting multiple agent families | Superseded by [0019](/.agents/decisions/0019-node-cli-orchestrator.md) |
 | [0019](/.agents/decisions/0019-node-cli-orchestrator.md) | The 1.0 line retires the MCP-native core for a pure Node `tm` CLI | Accepted |
 | [0020](/.agents/decisions/0020-live-teammate-integration-harness.md) | Live-teammate integration tests seed directory trust by a targeted `~/.claude.json` write | Accepted |
+| [0021](/.agents/decisions/0021-node-cli-committed-bundle.md) | `tm` ships as a committed esbuild bundle + thin Node launcher | Accepted |
 
 ## When to add a record
 

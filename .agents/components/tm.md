@@ -1,31 +1,40 @@
 # Component: the `tm` CLI
 
-`tm` is the orchestrator CLI — a single ~2150-line Bash script at
-[`/plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm). The dispatcher runs
-`tm` to spawn, message, wait on, inspect, and kill teammates. Claude Code
-auto-prepends each installed plugin's `bin/` to `PATH`, so `tm` resolves in
-any Bash subshell of a Claude Code session.
+`tm` is the orchestrator CLI — the command the dispatcher runs to spawn,
+message, wait on, inspect, and kill teammates. Claude Code auto-prepends each
+installed plugin's `bin/` to `PATH`, so `tm` resolves in any Bash subshell of
+a Claude Code session.
+
+## Shape on the `next` line
+
+On the `next` line `tm` is a small bash launcher at
+[`/plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) that `exec`s `node`
+against a committed esbuild bundle at
+[`/plugins/claudemux/core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs).
+The bundle is the verb dispatch and verb implementations in TypeScript; the
+launcher does only what `exec` itself cannot — locate the bundle, check `node`
+is on `PATH`, and forward the argument vector.
+
+The TypeScript source lives under
+[`/plugins/claudemux/core/src/`](/plugins/claudemux/core/src); see
+[components/claudemux-core.md](/.agents/components/claudemux-core.md) for the
+module layout. The bundle is committed because a marketplace plugin install
+does not run `npm install`, so the launcher must be able to start with no
+runtime npm dependencies; CI rebuilds the bundle from current source and
+asserts `git diff --exit-code dist/` to keep it honest.
+
+The historical Bash `bin/tm` was retired in stage 3c — see
+[domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) §8.
 
 ## Source of truth for the verb contracts
 
 `tm --help` is the verb index; `tm <verb> --help` is the per-verb flag and
-output contract. **The shipped help is authoritative** — never reconstruct a
-verb's behavior from memory or from this doc. This component doc covers
-*structure and editing rules*, not the verb contracts.
-
-## Script structure
-
-The script is one file, organized top to bottom:
-
-| Section | Purpose |
-|---|---|
-| Header | `set -euo pipefail`, `PREFIX="teammate-"`, `IDLE_DIR`, dispatcher-dir resolution |
-| OS-detection helpers | `stat_size`, `stat_mtime`, `stat_mtime_human` — BSD/GNU split, detected once into `_STAT_FLAVOR` |
-| Path builders | `sid_file`, `cwd_file`, `ready_file`, `send_at_file`, `idle_marker_for`, `busy_marker_for`, `last_file_for`, `encode_project_dir`, `project_dir_for_repo`, `memory_dir` |
-| Internal helpers | `die`, `session_name`, `resolve_pane_target`, `resolve_sid`, `sanitize_task_slug`, `pane_busy`, `iter_repos`, `clear_idle`, `fmt_age`, `fmt_size`, … |
-| Shared atomic helpers | `_send_keys`, `_wait_idle_signal`, `_wait_pane_quiet`, `_print_last_or_empty`, `_echo_ctx_to_stderr` |
-| `cmd_*` functions | one per verb, each paired with a `help_*` function |
-| `main` | help pre-scan, then a `case` over the subcommand |
+output contract. The help text lives in
+[`core/src/help.ts`](/plugins/claudemux/core/src/help.ts) — one
+`HELP_TEXTS[verb]` entry per verb plus `OVERVIEW_HELP`. Reviewers see help
+changes as `help.ts` diffs in the same commit that changes the verb's
+behavior. The shipped help is authoritative; never reconstruct a verb's
+behavior from memory or this doc.
 
 ## Verb families
 
@@ -42,41 +51,47 @@ The script is one file, organized top to bottom:
 ## Editing rules — the invariants you must hold
 
 These mirror the repo-root `CLAUDE.md` "Cross-Process & Cross-Platform
-Invariants"; they bite hardest inside `tm`. Each has its own decision
-record — see [decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md).
+Invariants"; they bite hardest in the verbs that drive the `/tmp` file
+protocol. Each has its own decision record — see
+[decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md).
 
 - **Never concatenate a protocol path by hand.** Every `/tmp/teammate-*`,
   `/tmp/claude-idle/*`, or `~/.claude/projects/<encoded>/...` path is built
-  by a named builder function. Add a builder rather than inlining a string.
-- **Never call a flag that differs between BSD and GNU directly.** `stat`,
-  `sed -i`, `date -d`, `tail -r`/`tac`, `find -printf`, `readlink -f` go
-  through an OS-detected helper. CI runs on Ubuntu and macOS; a BSD-only
-  call paired with `|| echo 0` degrades silently on Linux instead of failing
-  loudly.
-- **Map a teammate cwd → Claude project-dir only via `encode_project_dir`**
-  (and its `project_dir_for_repo` wrapper). The encoding — replace every `/`
-  *and* `.` with `-` — is an Anthropic-controlled contract; hand-reproducing
-  it has already dropped dots and broken `tm resume`.
-- **Stay bash-3.2 compatible.** macOS ships bash 3.2. No associative arrays;
-  guard array splats under `set -u` with the `${arr[@]+"${arr[@]}"}` form;
-  no `readlink -f` (use `cd && pwd -P`).
+  by a named builder in
+  [`core/src/paths.ts`](/plugins/claudemux/core/src/paths.ts) (the matching
+  bash hooks mirror the builder inline). Add a builder rather than inlining
+  a string.
+- **Cross-platform binaries.** The remaining bash surface (hooks, the launcher,
+  the fake-tmux test fixture) still must guard BSD/GNU differences through
+  helpers or be macOS-pinned. The native verbs pipe through the real `column`
+  and `grep` rather than reimplementing them — those binaries' platform
+  behavior is the contract the migration preserves.
+- **One source of truth for the project-dir encoding** —
+  `encodeProjectDir` in `paths.ts` folds every non-`[A-Za-z0-9-]` character
+  to `-`, matching Claude Code's real rule. The hooks reproduce the same
+  rule inline (a `tr` invocation); never extend either site without
+  updating the other.
 
 ## Foot-guns
 
-- `tm` resolves the dispatcher directory once at startup:
-  `$TM_DISPATCHER_DIR` if set, else `$PWD`. `/claudemux:setup` writes
+- `tm` resolves the dispatcher directory once per invocation: `TM_DISPATCHER_DIR`
+  if set, else `$PWD` (Node's `process.env.PWD`, which preserves the logical
+  cwd through a symlink — `process.cwd()` would return the realpath instead
+  and diverge under a symlinked dispatcher tree). `/claudemux:setup` writes
   `TM_DISPATCHER_DIR` into the dispatcher's `.claude/settings.json` so it
   survives Bash-tool cwd drift. `tm doctor` reports the resolved value.
 - Spawned teammates are launched with `tmux new-session -e
   CLAUDEMUX_TEAMMATE_REPO=<repo>`; the SessionStart hook uses that env var
   as an identity gate. A teammate started by raw `tmux` without that `-e`
   will not get sid rotation.
-- The `main` help pre-scan stops at the first non-flag positional or at
-  `--prompt`, so a `--help` substring *inside* a prompt does not trigger
+- The help pre-scan in `cli.ts` stops at the first non-flag positional or
+  at `--prompt`, so a `--help` substring *inside* a prompt does not trigger
   help mode.
 
 ## See also
 
-- [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `/tmp` file protocol `tm` shares with the hooks.
+- [components/claudemux-core.md](/.agents/components/claudemux-core.md) — the TypeScript codebase that implements the verbs.
+- [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) — the Node CLI architecture and migration history.
+- [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `/tmp` file protocol the verbs share with the hooks.
 - [components/hooks.md](/.agents/components/hooks.md) — the other half of that protocol.
 - [components/dispatcher-skill.md](/.agents/components/dispatcher-skill.md) — how the dispatcher decides which `tm` verb to call.

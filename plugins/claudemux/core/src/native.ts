@@ -51,7 +51,7 @@ import {
   sendAtFile,
   sidFile,
 } from './paths'
-import type { TmResult, TmRunOptions, TmRunner } from './tm'
+import type { TmResult, TmRunOptions } from './tm'
 import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
@@ -67,8 +67,6 @@ export interface NativeEnv {
   runColumn: ColumnRunner
   /** Matches input against a regex via `grep -qE` — for the `poll` verb. */
   runGrep: GrepRunner
-  /** Shells out to `tm` — for `reload`, which fans out over `tm send`. */
-  runTm: TmRunner
   /** The dispatcher directory — the parent of the sibling teammate repos. */
   dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
@@ -92,26 +90,6 @@ export type NativeVerb = (
  */
 function die(message: string): TmResult {
   return { code: 1, stdout: '', stderr: `tm: ${message}\n` }
-}
-
-/**
- * Whether `tm`'s `main` help pre-scan would intercept these verb arguments
- * and print per-verb help instead of dispatching to the verb. `main` scans
- * left to right: a `-h`/`--help` triggers help; a `--prompt` value or the
- * first non-flag positional stops the scan (help text must not swallow
- * prompt data that happens to contain `--help`).
- *
- * `core.ts` consults this so a `--help` invocation behaves as it did under
- * the Phase A shell-out — `tm` prints the help text — rather than reaching a
- * native handler, which has no help text of its own.
- */
-export function triggersTmHelp(args: readonly string[]): boolean {
-  for (const arg of args) {
-    if (arg === '-h' || arg === '--help') return true
-    if (arg === '--prompt' || arg.startsWith('--prompt=')) return false
-    if (!arg.startsWith('-')) return false
-  }
-  return false
 }
 
 /**

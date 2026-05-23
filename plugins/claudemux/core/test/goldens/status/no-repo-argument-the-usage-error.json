@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: usage: tm status <repo> [lines=80]\n"
+}

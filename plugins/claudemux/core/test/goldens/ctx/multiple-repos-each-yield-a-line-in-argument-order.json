@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "claudemux-conftest-297e7eed5a2a: 9000 tokens · ~9090 next turn · 4% of 200k (assumed 200k)\nclaudemux-conftest-1db34ce23596: 9000 tokens · ~9090 next turn · 4% of 200k (assumed 200k)\n",
+  "stderr": ""
+}

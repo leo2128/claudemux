@@ -1,6 +1,0 @@
-tm last <repo>
-
-      Print the teammate's last-turn reply from
-      /tmp/claude-idle/<sid>.last. Empty or missing file dies with
-      "no reply yet". Use this when you want to re-read a reply the
-      send/wait verbs already printed (their output is one-shot).

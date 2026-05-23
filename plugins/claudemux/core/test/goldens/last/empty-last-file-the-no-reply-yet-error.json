@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: no reply yet for claudemux-conftest-78d12347a4e1 (sid=claudemux-conftest-185bbc4fbd1b) — file is missing or empty at /tmp/claude-idle/claudemux-conftest-185bbc4fbd1b.last. Try 'tm wait claudemux-conftest-78d12347a4e1' to block for the next Stop, or 'tm send claudemux-conftest-78d12347a4e1 --prompt \"...\"' to drive a turn.\n"
+}

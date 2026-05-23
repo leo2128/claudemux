@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: id matches 2 entries in active ledger: t-dup\n"
+}

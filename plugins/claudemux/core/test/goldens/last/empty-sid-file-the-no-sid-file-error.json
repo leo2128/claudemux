@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: no sid file for claudemux-conftest-af5907af7bd4 at /tmp/teammate-claudemux-conftest-af5907af7bd4.sid — was this teammate spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)\n"
+}

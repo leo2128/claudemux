@@ -167,37 +167,37 @@ this is the model rather than an MCP push notification.
 
 ## 8. Migration roadmap
 
-The rewrite lands in stages, each its own PR. Behavior is preserved against
-`tm` 0.x by the conformance harness carried forward from 0018's Phase B — each
-migrated verb is pinned to `tm`'s current behavior, bug for bug.
+The rewrite landed in stages, each its own PR. Behavior was preserved against
+`tm` 0.x by the conformance harness — each native verb was pinned to `tm`'s
+current behavior, bug for bug. Stage 3c retired the bash oracle and switched
+the harness to committed golden JSON files (see
+[components/claudemux-core.md](/.agents/components/claudemux-core.md)).
 
-| Stage | Work | Exit gate |
+| Stage | Work | Status |
 |---|---|---|
-| **1 — pivot** *(this change)* | Record [decision 0019](/.agents/decisions/0019-node-cli-orchestrator.md); rewrite this spec. Doc-only. | The decision and the contract are recorded. |
-| **2 — structure cleanup** | Stand up the Node CLI front end; remove the MCP modules — `server.ts`, `socket-transport.ts`, `subscription.ts`, `registry.ts` — and the MCP tool surface in `core.ts` / `verbs.ts`; complete the Bun → Node runtime move. | `tm` runs as a Node CLI; the already-migrated native verbs still pass the conformance harness; no MCP code remains. |
-| **3 — hot-path verbs** | Migrate `spawn`, `send`, `wait`, `compact`, `resume`, `doctor` into native code under stage 3a's live-teammate net (stage 3b); then retire the Bash [`bin/tm`](/plugins/claudemux/bin/tm) (stage 3c). | 3b: every verb runs natively and passes conformance and the live-teammate suite. 3c: the Bash `bin/tm` is deleted and the conformance harness's bash oracle is replaced. |
-| **4 — Codex driver** | Add the Codex driver — the self-spawned `app-server`, the WebSocket JSON-RPC client, the daemon process registry, and both interaction modes (§6). | Codex teammates and ask mode work; the protocol schema is pinned and tested. |
+| **1 — pivot** | Record [decision 0019](/.agents/decisions/0019-node-cli-orchestrator.md); rewrite this spec. | landed |
+| **2 — structure cleanup** | Stand up the Node CLI front end; remove the MCP modules and tool surface; complete the Bun → Node runtime move. | landed |
+| **3 — hot-path verbs + bash retirement** | Migrate `spawn`/`send`/`wait`/`compact`/`resume`/`doctor` into native code under the live-teammate net (3a, 3b), then retire the Bash [`bin/tm`](/plugins/claudemux/bin/tm) (3c). | landed |
+| **4 — Codex driver** | Add the Codex driver — the self-spawned `app-server`, the WebSocket JSON-RPC client, the daemon process registry, and both interaction modes (§6). | next |
 
-Stage 3 lands in three sub-stages, each its own PR:
+Stage 3 landed in three sub-stages:
 
-- **3a (landed):** the live-teammate integration harness — see
+- **3a:** the live-teammate integration harness — see
   [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md).
   The harness drives a real teammate through `tm` so the verb migration in
-  3b proceeds under a working regression net rather than ahead of one.
-- **3b (this work):** the six hot-path verbs become native TypeScript and the
-  Node CLI gains a Bash launcher at
-  [`core/bin/tm`](/plugins/claudemux/core/bin/tm) so the live suite can be
-  re-aimed at native via `CLAUDEMUX_TM`. The Bash `bin/tm` is unchanged — it
-  remains the PATH entry, the `--help` oracle, and the conformance
-  differential check's authority.
-- **3c (next):** the Bash `bin/tm` is retired. The Node CLI launcher takes
-  over the PATH entry; the conformance harness's bash oracle is replaced
-  with a fixed-string baseline or removed.
+  3b proceeded under a working regression net rather than ahead of one.
+- **3b:** the six hot-path verbs became native TypeScript and the Node CLI
+  gained a dev launcher at
+  [`core/bin/tm`](/plugins/claudemux/core/bin/tm) so the live suite could be
+  re-aimed at native via `CLAUDEMUX_TM`. The Bash `bin/tm` was unchanged.
+- **3c:** the Bash `bin/tm` was retired. The PATH entry is now a small bash
+  launcher that `exec`s `node` against the committed esbuild bundle at
+  [`core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs); the
+  conformance harness's bash oracle is replaced by per-scenario golden
+  JSON files under [`core/test/goldens/`](/plugins/claudemux/core/test/goldens),
+  regenerated with `UPDATE_GOLDENS=1`.
 
-11 of the 17 `tm` verbs were migrated to native TypeScript before the pivot
-(under 0018's Phase B); stage 2 kept that code and removed only the MCP shell
-around it. Stage 3b adds the remaining six. After stage 4 lands, this roadmap
-section is pruned in the same change.
+After stage 4 lands, this roadmap section is pruned in the same change.
 
 ---
 

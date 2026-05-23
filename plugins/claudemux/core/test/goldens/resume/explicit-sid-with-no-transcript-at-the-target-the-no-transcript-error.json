@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: no transcript at <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-d603bb6cd805/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl — wrong repo for this sid, or sid does not exist. Check 'ls <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-d603bb6cd805/'.\n"
+}

@@ -13,15 +13,15 @@ set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 TSX="$HERE/../node_modules/.bin/tsx"
-CLI="$HERE/../src/cli.ts"
+ENTRY="$HERE/../src/main.ts"
 
 if [[ ! -x "$TSX" ]]; then
     echo "tm (node-cli wrapper): tsx not found at $TSX — run 'npm install' inside plugins/claudemux/core/" >&2
     exit 1
 fi
-if [[ ! -f "$CLI" ]]; then
-    echo "tm (node-cli wrapper): CLI entry not found at $CLI" >&2
+if [[ ! -f "$ENTRY" ]]; then
+    echo "tm (node-cli wrapper): entry not found at $ENTRY" >&2
     exit 1
 fi
 
-exec "$TSX" "$CLI" "$@"
+exec "$TSX" "$ENTRY" "$@"

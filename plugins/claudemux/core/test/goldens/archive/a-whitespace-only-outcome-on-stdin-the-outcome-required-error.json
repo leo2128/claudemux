@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: outcome text required on stdin, e.g.:  echo '...' | tm archive t-alpha\n"
+}

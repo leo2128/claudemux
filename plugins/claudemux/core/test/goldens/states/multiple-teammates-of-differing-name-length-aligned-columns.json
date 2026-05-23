@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "REPO                                                            SID       BUSY  LAST    PREVIEW\nclaudemux-conftest-b3f82c39c7e4                                 claudemu  no    42B/2h  reply for claudemux-conftest-b3f82c39c7e4\nclaudemux-conftest-526abb5b6bae-and-a-considerably-longer-name  claudemu  no    73B/2h  reply for claudemux-conftest-526abb5b6bae-and-a-co\n",
+  "stderr": ""
+}

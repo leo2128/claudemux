@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm resume: too many positional args (got 'extra' after repo='claudemux-conftest-e6f739e60f11' sid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')\n"
+}

@@ -1,7 +1,0 @@
-tm reload <repo>... | --all
-
-      Fan out /reload-plugins to one, many, or every teammate.
-      Sugar over 'tm send <repo> --prompt /reload-plugins'. --all enumerates
-      from `tmux ls`; missing/dead teammates are skipped with a
-      stderr note and the exit status reflects whether every send
-      succeeded.

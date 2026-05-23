@@ -1,49 +1,48 @@
 /**
- * The Phase B conformance harness.
+ * The conformance harness — golden-file pin for every migrated verb.
  *
- * Phase B migrates `tm` verbs into native core code (`src/native.ts`). The
- * migration is required to be *behavior-preserving*: a migrated verb must
- * produce exactly what `tm <verb>` produced
- * (`.agents/domains/mcp-native-orchestrator.md` §12). This is the differential
- * test that pins that — for each migrated verb and a set of fixture
- * scenarios, it runs the real `bin/tm` and the native handler against the
- * *same* fixture and asserts their `TmResult` values are equal: the exit
- * code, and stdout/stderr as strings decoded from UTF-8 (the `last` suite has
- * a CJK scenario that pins multibyte content surviving both paths intact).
+ * Bash `bin/tm` is retired on the `next` line, so this no longer runs the
+ * real `bin/tm` as a live oracle. Instead each scenario runs the native
+ * handler once and compares its `TmResult` to a committed golden JSON file
+ * at `test/goldens/<verb>/<slug>.json`. A mutating verb (`kill`, `archive`,
+ * `reload`) additionally pins its post-state — what changed on the
+ * filesystem — to a sibling `<slug>.fs.json`.
  *
- * The oracle is the live `tm`, not a golden file: the spec's contract is
- * "`tm`'s current behavior", so the harness re-derives it on every run.
- *
- * Determinism without the real backends:
+ * Determinism:
  *  - tmux — a fake `tmux` (`fixtures/fake-tmux-bin/tmux`) returns a
- *    test-controlled session list. `tm` reaches it through `PATH`; the native
- *    side through `CLAUDEMUX_TMUX`. Both reach the *same* script, so the two
- *    sides of the diff see identical tmux output. The `claudemux-core` CI job
- *    installs no tmux, so a fake is mandatory, not just convenient.
- *  - the `/tmp` marker files — written under their real `/tmp` paths (`tm`
- *    hardcodes them and cannot be redirected) but with UUID-unique repo/sid
- *    names, so a run cannot collide with a real teammate. Cleaned up per test.
- *  - the dispatcher dir and `~/.claude/projects` — sandboxed under a scratch
- *    dir. `tm` is pointed at them with `TM_DISPATCHER_DIR` / `HOME` in its
- *    spawn env; the native side with the injected `dispatcherDir` /
- *    `projectsDir`. (`tm ctx` needs `jq` and `tm states` needs `column`;
- *    the native `states` pipes through `column` too. CI installs both.)
+ *    test-controlled session list. The native runner reaches it through
+ *    `CLAUDEMUX_TMUX`, so the harness needs no real tmux.
+ *  - Random IDs — each scenario receives its own deterministic name
+ *    generator seeded from `${verb}/${name}`, so `uniqueName()` returns the
+ *    same hex string on every run and goldens are byte-stable.
+ *  - The sandbox dispatcher dir is a **fixed** path under `/tmp`. A random
+ *    `mkdtemp` path would change every run, baking the run-specific dir into
+ *    the goldens through the project-dir encoding (`/tmp/<rand>/...` →
+ *    `-tmp-<rand>-...`); a stable path keeps the encoded paths stable, so
+ *    they read as ordinary strings in the goldens.
+ *  - Sanitization — only one variable (`sandboxHome`, which carries the
+ *    user's literal `HOME` only when realpath collapses through it) is
+ *    substituted with `<HOME>` before compare and write.
  *
- * Scope: this pins a *verb handler*'s logic against the matching `cmd_<verb>`
- * in `tm`. The dispatch around it — `tm`'s `main` help pre-scan, the core's
- * native-vs-shell-out routing — is `core.ts`'s job and is covered by
- * `core.test.ts`, so the scenarios here never pass `--help`.
+ * Updating goldens:
  *
- * Adding the next migrated verb is: append a `{ verb, scenarios }` entry to
- * `CONFORMANCE` below.
+ *   UPDATE_GOLDENS=1 npx vitest run test/conformance.test.ts
+ *
+ * regenerates every golden from the current native output, leaving a `git
+ * diff` for the reviewer to read. Tests that lack a golden write a new one
+ * and fail on the first run, so the *initial* PR adds the goldens in lockstep
+ * with the scenarios.
+ *
+ * Adding a verb or scenario: append a `{ verb, scenarios }` entry to
+ * `CONFORMANCE` below, then run with `UPDATE_GOLDENS=1` once to commit the
+ * golden.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { randomUUID } from 'node:crypto'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -57,7 +56,6 @@ import { fileURLToPath } from 'node:url'
 import { runColumn } from '../src/column'
 import { runGrep } from '../src/grep'
 import { NATIVE_VERBS } from '../src/native'
-import { spawnCapture } from '../src/proc'
 import {
   busyMarkerFor,
   cwdFile,
@@ -69,44 +67,50 @@ import {
   sendAtFile,
   sidFile,
 } from '../src/paths'
-import type { TmResult, TmRunner } from '../src/tm'
+import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
 /** This test file's directory — `core/test`. */
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url))
-/** The real `tm` — `core/test` → `core` → `claudemux` → `bin/tm`. */
-const TM_BIN = join(HARNESS_DIR, '..', '..', 'bin', 'tm')
-/** The fake `tmux` dir — prepended to `PATH` it shadows any real tmux. */
+/** The fake `tmux` dir — the native runner reaches it through `CLAUDEMUX_TMUX`. */
 const FAKE_TMUX_DIR = join(HARNESS_DIR, 'fixtures', 'fake-tmux-bin')
 const FAKE_TMUX = join(FAKE_TMUX_DIR, 'tmux')
+/** Where committed golden JSON files live, one per scenario. */
+const GOLDENS_DIR = join(HARNESS_DIR, 'goldens')
+/** When `1`, the harness writes the observed result/effect as the new golden. */
+const UPDATE_GOLDENS = process.env.UPDATE_GOLDENS === '1'
 
 /**
- * The timezone the harness pins for the `tm` subprocess. `tm history`'s
- * detail view renders a timestamp with `date -r`, which uses the process
- * timezone; the native verb renders the same timestamp through the JS
- * runtime's zone. Pinning the `tm` oracle to the runtime's resolved zone
- * keeps the two date renderings in agreement on any machine.
+ * A fixed scratch root. A random `mkdtemp` path would bake itself into
+ * every goldened project-dir encoding (`encodeProjectDir` folds `/` to `-`
+ * character-by-character, so the run-specific hash survives into the
+ * encoded directory name). Wiped and recreated in `beforeAll`.
  */
-const HARNESS_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
+const scratchDir = '/tmp/claudemux-conf-test'
+const sessionsFile = join(scratchDir, 'tmux-sessions')
+const captureFile = join(scratchDir, 'tmux-capture')
+const dispatcherDir = join(scratchDir, 'dispatcher')
+const sandboxHome = join(scratchDir, 'home')
+const projectsDir = join(sandboxHome, '.claude', 'projects')
 
-/** Where the fake `tmux` reads its session list — one file, rewritten per test. */
-let sessionsFile = ''
-/** Where the fake `tmux capture-pane` reads its pane buffer — rewritten per test. */
-let captureFile = ''
-/** A scratch dir for the harness's own files. */
-let scratchDir = ''
-/** The sandbox dispatcher dir — `tm`'s `TM_DISPATCHER_DIR`, the core's `dispatcherDir`. */
-let dispatcherDir = ''
-/** The sandbox `~/.claude/projects` — under the sandbox `HOME`. */
-let projectsDir = ''
-/** The sandbox `HOME` — what `tm` resolves `~/.claude/projects` against. */
-let sandboxHome = ''
 /** `/tmp` marker files a scenario wrote — removed after that scenario. */
 const tmpFiles: string[] = []
 /** Env values saved on entry, restored after the file so nothing leaks. */
 let savedTmux: string | undefined
 let savedSessions: string | undefined
 let savedCapture: string | undefined
+
+/**
+ * The wall-clock the harness pins. `tm history`'s detail page renders an
+ * absolute `last_seen` line (and `tm archive` stamps today's date into the
+ * archive ledger). Both reach `Date.now()` / `new Date()` directly; without
+ * a pinned clock the goldens would shift every run. Vitest's
+ * `useFakeTimers({ toFake: ['Date'] })` freezes `Date` without freezing
+ * `setTimeout` / `setInterval`, so the hot-path verbs' poll loops still
+ * advance through real time (their conformance scenarios never enter those
+ * loops, but pinning that fact in the harness is the right discipline).
+ */
+const FIXED_NOW = new Date('2026-05-23T12:00:00Z')
 
 beforeAll(() => {
   // Save the env first, before anything that can throw, so `afterAll` can
@@ -115,38 +119,33 @@ beforeAll(() => {
   savedSessions = process.env.FAKE_TMUX_SESSIONS
   savedCapture = process.env.FAKE_TMUX_CAPTURE
 
-  // /tmp, not os.tmpdir(): on macOS the per-user temp dir (`/var/folders/.../T`)
-  // carries `_` in its hash, and Claude Code's project-dir encoding folds `_`
-  // to `-` (any char outside `[A-Za-z0-9-]` does, see `encodeProjectDir`). A
-  // scratch dir under `/tmp` is alphanumeric-clean, so every encoded fixture
-  // path lands at exactly one directory on either OS.
-  scratchDir = mkdtempSync(join('/tmp', 'claudemux-conf-'))
-  sessionsFile = join(scratchDir, 'tmux-sessions')
-  writeFileSync(sessionsFile, '')
-  captureFile = join(scratchDir, 'tmux-capture')
-  writeFileSync(captureFile, '')
-  dispatcherDir = join(scratchDir, 'dispatcher')
-  sandboxHome = join(scratchDir, 'home')
-  projectsDir = join(sandboxHome, '.claude', 'projects')
+  // Pin Date for the whole file — see FIXED_NOW above.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(FIXED_NOW)
+
+  // Fixed scratch — wipe and recreate so every run starts clean.
+  rmSync(scratchDir, { recursive: true, force: true })
   mkdirSync(projectsDir, { recursive: true })
   mkdirSync(dispatcherDir, { recursive: true })
   mkdirSync(idleDir(), { recursive: true })
+  writeFileSync(sessionsFile, '')
+  writeFileSync(captureFile, '')
 
-  // Point the native `runTmux` at the same fake `tmux` the `tm` subprocess
-  // reaches through `PATH`, reading the same session list and pane buffer.
+  // Point native `runTmux` at the fake `tmux`.
   process.env.CLAUDEMUX_TMUX = FAKE_TMUX
   process.env.FAKE_TMUX_SESSIONS = sessionsFile
   process.env.FAKE_TMUX_CAPTURE = captureFile
 })
 
 afterAll(() => {
+  vi.useRealTimers()
   if (savedTmux === undefined) delete process.env.CLAUDEMUX_TMUX
   else process.env.CLAUDEMUX_TMUX = savedTmux
   if (savedSessions === undefined) delete process.env.FAKE_TMUX_SESSIONS
   else process.env.FAKE_TMUX_SESSIONS = savedSessions
   if (savedCapture === undefined) delete process.env.FAKE_TMUX_CAPTURE
   else process.env.FAKE_TMUX_CAPTURE = savedCapture
-  if (scratchDir && existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })
+  if (existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })
 })
 
 afterEach(() => {
@@ -155,30 +154,7 @@ afterEach(() => {
   }
 })
 
-/** Run the real `tm` against the fixture; capture its faithful `TmResult`. */
-function realTm(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
-  return spawnCapture([TM_BIN, verb, ...args], {
-    stdin,
-    cwd: HARNESS_DIR,
-    env: {
-      ...process.env,
-      PATH: `${FAKE_TMUX_DIR}:${process.env.PATH ?? ''}`,
-      HOME: sandboxHome,
-      TM_DISPATCHER_DIR: dispatcherDir,
-      TZ: HARNESS_TZ,
-    },
-  })
-}
-
-/**
- * A `TmRunner` that spawns the real `tm` with the harness sandbox env — the
- * native `reload` verb fans out over it. It wraps `realTm` so a `tm send`
- * subprocess sees the same fake tmux, sandbox `HOME`, and dispatcher dir the
- * oracle does; otherwise native `reload`'s sends would escape the sandbox.
- */
-const harnessRunTm: TmRunner = (verb, args, options) => realTm(verb, args, options?.stdin)
-
-/** Run the native handler for the same verb against the same fixture. */
+/** Run the native handler for the given args; the only runner the harness drives. */
 function runNative(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
   const handler = NATIVE_VERBS[verb]
   if (!handler) throw new Error(`no native handler for ${verb}`)
@@ -186,10 +162,80 @@ function runNative(verb: string, args: readonly string[], stdin?: string): Promi
     runTmux,
     runColumn,
     runGrep,
-    runTm: harnessRunTm,
     dispatcherDir,
     projectsDir,
   })
+}
+
+/**
+ * Per-scenario deterministic name source. `uniqueName()` consults this so
+ * every scenario produces byte-stable names across runs — goldens never
+ * shift just because a UUID rotated. The seed is `${verb}/${scenario name}`.
+ */
+let currentRng: () => string = () => {
+  throw new Error('uniqueName() called outside a scenario — scenario.setup() must run inside the harness loop')
+}
+
+function scenarioRng(seed: string): () => string {
+  let counter = 0
+  // Full 64-hex digest so a consumer can slice the bytes it needs.
+  return () => createHash('sha256').update(`${seed}:${counter++}`).digest('hex')
+}
+
+/** Slugify a scenario name to a filesystem-safe golden filename. */
+function slug(name: string): string {
+  const clean = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return clean.length > 0 ? clean.slice(0, 80) : 'scenario'
+}
+
+/** The golden path for a verb's scenario result. */
+function goldenPath(verb: string, scenarioName: string): string {
+  return join(GOLDENS_DIR, verb, `${slug(scenarioName)}.json`)
+}
+
+/** The golden path for a mutating-verb scenario's post-state filesystem snapshot. */
+function fsGoldenPath(verb: string, scenarioName: string): string {
+  return join(GOLDENS_DIR, verb, `${slug(scenarioName)}.fs.json`)
+}
+
+function loadGolden<T>(path: string): T | undefined {
+  if (!existsSync(path)) return undefined
+  return JSON.parse(readFileSync(path, 'utf8')) as T
+}
+
+function saveGolden(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+/**
+ * Sanitize a string by replacing run-specific paths with stable placeholders.
+ * `scratchDir` is already fixed, but `sandboxHome` resolves to it; substitute
+ * it last so the placeholder is consistent across encoded and raw forms.
+ */
+function sanitize(value: string): string {
+  return value
+    .replaceAll(sandboxHome, '<HOME>')
+    .replaceAll(scratchDir, '<SCRATCH>')
+}
+
+function sanitizeResult(result: TmResult): TmResult {
+  return {
+    code: result.code,
+    stdout: sanitize(result.stdout),
+    stderr: sanitize(result.stderr),
+  }
+}
+
+function sanitizeSnapshot(snap: FsSnapshot): FsSnapshot {
+  const out: FsSnapshot = {}
+  for (const [path, content] of Object.entries(snap)) {
+    out[sanitize(path)] = content === null ? null : sanitize(content)
+  }
+  return out
 }
 
 /** Write a `/tmp` marker file and remember it for cleanup. */
@@ -208,9 +254,23 @@ function setCapture(text: string): void {
   writeFileSync(captureFile, text)
 }
 
-/** A test repo/sid name that cannot collide with a real teammate. */
+/**
+ * A test repo/sid name that cannot collide with a real teammate. Each call
+ * within a scenario returns a fresh name; the sequence is deterministic per
+ * scenario, so goldens stay byte-stable across runs.
+ */
 function uniqueName(): string {
-  return `claudemux-conftest-${randomUUID().slice(0, 12)}`
+  return `claudemux-conftest-${currentRng().slice(0, 12)}`
+}
+
+/**
+ * A deterministic UUID-formatted hex string (8-4-4-4-12). Each call within
+ * a scenario returns a fresh value. For sids that must pass UUID-shape
+ * validation in `tm resume` / `tm history` detail.
+ */
+function uniqueUuid(): string {
+  const hex = currentRng()
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
 /** The cwd a teammate with no recorded `.cwd` file resolves to. */
@@ -1060,7 +1120,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         setup: () => {
           const repo = uniqueName()
           makeRepoDir(repo)
-          const shared = randomUUID().slice(0, 8)
+          const shared = uniqueUuid().slice(0, 8)
           writeHistoryTranscript(repo, `${shared}-1111`, [userLine('first')])
           writeHistoryTranscript(repo, `${shared}-2222`, [userLine('second')])
           return { args: [repo, shared] }
@@ -1071,7 +1131,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         darwinOnly: true,
         setup: () => {
           const repo = uniqueName()
-          const sid = randomUUID()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
           writeHistoryTranscript(repo, sid, [
             JSON.stringify({
@@ -1090,7 +1150,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         darwinOnly: true,
         setup: () => {
           const repo = uniqueName()
-          const sid = randomUUID()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
           writeHistoryTranscript(repo, sid, [
             userLine('a long-running session', '2026-05-12T09:15:00.000Z'),
@@ -1105,7 +1165,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         darwinOnly: true,
         setup: () => {
           const repo = uniqueName()
-          const sid = randomUUID()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
           writeHistoryTranscript(repo, sid, [
             userLine('a question', '2026-05-12T09:15:00.000Z'),
@@ -1119,7 +1179,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         darwinOnly: true,
         setup: () => {
           const repo = uniqueName()
-          const sid = randomUUID()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
           // `{not json` syntax-errors `jq -s`, failing the whole pass — `tm`
           // falls back to six empty fields, and native's `JSON.parse` throws.
@@ -1136,7 +1196,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         darwinOnly: true,
         setup: () => {
           const repo = uniqueName()
-          const sid = randomUUID()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
           writeHistoryTranscript(repo, sid, [
             userLine('produce a long answer', '2026-05-12T09:15:00.000Z'),
@@ -1744,33 +1804,54 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
   },
 ]
 
+/**
+ * One golden-file pin. `assertOrUpdate` is the heart of the harness:
+ *
+ *   - With `UPDATE_GOLDENS=1`, the observed value is written to disk; if a
+ *     prior golden existed it is overwritten and the test passes.
+ *   - Without the env, the golden is loaded from disk and `expect`d to equal
+ *     the observed value. A missing golden writes the file *and* fails the
+ *     test, so the initial PR cannot land its scenarios without committing
+ *     the goldens.
+ */
+function assertOrUpdate<T>(path: string, observed: T): void {
+  if (UPDATE_GOLDENS) {
+    saveGolden(path, observed)
+    return
+  }
+  const golden = loadGolden<T>(path)
+  if (golden === undefined) {
+    saveGolden(path, observed)
+    throw new Error(
+      `missing golden ${path}; wrote initial copy from this run — re-run with UPDATE_GOLDENS=1 to commit, then verify the diff`,
+    )
+  }
+  expect(observed).toEqual(golden)
+}
+
 for (const { verb, scenarios } of CONFORMANCE) {
-  describe(`${verb} — native conforms to tm`, () => {
+  describe(`${verb} — matches committed golden`, () => {
     for (const scenario of scenarios) {
       const run = scenario.darwinOnly && process.platform !== 'darwin' ? test.skip : test
       run(scenario.name, async () => {
+        currentRng = scenarioRng(`${verb}/${scenario.name}`)
         const { args, stdin, snapshot } = scenario.setup()
         if (snapshot === undefined) {
-          // A read-only verb: oracle and native see the same untouched fixture.
-          const oracle = await realTm(verb, args, stdin)
-          const native = await runNative(verb, args, stdin)
-          expect(native).toEqual(oracle)
+          // Read-only verb — just compare the result.
+          const result = sanitizeResult(await runNative(verb, args, stdin))
+          assertOrUpdate(goldenPath(verb, scenario.name), result)
           return
         }
-        // A mutating verb: the oracle changes the world, so snapshot its
-        // effect, reset the world, and run native from the same start state.
+        // Mutating verb — pin the post-state alongside the result, then
+        // restore the world from the pre-snapshot so the next scenario
+        // (and `afterEach`'s `tmpFiles` cleanup, and the file-suite
+        // `afterAll`'s `scratchDir` wipe) sees a clean slate.
         const before = snapshot()
-        const oracle = await realTm(verb, args, stdin)
-        const afterOracle = snapshot()
-        resetSnapshot(before, afterOracle)
-        const native = await runNative(verb, args, stdin)
-        const afterNative = snapshot()
-        expect(native).toEqual(oracle)
-        expect(afterNative).toEqual(afterOracle)
-        // Restore the world a last time: a native run that shells out (e.g.
-        // `reload`'s `tm send`) creates files outside `marker()`/`scratchDir`,
-        // which neither `afterEach` nor `afterAll` would otherwise reclaim.
-        resetSnapshot(before, afterNative)
+        const result = sanitizeResult(await runNative(verb, args, stdin))
+        const after = sanitizeSnapshot(snapshot())
+        assertOrUpdate(goldenPath(verb, scenario.name), result)
+        assertOrUpdate(fsGoldenPath(verb, scenario.name), after)
+        resetSnapshot(before, snapshot())
       })
     }
   })

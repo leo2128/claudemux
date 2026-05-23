@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: claudemux-conftest-862cfcb40c2e already running (tmux=teammate-claudemux-conftest-862cfcb40c2e) — 'tm kill claudemux-conftest-862cfcb40c2e' first if you really want to start over\n"
+}

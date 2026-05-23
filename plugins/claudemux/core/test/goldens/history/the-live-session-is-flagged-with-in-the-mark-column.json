@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "   SID       AGE  SIZE  TOPIC\n*  claudemu  1h   71B   the live session\n   claudemu  13h  71B   an older session\n",
+  "stderr": ""
+}

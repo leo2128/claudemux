@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "archived t-beta  [PAUSED — waiting on infra] -> dispatcher-tasks-archive.md  (removed from active ledger)\n",
+  "stderr": ""
+}

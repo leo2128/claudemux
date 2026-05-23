@@ -1,9 +1,0 @@
-tm ctx <repo>... | --all [--window 200k|1m]
-
-      Real context-window usage per teammate, read from the jsonl
-      usage block (more accurate than the TUI percentage). Prints
-      current prompt size, next-turn estimate, and percent of
-      window.
-      Window size is not in the transcript: a peak above ~210k
-      proves a 1M window; otherwise 200k is assumed (labelled
-      accordingly). --window forces the assumption.

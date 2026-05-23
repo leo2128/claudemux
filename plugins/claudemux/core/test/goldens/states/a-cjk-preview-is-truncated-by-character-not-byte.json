@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "REPO                             SID       BUSY  LAST     PREVIEW\nclaudemux-conftest-68e9c2e8c7e1  claudemu  no    163B/2h  已完成任务这是一段足够长的中文回复预览内容用来验证按字符而不是按字节截断到五十个字符的行为再多写些文\n",
+  "stderr": ""
+}

@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm resume: --no-wait is only valid with --prompt\n"
+}

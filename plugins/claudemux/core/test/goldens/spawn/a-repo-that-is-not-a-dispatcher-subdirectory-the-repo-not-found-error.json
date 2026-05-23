@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: repo not found at <SCRATCH>/dispatcher/claudemux-conftest-396d2cd6653b — <repo> must be a direct subdirectory of the dispatcher dir (<SCRATCH>/dispatcher). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.\n"
+}

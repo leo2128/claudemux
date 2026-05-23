@@ -58,7 +58,7 @@ jobs:
         run: |
           shellcheck \
             plugins/claudemux/bin/tm \
-            plugins/claudemux/core/test/fixtures/fake-tm \
+            plugins/claudemux/core/bin/tm \
             plugins/claudemux/core/test/fixtures/fake-tmux-bin/tmux \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
@@ -70,14 +70,6 @@ jobs:
 
       - name: agents — KB structural check
         run: bash .agents/scripts/check.sh
-
-      - name: bats — pure functions
-        if: hashFiles('tests/pure/*.bats') != ''
-        run: bats tests/pure/
-
-      - name: bats — help snapshots
-        if: hashFiles('tests/help/*.bats') != ''
-        run: bats tests/help/
 
       - name: bats — release tooling
         if: hashFiles('tests/cli/*.bats') != ''
@@ -126,12 +118,11 @@ jobs:
 
   # The orchestration core (the `next` line, 1.0.0-beta.0) is a Node/TypeScript
   # project with its own unit suite. Like feishu-channel it runs in a separate
-  # job so its toolchain stays off the bats + shellcheck lane above. It
-  # runs on both OSes — unlike a pure-TypeScript suite — because the Phase B
-  # conformance harness shells out to the real `bin/tm`, whose cross-platform
-  # behavior is itself what the harness pins. `tm history`'s detail view in
-  # particular formats a timestamp with BSD `date -r`, so its detail-mode
-  # conformance is macOS-gated and only runs here on the macOS leg.
+  # job so its toolchain stays off the bats + shellcheck lane above. It runs
+  # on both OSes because the native verbs themselves still shell out to
+  # platform-sensitive binaries (`tm states` / `tm history` pipe through
+  # `column`; `tm history`'s detail view formats a timestamp with BSD `date
+  # -r`, so its detail-mode scenarios are macOS-gated in the harness).
   claudemux-core:
     strategy:
       fail-fast: false
@@ -149,11 +140,10 @@ jobs:
         with:
           node-version: 22
 
-      # The conformance harness runs the real `bin/tm` as its oracle: `tm ctx`
-      # and `tm history` shell out to `jq`; `tm states` and `tm history` to
-      # `column` (the native verbs pipe through `column` too). On Linux `jq`
-      # and `column` (in `bsdextrautils`) are installed here; the macOS runner
-      # ships both in its base image.
+      # Native `tm states` and `tm history` pipe through the real `column`
+      # binary, and `tm ctx` / `tm history` parse jsonl transcripts as JSON.
+      # On Linux those are installed here; the macOS runner ships both in
+      # its base image.
       - name: Install jq and column (linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y jq bsdextrautils
@@ -166,6 +156,18 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+
+      - name: Build bundle
+        # Rebuild `dist/cli.mjs` from current source. The bundle is the
+        # production launcher's payload (`plugins/claudemux/bin/tm` execs
+        # node against it) and is committed to the repo so a marketplace
+        # install needs no `npm install` step. The next step asserts the
+        # committed bundle matches the freshly-rebuilt one — a feature
+        # commit with no matching `dist/` change is the bug.
+        run: npm run build
+
+      - name: dist not stale
+        run: git diff --exit-code -- dist/
 
       - name: Unit tests
         run: npm test

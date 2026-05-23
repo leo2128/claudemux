@@ -1,6 +1,0 @@
-tm status <repo> [lines=80]
-
-      Capture-pane the teammate's live screen. DIAGNOSTIC — the
-      sync send/wait verbs make this unnecessary for normal flow.
-      Reach for it only when you genuinely need the live pane (e.g.
-      confirming a TUI dialog is up).

@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]\n"
+}

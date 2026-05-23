@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "REPO                             SID       BUSY  LAST     PREVIEW\nclaudemux-conftest-6772c4cb7874  claudemu  no    30B/30m  a reply in the minutes bucket\n",
+  "stderr": ""
+}

@@ -1,7 +1,0 @@
-tm poll <repo> <regex> [timeout=180]
-
-      Block until pane content matches a regex. DIAGNOSTIC fallback
-      when `tm wait` can't catch an interesting intermediate state.
-      Match the EXPECTED RESULT, not the prompt you just sent (a
-      pattern that appears in the sent prompt makes the wait return
-      instantly).

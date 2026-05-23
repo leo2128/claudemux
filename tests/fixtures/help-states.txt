@@ -1,6 +1,0 @@
-tm states
-
-      One-line fleet snapshot: REPO, SID (first 8 chars), BUSY (yes
-      if the .busy file from the on-busy hook is present), LAST
-      (size + age of <sid>.last), PREVIEW (first 50 chars of last
-      reply). Use to see what every teammate is doing at a glance.

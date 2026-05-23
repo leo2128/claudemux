@@ -1,23 +1,26 @@
 /**
- * The `tm` shell-out layer.
+ * The `TmResult` shape — what every `tm` verb returns — and `resolveTmBinary`,
+ * which locates the user-installed `tm` PATH entry.
  *
- * Phase A of the strangler migration (see
- * `.agents/domains/mcp-native-orchestrator.md` §12): the resident core does
- * not reimplement any teammate operation — it shells out to the unmodified
- * `bin/tm` for every verb. This module is that single shell-out seam; every
- * verb the core exposes routes through `runTm`.
+ * Stage 3c retired the Bash `bin/tm`; the orchestrator is now a pure Node CLI
+ * and no verb shells out to `tm`. The runtime shell-out functions that used to
+ * live here (`runTm` / `runTmRaw`) are gone with it.
  *
- * Keeping the shell-out in one place is what makes Phase B possible: a verb
- * is migrated into native core code by replacing one `runTm` call site, with
- * the conformance harness pinning it to the behavior captured here.
+ * Two seams remain useful and keep their home in this module:
+ *
+ *  - `TmResult` / `TmRunOptions` — the call shape every `NativeVerb` produces
+ *    and the optional stdin a verb may consume. Module-public types so the
+ *    CLI front end and the conformance harness see the same contract.
+ *  - `resolveTmBinary` — used by the live-teammate integration harness to
+ *    locate the PATH entry it drives. It honors `CLAUDEMUX_TM`, so the same
+ *    harness can be re-aimed at a dev launcher (`core/bin/tm`) or any other
+ *    `tm` binary without code change.
  */
 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { spawnCapture } from './proc'
-
-/** The outcome of one `tm` invocation: a faithful exit-code + stream capture. */
+/** The outcome of one `tm` verb: a faithful exit-code + stream capture. */
 export interface TmResult {
   /** Process exit code. */
   code: number
@@ -27,25 +30,16 @@ export interface TmResult {
   stderr: string
 }
 
-/** Options for one `tm` invocation. */
+/** Options for one verb invocation. */
 export interface TmRunOptions {
   /** Text to feed on stdin — needed by stdin-reading verbs such as `archive`. */
   stdin?: string
 }
 
 /**
- * Runs one `tm` verb. Injectable: the core depends on this type, not on the
- * concrete function, so tests drive every verb against a fake `tm`.
- */
-export type TmRunner = (
-  verb: string,
-  args: readonly string[],
-  options?: TmRunOptions,
-) => Promise<TmResult>
-
-/**
- * Resolve the `tm` executable. `CLAUDEMUX_TM` overrides it (the tests point it
- * at a fake); otherwise it is the `bin/tm` shipped alongside this core in the
+ * Resolve the `tm` executable. `CLAUDEMUX_TM` overrides it (the live-teammate
+ * suite points it at `core/bin/tm` to drive native verbs through the dev
+ * launcher); otherwise it is the `bin/tm` shipped alongside this core in the
  * claudemux plugin.
  */
 export function resolveTmBinary(): string {
@@ -54,30 +48,3 @@ export function resolveTmBinary(): string {
   // core/src/tm.ts → plugins/claudemux/bin/tm
   return join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'tm')
 }
-
-/**
- * Runs `tm` with a raw argument vector — `tm` followed by `args` verbatim,
- * with no verb/arguments split. The CLI front end uses this for an argv that
- * is not a verb invocation (a bare `tm`, a global flag): bash `tm` stays the
- * authority on its own help and error output.
- */
-export type RawTmRunner = (
-  args: readonly string[],
-  options?: TmRunOptions,
-) => Promise<TmResult>
-
-/**
- * The production `RawTmRunner`: spawn `tm`, forward the argument vector and
- * any stdin verbatim, and capture exit code, stdout, and stderr without
- * interpretation — a faithful pass-through; interpreting `tm`'s output is a
- * per-verb migration task.
- */
-export const runTmRaw: RawTmRunner = (args, options) =>
-  spawnCapture([resolveTmBinary(), ...args], options)
-
-/**
- * The production `TmRunner`: a verb invocation of `tm`, which is `runTmRaw`
- * with the verb as the first argument.
- */
-export const runTm: TmRunner = (verb, args, options) =>
-  runTmRaw([verb, ...args], options)

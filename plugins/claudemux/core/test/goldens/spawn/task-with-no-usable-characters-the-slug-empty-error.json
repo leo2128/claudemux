@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm spawn: --task '?!@#' has no usable characters after sanitization (allowlist: ASCII letters/digits + CJK Unified Ideographs)\n"
+}

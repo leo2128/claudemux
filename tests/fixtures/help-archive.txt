@@ -1,9 +1,0 @@
-tm archive <id> [--status '<tag>']
-
-      Move a finished task from the active ledger to the archive.
-      Reads the compressed one/two-line outcome on stdin; copies
-      repo/branch/intent verbatim from the active entry and stamps
-      today's date. Prepends to dispatcher-tasks-archive.md (newest
-      on top), creating it from its shape if absent, then deletes
-      the entry from active-dispatcher-tasks.md. --status overrides
-      the carried-over [status] tag.

@@ -1,64 +1,137 @@
 /**
- * The CLI front end — `tm <verb> [args...]`.
+ * The CLI front end — `tm <verb> [args...]`, as a library.
  *
  * `tm` is invoked once per command and exits; the dispatcher reads its
- * stdout, stderr, and exit code. This module is that per-invocation entry:
- * parse the argument vector, run the verb (native code or a `tm` shell-out,
- * via `runVerb`), write the verb's streams to the process streams, and exit
- * with the verb's code. No state is held between invocations — it lives in
- * tmux, the `/tmp` protocol files, and the Claude Code projects directory.
+ * stdout, stderr, and exit code. This module is the per-invocation router:
+ * parse the argument vector, route to the right handler — native verb, help
+ * print, removed-verb error, or unknown-verb error — and produce a
+ * `TmResult`. No state is held between invocations: it lives in tmux, the
+ * `/tmp` protocol files, and the Claude Code projects directory.
+ *
+ * On the `next` line the Bash `bin/tm` is retired, so every routing decision
+ * that used to live in `bin/tm`'s `main` lives here — the help pre-scan, the
+ * `help <verb>` form, the removed-verb migration messages, and the
+ * unknown-verb error. The help text itself lives in [`help.ts`](./help.ts).
+ *
+ * The process entrypoint that wires `process.argv` / `process.stdin` /
+ * `process.exitCode` to `runCli` is [`main.ts`](./main.ts); this module
+ * exports `runCli` and `productionEnv` so a test or harness can drive a
+ * single invocation in-process with controlled inputs.
  */
 
 import { runColumn } from './column'
-import { runVerb } from './core'
 import { runGrep } from './grep'
-import type { NativeEnv } from './native'
-import { type RawTmRunner, type TmResult, runTm, runTmRaw } from './tm'
+import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from './help'
+import { NATIVE_VERBS, type NativeEnv } from './native'
+import { type TmResult, type TmRunOptions } from './tm'
 import { runTmux } from './tmux'
-import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-/** Backends the CLI front end runs a verb against. */
-export interface CliDeps extends NativeEnv {
-  /** Shells a raw argument vector out to `tm` — for a bare `tm` invocation. */
-  runTmRaw: RawTmRunner
+/**
+ * Whether `tm`'s help pre-scan would intercept these verb arguments. The
+ * scan walks left to right: a `-h`/`--help` triggers help; a `--prompt` value
+ * or the first non-flag positional stops it (help text must not swallow
+ * prompt data that happens to contain `--help`). Mirrors the bash `main`
+ * pre-scan that this layer replaces.
+ */
+function triggersHelp(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '-h' || arg === '--help') return true
+    if (arg === '--prompt' || arg.startsWith('--prompt=')) return false
+    if (!arg.startsWith('-')) return false
+  }
+  return false
+}
+
+/** A removed verb's migration message + exit 2 — bash `main`'s `ask)` / `wait-idle)` / `wait-quiet)` arms. */
+function removedVerb(message: string): TmResult {
+  return { code: 2, stdout: '', stderr: message }
+}
+
+/** The unknown-subcommand error: stderr line + overview on stdout + exit 1. */
+function unknownVerb(verb: string): TmResult {
+  return {
+    code: 1,
+    stdout: OVERVIEW_HELP,
+    stderr: `tm: unknown subcommand: ${verb}\n`,
+  }
 }
 
 /**
- * Dispatch one CLI invocation. `argv` is the argument vector after the program
- * name (`process.argv.slice(2)`). A verb invocation runs through `runVerb`,
- * which decides native-vs-shell-out; a bare `tm` shells out to `tm` itself,
- * which owns the no-verb help screen.
+ * Route a `tm help <name>` invocation. Mirrors bash `main`'s `help|-h|--help`
+ * arm: known verb (including `help` itself, since bash's `help_help` calls
+ * `cmd_help`) prints that verb's detail page; unknown verb prints a stderr
+ * line + the overview + exits 1; no argument prints the overview + exits 0.
+ */
+function runHelpVerb(rest: readonly string[]): TmResult {
+  const target = rest[0]
+  if (target === undefined) return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  if (target === 'help' || target === '-h' || target === '--help') {
+    return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  }
+  const text = HELP_TEXTS[target]
+  if (text !== undefined) return { code: 0, stdout: text, stderr: '' }
+  return {
+    code: 1,
+    stdout: OVERVIEW_HELP,
+    stderr: `tm: no help for unknown verb: ${target}\n`,
+  }
+}
+
+/**
+ * Dispatch one CLI invocation. `argv` is the argument vector after the
+ * program name (`process.argv.slice(2)`).
+ *
+ * Routing order — matches bash `main`:
+ *   1. Bare `tm`                    → overview, exit 0
+ *   2. `tm help [<verb>]`           → per-verb or overview, exit 0/1
+ *   3. Help pre-scan on `rest`      → per-verb (if HELP_TEXTS) or overview, exit 0
+ *   4. Removed verb                 → migration message, exit 2
+ *   5. Native verb                  → dispatch
+ *   6. Unknown verb                 → stderr + overview, exit 1
  */
 export async function runCli(
-  argv: string[],
-  deps: CliDeps,
+  argv: readonly string[],
+  env: NativeEnv,
   stdin?: string,
 ): Promise<TmResult> {
-  const options = stdin != null ? { stdin } : undefined
   const [verb, ...rest] = argv
-  if (verb === undefined) return deps.runTmRaw([], options)
-  return runVerb(verb, rest, options, deps)
+  // 1. Bare `tm` — bash sets `sub="${1:-help}"`, falls into the help case.
+  if (verb === undefined) return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+
+  // 2. The `help` / `-h` / `--help` verb forms.
+  if (verb === 'help' || verb === '-h' || verb === '--help') {
+    return runHelpVerb(rest)
+  }
+
+  // 3. Help pre-scan — `tm <verb> --help` (with any leading flags before the
+  //    `--help`) prints that verb's detail. Unknown verb in this position
+  //    falls through to the overview, matching bash's `declare -F help_<verb>`
+  //    fallback to `cmd_help`.
+  if (triggersHelp(rest)) {
+    const text = HELP_TEXTS[verb]
+    return { code: 0, stdout: text ?? OVERVIEW_HELP, stderr: '' }
+  }
+
+  // 4. Removed verbs — migration error on stderr, exit 2.
+  const removedMessage = REMOVED_VERB_MESSAGES[verb]
+  if (removedMessage !== undefined) return removedVerb(removedMessage)
+
+  // 5. Native dispatch. After 3c every verb is in `NATIVE_VERBS`.
+  const handler = NATIVE_VERBS[verb]
+  if (handler !== undefined) {
+    const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined
+    return handler(rest, options, env)
+  }
+
+  // 6. Unknown verb.
+  return unknownVerb(verb)
 }
 
-/**
- * Read all of stdin. Returns `undefined` when stdin is an interactive TTY, so
- * an interactive invocation never blocks waiting for an EOF that will not come.
- */
-async function readStdin(): Promise<string | undefined> {
-  if (process.stdin.isTTY) return undefined
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf8')
-}
-
-/** The production `CliDeps` — the real backends, resolved once per invocation. */
-function productionDeps(): CliDeps {
+/** The production `NativeEnv` — the real backends, resolved once per invocation. */
+export function productionEnv(): NativeEnv {
   return {
-    runTm,
-    runTmRaw,
     runTmux,
     runColumn,
     runGrep,
@@ -72,27 +145,4 @@ function productionDeps(): CliDeps {
     dispatcherDir: process.env.TM_DISPATCHER_DIR ?? process.env.PWD ?? process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
   }
-}
-
-/** Process entry: dispatch, write the verb's streams, exit with its code. */
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2)
-  // `archive` is the only verb that reads stdin; reading it for any other verb
-  // risks blocking on a pipe that is open but never written.
-  const stdin = argv[0] === 'archive' ? await readStdin() : undefined
-  const result = await runCli(argv, productionDeps(), stdin)
-  if (result.stdout) process.stdout.write(result.stdout)
-  if (result.stderr) process.stderr.write(result.stderr)
-  process.exitCode = result.code
-}
-
-// Run `main` when invoked as a script, not when imported (a test imports
-// `runCli`). `realpathSync` canonicalizes the invocation path so a symlinked
-// launcher still matches the symlink-resolved module path.
-const invokedPath = process.argv[1]
-if (invokedPath !== undefined && realpathSync(invokedPath) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
-    console.error(`[tm] ${err instanceof Error ? err.message : String(err)}`)
-    process.exitCode = 1
-  })
 }

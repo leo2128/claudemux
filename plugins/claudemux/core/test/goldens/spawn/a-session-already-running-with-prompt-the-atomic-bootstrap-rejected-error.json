@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: claudemux-conftest-c0201fa19a1d already exists (tmux=teammate-claudemux-conftest-c0201fa19a1d) — atomic bootstrap rejected because the teammate is already running. Use 'tm send claudemux-conftest-c0201fa19a1d --prompt \"…\"' to drive an existing teammate, or 'tm kill claudemux-conftest-c0201fa19a1d' first to start over.\n"
+}

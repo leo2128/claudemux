@@ -52,4 +52,5 @@ export const TM_VERBS: readonly VerbSpec[] = [
   { name: 'status', summary: "Capture-pane a teammate's live screen (diagnostic).", registry: 'none' },
   { name: 'poll', summary: "Block until a teammate's pane matches a regex (diagnostic).", registry: 'none' },
   { name: 'doctor', summary: 'Self-check: tm path/version, env, tmux, idle dir, active teammates.', registry: 'none' },
+  { name: 'ask', summary: 'Borrow an idle codex teammate from the pool, drive one turn on a fresh thread, return the teammate.', registry: 'none' },
 ]

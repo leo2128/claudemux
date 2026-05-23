@@ -56,6 +56,7 @@ import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
 import {
+  codexAsk,
   codexKill,
   codexSend,
   codexSpawn,
@@ -2777,6 +2778,24 @@ const resume: NativeVerb = async (args, _options, env) => {
 }
 
 /** Every natively-migrated verb, keyed by verb name. */
+/**
+ * `tm ask "<prompt>"` — borrow an idle named codex teammate, run one turn
+ * on a fresh thread, return the teammate. The "pool" is the spawned
+ * `codex-<n>` set; this verb does not name a teammate. Always routes
+ * into the codex driver, never into the tmux path.
+ */
+const ask: NativeVerb = async (args, _options, _env) => {
+  if (args.length === 0) {
+    return die('usage: tm ask "<prompt>"')
+  }
+  if (args.length > 1) {
+    return die(
+      `tm ask: takes exactly one positional argument (the prompt) — got ${args.length}`,
+    )
+  }
+  return codexAsk(args[0] ?? '')
+}
+
 export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   ls,
   last,
@@ -2795,6 +2814,7 @@ export const NATIVE_VERBS: Readonly<Record<string, NativeVerb>> = {
   wait,
   compact,
   resume,
+  ask,
 }
 
 /** Whether `core.ts` should run this verb natively rather than shelling out. */

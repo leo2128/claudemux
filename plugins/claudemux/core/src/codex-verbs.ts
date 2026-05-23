@@ -24,18 +24,20 @@
  * (#36) where a real codex is available to validate the parsing against.
  */
 
-import { readFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { CodexWsClient } from './codex-ws.js'
 import {
   daemonAlive,
+  listDaemons,
   readDaemonState,
   reapDaemon,
   spawnDaemon,
   touchLastSeen,
   writeThreadId,
 } from './codex-supervisor.js'
-import { codexSocketPath, codexThreadFile } from './paths.js'
+import { codexSocketPath, codexTeammateDir, codexThreadFile } from './paths.js'
 import type {
   ClientInfo,
   InitializeResponse,
@@ -240,6 +242,116 @@ export async function codexKill(name: string): Promise<TmResult> {
     code: 0,
     stdout: '',
     stderr: `killed: ${name} (was pid=${state.pid})\n`,
+  }
+}
+
+/**
+ * Pool-style borrow on a codex teammate.
+ *
+ * Decision 0019 §6: ask mode is a thin wrapper on top of the teammate
+ * substrate — the named `codex-<n>` teammates are *the* pool. An ask
+ * borrows one, drives a turn on a fresh thread (so the borrowed
+ * teammate's persistent conversation thread is not polluted), and
+ * returns the teammate to the pool. The lock file is the rendezvous:
+ * an `O_EXCL` create succeeds atomically for exactly one caller, the
+ * rest see EEXIST and pass over that teammate.
+ */
+function tryBorrow(name: string): boolean {
+  const lockPath = join(codexTeammateDir(name), 'lock')
+  try {
+    const fd = openSync(lockPath, 'wx', 0o600)
+    try {
+      writeSync(fd, `${process.pid}\n`)
+    } finally {
+      closeSync(fd)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function releaseBorrow(name: string): void {
+  rmSync(join(codexTeammateDir(name), 'lock'), { force: true })
+}
+
+/**
+ * `tm ask "<prompt>"` — borrow an idle named codex teammate from the
+ * pool, drive one turn on a *fresh* thread, return the borrowed teammate.
+ *
+ * Stage 4's ask mode is intentionally minimal: it picks any idle
+ * `codex-<n>` teammate (the user does not name one), runs the turn
+ * outside the teammate's persistent conversation thread (the thread
+ * file is shelved across the call), and prints the raw `Turn` JSON for
+ * the same reason `codexSend` does — assistant-message extraction
+ * lands with the live integration suite.
+ *
+ * "Idle" here means "has no active borrow lock". Two parallel `tm ask`
+ * invocations land on different teammates (or one of them gets the
+ * "all busy" error and retries); a `tm ask` running while the user
+ * also runs `tm send` against the same teammate is not guarded — codex
+ * itself sequences turns on a thread and will reject overlap, but
+ * `tm send` does not currently acquire the borrow lock.
+ */
+export async function codexAsk(prompt: string): Promise<TmResult> {
+  if (prompt.length === 0) {
+    return die('usage: tm ask "<prompt>"')
+  }
+
+  const candidates = listDaemons().filter(isCodexTarget)
+  if (candidates.length === 0) {
+    return die(
+      "no codex teammates available — run 'tm spawn codex-1' (or similar) first",
+    )
+  }
+
+  let borrowed: string | null = null
+  let aliveCount = 0
+  for (const name of candidates) {
+    if (!daemonAlive(name)) continue
+    aliveCount += 1
+    if (tryBorrow(name)) {
+      borrowed = name
+      break
+    }
+  }
+  if (borrowed === null) {
+    if (aliveCount === 0) {
+      return die(
+        `all ${candidates.length} codex teammate(s) are dead — 'tm doctor' will reap them`,
+      )
+    }
+    return die(
+      `all ${aliveCount} alive codex teammate(s) are busy — retry, or spawn another`,
+    )
+  }
+
+  // Shelve the persistent thread id (if any) so this turn runs on a
+  // fresh thread without polluting the borrowed teammate's primary
+  // conversation. Whatever happens during the turn, the persisted
+  // thread is restored in the `finally`.
+  let shelvedThread: string | null = null
+  try {
+    shelvedThread = readFileSync(codexThreadFile(borrowed), 'utf8').trim() || null
+  } catch {
+    shelvedThread = null
+  }
+  if (shelvedThread !== null) {
+    rmSync(codexThreadFile(borrowed), { force: true })
+  }
+
+  try {
+    return await codexSend(borrowed, prompt)
+  } finally {
+    // Replace whatever thread `codexSend` wrote with the one we shelved,
+    // so future `tm send <name>` continues the user's original
+    // conversation.
+    if (shelvedThread !== null) {
+      writeThreadId(borrowed, shelvedThread)
+    } else {
+      rmSync(codexThreadFile(borrowed), { force: true })
+    }
+    releaseBorrow(borrowed)
   }
 }
 

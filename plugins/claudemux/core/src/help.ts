@@ -31,6 +31,7 @@ USAGE  (most common first)
   tm history <repo> [<sid-prefix>]       inspect past sessions for this repo
   tm mem <repo>                          cat sibling repo's auto-memory index
   tm archive <id>                        move finished task active→archive (stdin)
+  tm ask "<prompt>"                      one-shot turn on an idle codex teammate (pool)
 
 DIAGNOSTIC (escape hatches — prefer the verbs above)
   tm status <repo>                       capture-pane the teammate's live screen
@@ -214,7 +215,26 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
   kill: `tm kill <repo>
 
       Kill the teammate's tmux session and clean up its state files
-      (/tmp/teammate-<repo>.{sid,send-at,ready,cwd}).
+      (/tmp/teammate-<repo>.{sid,send-at,ready,cwd}). A codex-<n>
+      target reaps the codex daemon and its registry directory instead.
+`,
+  ask: `tm ask "<prompt>"
+
+      Drive a one-shot turn on an idle codex teammate from the
+      \`codex-<n>\` pool, on a fresh thread (so the borrowed teammate's
+      persistent conversation thread is not polluted). Prints the
+      turn's JSON to stdout.
+
+      Pool semantics (decision 0019 §6, pool decision A): the named
+      \`codex-<n>\` teammates are the pool. ask picks any idle one,
+      borrows it for one turn, and returns it. "Idle" means it has no
+      active borrow lock; the lock is a file under
+      /tmp/teammate-codex/<name>/lock.
+
+      Errors when no codex teammate has been spawned, when every
+      spawned teammate is dead (run 'tm doctor' to reap), or when
+      every alive teammate is currently borrowed (retry, or spawn one
+      more).
 `,
   reload: `tm reload <repo>... | --all
 
@@ -299,8 +319,10 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
  * matching the bash behaviour that this layer preserves.
  */
 export const REMOVED_VERB_MESSAGES: Readonly<Record<string, string>> = {
-  ask: `tm ask was removed in 0.3.0. Use 'tm send <repo> --prompt "..."' — send is now sync round-trip by default and prints the reply on stdout.
-`,
+  // `tm ask` was removed in 0.3.0 and re-introduced in stage 4 with new
+  // semantics (codex-mode borrow/return on a `codex-<n>` teammate). The
+  // entry is therefore intentionally absent here — `cli.ts` routes the
+  // verb into the native dispatch table instead.
   'wait-idle': `tm wait-idle was renamed to 'tm wait' in 0.3.0. Same semantics; the new verb also prints .last on stdout by default.
 `,
   'wait-quiet': `tm wait-quiet was folded into the --pane-quiet flag in 0.3.0. Use 'tm wait <repo> --pane-quiet' (or 'tm send <repo> --prompt "..." --pane-quiet' for the send-then-wait composition).

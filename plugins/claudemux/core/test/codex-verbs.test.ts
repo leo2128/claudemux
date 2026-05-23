@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import {
+  codexAsk,
   codexKill,
   codexSend,
   codexSpawn,
@@ -24,6 +25,7 @@ import {
 } from '../src/codex-verbs'
 import { reapDaemon } from '../src/codex-supervisor'
 import { codexTeammateDir } from '../src/paths'
+import { closeSync, openSync, writeSync } from 'node:fs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
@@ -129,5 +131,55 @@ describe('codex verbs — spawn failure shape', () => {
     const result = await codexSpawn(nameUnder())
     expect(result.code).toBe(1)
     expect(result.stderr).toMatch(/^tm: codex daemon '/)
+  })
+})
+
+describe('codexAsk — pool borrow semantics', () => {
+  test('rejects an empty prompt with a usage line', async () => {
+    const result = await codexAsk('')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toMatch(/usage: tm ask "<prompt>"/)
+  })
+
+  test('errors when no codex teammates have been spawned', async () => {
+    const result = await codexAsk('hello?')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toMatch(/no codex teammates available/)
+  })
+
+  test('reports "all busy" when every alive teammate is already borrowed', async () => {
+    // Spawn one teammate, hold its borrow lock from this test, then ask.
+    // The fake daemon does not speak the protocol, but ask's contention
+    // check fires before the protocol round-trip — it should fail at
+    // "all busy" without ever opening the websocket.
+    const name = nameUnder()
+    toReap.push(name)
+    await codexSpawn(name)
+
+    // Manually take the borrow lock, simulating a concurrent caller.
+    const lockPath = `${codexTeammateDir(name)}/lock`
+    const fd = openSync(lockPath, 'wx', 0o600)
+    writeSync(fd, '99999\n')
+    closeSync(fd)
+
+    const result = await codexAsk('anyone?')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toMatch(/all 1 alive codex teammate\(s\) are busy/)
+  })
+
+  test('skips dead teammates and reports "all dead" when no live one exists', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    const state = await codexSpawn(name)
+    // Kill the daemon process so the entry stays but `daemonAlive` reads false.
+    const match = /pid=(\d+)/.exec(state.stderr)
+    expect(match).not.toBeNull()
+    const pid = Number.parseInt(match![1] ?? '0', 10)
+    process.kill(pid, 'SIGKILL')
+    await new Promise((res) => setTimeout(res, 100))
+
+    const result = await codexAsk('hi?')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toMatch(/all 1 codex teammate\(s\) are dead/)
   })
 })

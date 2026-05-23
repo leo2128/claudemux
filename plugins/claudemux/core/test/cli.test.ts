@@ -124,17 +124,20 @@ describe('removed verbs', () => {
     expect(result.stderr).toBe(REMOVED_VERB_MESSAGES[verb])
   })
 
-  test('a removed verb with --help still routes to overview (no help_ask exists)', async () => {
-    // Matches bash's pre-scan: --help wins, the `ask)` arm is never reached.
-    const result = await runCli(['ask', '--help'], fakeEnv())
+  test('a removed verb with --help still routes to overview', async () => {
+    // Matches bash's pre-scan: --help wins, the removed-verb arm is
+    // never reached. `wait-idle` is a stable removed verb (stage 4
+    // re-introduced `ask`, so we test against a verb that stays
+    // retired).
+    const result = await runCli(['wait-idle', '--help'], fakeEnv())
     expect(result).toEqual({ code: 0, stdout: OVERVIEW_HELP, stderr: '' })
   })
 
   test('a removed verb with a positional argument still hits the migration error', async () => {
     // The positional stops the pre-scan, so dispatch reaches the removed arm.
-    const result = await runCli(['ask', 'repo'], fakeEnv())
+    const result = await runCli(['wait-idle', 'repo'], fakeEnv())
     expect(result.code).toBe(2)
-    expect(result.stderr).toBe(REMOVED_VERB_MESSAGES.ask)
+    expect(result.stderr).toBe(REMOVED_VERB_MESSAGES['wait-idle'])
   })
 })
 

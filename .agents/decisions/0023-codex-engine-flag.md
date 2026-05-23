@@ -1,6 +1,6 @@
 # 0023 — The codex teammate kind moves from a name prefix to an explicit `--engine` flag
 
-- **Status:** Proposed
+- **Status:** Superseded by [0024](/.agents/decisions/0024-multi-engine-tui-architecture.md) (§1 and §4 carry forward unchanged; §2 and §3 retired)
 - **Date:** 2026-05-23
 - **Affects:** the `next` line (`1.0.0-beta.0`) — `tm spawn`'s arg surface,
   the four hot-path verbs' fork (`spawn`, `send`, `wait`, `kill`), the

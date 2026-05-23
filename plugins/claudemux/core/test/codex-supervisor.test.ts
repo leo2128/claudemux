@@ -1,0 +1,205 @@
+/**
+ * Unit tests for the codex daemon supervisor.
+ *
+ * A real `codex app-server` cannot run in CI; the tests use the
+ * `test/fixtures/codex-fake/codex` shim — a node script that accepts the
+ * same `app-server --listen unix://<path>` invocation, binds a unix
+ * socket, and sleeps. That is enough surface to pin the supervisor's
+ * lifecycle contract (spawn, liveness probe, restart, reap).
+ *
+ * The registry root is repointed at a per-test tmp directory via the
+ * teammate-name namespacing — we never write under the real
+ * `/tmp/teammate-codex/` here, so a CI runner with that directory
+ * already populated stays untouched.
+ */
+
+import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+
+import {
+  daemonAlive,
+  isProcessAlive,
+  listDaemons,
+  reapDaemon,
+  readDaemonState,
+  spawnDaemon,
+} from '../src/codex-supervisor'
+import {
+  codexPidFile,
+  codexSocketPath,
+  codexTeammateDir,
+} from '../src/paths'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
+
+// One test name per test so registry entries never collide between tests
+// running in parallel. The supervisor's registry root is hard-coded under
+// `/tmp/teammate-codex/`; we drop our entries into a unique subdir name
+// each time.
+let nameUnder: () => string
+let toReap: string[]
+let suffixDir: string
+
+beforeEach(() => {
+  suffixDir = mkdtempSync(join(tmpdir(), 'codex-test-'))
+  const suffix = suffixDir.split('/').pop()!
+  let counter = 0
+  nameUnder = () => `${suffix}-${counter++}`
+  toReap = []
+})
+
+afterEach(async () => {
+  for (const name of toReap) await reapDaemon(name)
+  rmSync(suffixDir, { recursive: true, force: true })
+})
+
+describe('codex-supervisor — spawn + liveness', () => {
+  test('spawnDaemon brings up a daemon, binds the socket, writes the registry entry', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+
+    const state = await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    expect(state.name).toBe(name)
+    expect(state.pid).toBeGreaterThan(0)
+    expect(state.socketPath).toBe(codexSocketPath(name))
+    expect(state.threadId).toBeNull()
+    expect(state.lastSeen).toBeNull()
+
+    expect(existsSync(codexPidFile(name))).toBe(true)
+    expect(existsSync(codexSocketPath(name))).toBe(true)
+    expect(statSync(codexSocketPath(name)).isSocket()).toBe(true)
+    expect(daemonAlive(name)).toBe(true)
+  })
+
+  test('readDaemonState reads back what spawnDaemon wrote', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    const spawned = await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    const state = readDaemonState(name)
+    expect(state).not.toBeNull()
+    expect(state!.pid).toBe(spawned.pid)
+    expect(state!.startedAt).toBe(spawned.startedAt)
+  })
+
+  test('readDaemonState returns null for a name with no registry entry', () => {
+    expect(readDaemonState(nameUnder())).toBeNull()
+  })
+
+  test('daemonAlive is false for a name with no entry', () => {
+    expect(daemonAlive(nameUnder())).toBe(false)
+  })
+
+  test('listDaemons enumerates every entry in the registry', async () => {
+    const a = nameUnder()
+    const b = nameUnder()
+    toReap.push(a, b)
+    await spawnDaemon({ name: a, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    await spawnDaemon({ name: b, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    const all = listDaemons()
+    expect(all).toContain(a)
+    expect(all).toContain(b)
+  })
+
+  test('isProcessAlive returns false for the impossible pid 0', () => {
+    expect(isProcessAlive(0)).toBe(false)
+    expect(isProcessAlive(-1)).toBe(false)
+  })
+})
+
+describe('codex-supervisor — reap', () => {
+  test('reapDaemon kills the process and removes the registry directory', async () => {
+    const name = nameUnder()
+    await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    expect(daemonAlive(name)).toBe(true)
+
+    await reapDaemon(name)
+
+    expect(daemonAlive(name)).toBe(false)
+    expect(readDaemonState(name)).toBeNull()
+    expect(existsSync(codexTeammateDir(name))).toBe(false)
+  })
+
+  test('reapDaemon on a missing name is a no-op', async () => {
+    await expect(reapDaemon(nameUnder())).resolves.toBeUndefined()
+  })
+
+  test('reapDaemon tears down a stale entry whose process has already died', async () => {
+    const name = nameUnder()
+    const state = await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    // Kill the process out from under the registry, leaving the entry
+    // pointing at a dead pid — what an OS reboot or crash would leave.
+    process.kill(state.pid, 'SIGKILL')
+    // Wait briefly for the OS to reap.
+    await new Promise((res) => setTimeout(res, 100))
+    expect(daemonAlive(name)).toBe(false)
+    // Reap should still tear down the directory.
+    await reapDaemon(name)
+    expect(existsSync(codexTeammateDir(name))).toBe(false)
+  })
+})
+
+describe('codex-supervisor — failure paths', () => {
+  test('spawnDaemon rejects when the binary exits before binding the socket', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    await expect(
+      spawnDaemon({
+        name,
+        binPath: FAKE_CODEX,
+        env: { ...process.env, CODEX_FAKE_EXIT_BEFORE_BIND: '1' },
+        readyTimeoutMs: 3000,
+      }),
+    ).rejects.toThrow(/exited before binding|did not bind/)
+    // Registry entry is torn back down on failure — a half-spawned
+    // daemon is worse than none.
+    expect(readDaemonState(name)).toBeNull()
+    expect(existsSync(codexTeammateDir(name))).toBe(false)
+  })
+
+  test('spawnDaemon rejects when the binary never binds within the deadline', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    // Tell the fake to delay binding longer than the readyTimeout so the
+    // probe times out while the process is still alive.
+    await expect(
+      spawnDaemon({
+        name,
+        binPath: FAKE_CODEX,
+        env: { ...process.env, CODEX_FAKE_BIND_DELAY_MS: '5000' },
+        readyTimeoutMs: 500,
+      }),
+    ).rejects.toThrow(/did not bind/)
+    expect(readDaemonState(name)).toBeNull()
+  })
+
+  test('spawnDaemon rejects when the binary path does not exist', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    await expect(
+      spawnDaemon({
+        name,
+        binPath: '/nonexistent/codex',
+        readyTimeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/exited before binding|did not bind|failed to spawn|ENOENT/)
+    expect(readDaemonState(name)).toBeNull()
+  })
+
+  test('spawnDaemon refuses to spawn over an already-alive daemon of the same name', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    await expect(
+      spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 }),
+    ).rejects.toThrow(/already alive/)
+  })
+})

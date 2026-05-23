@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+// Fake `codex` binary used by the supervisor tests. Accepts the same
+// `app-server --listen unix://<path>` invocation the real codex binary
+// understands, binds a unix-domain socket at that path, and then sleeps
+// forever (until SIGTERM / SIGKILL). The socket is non-functional —
+// nothing speaks WebSocket on it — but the supervisor's responsibility
+// stops at "the socket exists and the pid is alive", which is what this
+// fakes.
+//
+// Optional behavior knobs via environment, for the negative-path tests:
+//   CODEX_FAKE_BIND_DELAY_MS=<n>   wait <n>ms before binding the socket
+//   CODEX_FAKE_EXIT_BEFORE_BIND=1  exit 7 before ever binding (spawn-fail test)
+
+import { createServer } from 'node:net'
+
+const argv = process.argv.slice(2)
+if (argv[0] !== 'app-server') {
+  console.error(`codex-fake: expected 'app-server', got '${argv[0]}'`)
+  process.exit(2)
+}
+
+const listenIdx = argv.indexOf('--listen')
+if (listenIdx < 0 || listenIdx + 1 >= argv.length) {
+  console.error('codex-fake: --listen <url> required')
+  process.exit(2)
+}
+const url = argv[listenIdx + 1]
+const m = /^unix:\/\/(.+)$/.exec(url)
+if (m === null) {
+  console.error(`codex-fake: only unix://<path> URLs supported, got '${url}'`)
+  process.exit(2)
+}
+const socketPath = m[1]
+
+if (process.env.CODEX_FAKE_EXIT_BEFORE_BIND === '1') {
+  process.exit(7)
+}
+
+const delay = Number.parseInt(process.env.CODEX_FAKE_BIND_DELAY_MS ?? '0', 10) || 0
+
+function bind() {
+  const server = createServer(() => {
+    // Accept-and-ignore — we don't need to speak any protocol here.
+  })
+  server.listen(socketPath)
+}
+
+if (delay > 0) {
+  setTimeout(bind, delay)
+} else {
+  bind()
+}
+
+// Stay alive until killed.
+setInterval(() => {}, 60000)
+process.on('SIGTERM', () => process.exit(0))
+process.on('SIGINT', () => process.exit(0))

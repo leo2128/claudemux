@@ -14,7 +14,6 @@
  * `.agents/domains/cross-process-protocol.md` for the contract.
  */
 
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Root of the per-sid idle/busy/last markers the Claude Code hooks maintain. */
@@ -74,25 +73,75 @@ export function encodeProjectDir(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9-]/g, '-')
 }
 
-/** The core's own state directory — persistent, under `~/.claude/`. */
-export function coreStateDir(): string {
-  return join(homedir(), '.claude', 'claudemux')
+/**
+ * Root of the codex-daemon process registry. One subdirectory per codex
+ * teammate, holding that daemon's socket node, pid file, and bookkeeping.
+ *
+ * Per teammate rather than flat files keyed by suffix (the Claude-side
+ * `/tmp/teammate-<repo>.{sid,cwd,…}` shape) because a codex daemon owns
+ * substantially more state than a tmux session does — socket, pid,
+ * thread id, last-seen liveness, spawn-time config — and a directory makes
+ * reap atomic: `rm -rf` the dir tears the whole entry down in one move.
+ *
+ * Decision 0019 §5: this registry is `tm`'s authoritative record of the
+ * spawned daemon set. There is no in-memory mirror; every invocation
+ * reconstructs from these files.
+ */
+export function codexRegistryRoot(): string {
+  return '/tmp/teammate-codex'
+}
+
+/** This teammate's registry subdirectory — created by `tm spawn codex-<n>`. */
+export function codexTeammateDir(name: string): string {
+  return join(codexRegistryRoot(), name)
 }
 
 /**
- * The teammate registry file. Lives under `~/.claude/` rather than `/tmp` so
- * it survives a reboot — the registry is the core's authoritative record of
- * the teammate set and must outlive a core restart (Phase A exit gate).
+ * The unix-domain socket node this teammate's `codex app-server` listens on.
+ * The daemon is spawned with `--listen unix://<this path>`; the client
+ * connects to the same path. Living inside the teammate's registry directory
+ * keeps lifecycle parity — when the entry is reaped the socket node goes
+ * with it.
  */
-export function registryFile(): string {
-  return join(coreStateDir(), 'registry.json')
+export function codexSocketPath(name: string): string {
+  return join(codexTeammateDir(name), 'socket')
+}
+
+/** Daemon pid, ascii-decimal, single line. Read by liveness probes. */
+export function codexPidFile(name: string): string {
+  return join(codexTeammateDir(name), 'pid')
+}
+
+/** Epoch-seconds of the daemon spawn, ascii-decimal. Diagnostic only. */
+export function codexStartedAtFile(name: string): string {
+  return join(codexTeammateDir(name), 'started-at')
 }
 
 /**
- * The unix-domain socket the resident core's MCP server listens on. In `/tmp`
- * on purpose: the socket is an ephemeral rendezvous point, recreated on every
- * core start, with nothing to preserve across a reboot.
+ * The teammate's current codex thread id, as returned by `thread/start`.
+ * Absent before the first turn completes. `tm send` reads this to route a
+ * `turn/start` onto the right thread; `tm doctor` reports it for inspection.
  */
-export function coreSocketPath(): string {
-  return '/tmp/claudemux-core.sock'
+export function codexThreadFile(name: string): string {
+  return join(codexTeammateDir(name), 'thread')
+}
+
+/**
+ * Epoch-seconds of the last successful RPC against this daemon. Updated by
+ * every verb that completes a round-trip; consulted by `tm doctor` to
+ * distinguish a quiet-but-healthy daemon from a hung one. Distinct from
+ * `started-at` — the latter never changes after spawn.
+ */
+export function codexLastSeenFile(name: string): string {
+  return join(codexTeammateDir(name), 'last-seen')
+}
+
+/**
+ * Spawn-time configuration (model, reasoning effort, sandbox mode,
+ * approval policy, …) — the inputs `tm spawn` baked into the daemon, kept
+ * so `tm doctor` and a future `tm resume codex-<n>` can read them back.
+ * JSON-encoded text file.
+ */
+export function codexMetaFile(name: string): string {
+  return join(codexTeammateDir(name), 'meta.json')
 }

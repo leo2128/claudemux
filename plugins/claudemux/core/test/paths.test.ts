@@ -9,13 +9,19 @@ import { describe, expect, test } from 'vitest'
 
 import {
   busyMarkerFor,
-  coreSocketPath,
+  codexLastSeenFile,
+  codexMetaFile,
+  codexPidFile,
+  codexRegistryRoot,
+  codexSocketPath,
+  codexStartedAtFile,
+  codexTeammateDir,
+  codexThreadFile,
   cwdFile,
   encodeProjectDir,
   idleDir,
   idleMarkerFor,
   lastFileFor,
-  registryFile,
   sidFile,
 } from '../src/paths'
 
@@ -51,12 +57,26 @@ describe('encodeProjectDir mirrors Claude Code project-dir naming', () => {
   })
 })
 
-describe('core state paths', () => {
-  test('the registry lives under ~/.claude so it survives a reboot', () => {
-    expect(registryFile()).toMatch(/\/\.claude\/claudemux\/registry\.json$/)
+describe('codex-daemon registry paths', () => {
+  test('the registry root is /tmp/teammate-codex', () => {
+    expect(codexRegistryRoot()).toBe('/tmp/teammate-codex')
   })
 
-  test('the socket is an ephemeral /tmp rendezvous', () => {
-    expect(coreSocketPath()).toBe('/tmp/claudemux-core.sock')
+  test('each teammate gets a directory under the registry root', () => {
+    expect(codexTeammateDir('codex-1')).toBe('/tmp/teammate-codex/codex-1')
+  })
+
+  test('the daemon files live inside the teammate directory', () => {
+    expect(codexSocketPath('codex-1')).toBe('/tmp/teammate-codex/codex-1/socket')
+    expect(codexPidFile('codex-1')).toBe('/tmp/teammate-codex/codex-1/pid')
+    expect(codexStartedAtFile('codex-1')).toBe('/tmp/teammate-codex/codex-1/started-at')
+    expect(codexThreadFile('codex-1')).toBe('/tmp/teammate-codex/codex-1/thread')
+    expect(codexLastSeenFile('codex-1')).toBe('/tmp/teammate-codex/codex-1/last-seen')
+    expect(codexMetaFile('codex-1')).toBe('/tmp/teammate-codex/codex-1/meta.json')
+  })
+
+  test('teammate names with hyphens and digits round-trip into their own dir', () => {
+    expect(codexTeammateDir('codex-reviewer-2')).toBe('/tmp/teammate-codex/codex-reviewer-2')
+    expect(codexSocketPath('codex-reviewer-2')).toBe('/tmp/teammate-codex/codex-reviewer-2/socket')
   })
 })

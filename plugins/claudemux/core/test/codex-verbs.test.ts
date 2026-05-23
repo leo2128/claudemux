@@ -22,7 +22,13 @@ import {
   codexSpawn,
   codexWait,
   isCodexTarget,
+  subscribeTurnCollection,
 } from '../src/codex-verbs'
+import type { CodexWsClient } from '../src/codex-ws'
+import type {
+  NotificationHandler,
+  ServerRequestHandler,
+} from '../src/codex-ws'
 import { reapDaemon } from '../src/codex-supervisor'
 import { codexTeammateDir } from '../src/paths'
 import { closeSync, openSync, writeSync } from 'node:fs'
@@ -181,5 +187,213 @@ describe('codexAsk — pool borrow semantics', () => {
     const result = await codexAsk('hi?')
     expect(result.code).toBe(1)
     expect(result.stderr).toMatch(/all 1 codex teammate\(s\) are dead/)
+  })
+})
+
+/**
+ * `subscribeTurnCollection` is the seam that fixes the empty-items bug the
+ * codex driver shipped with — every `turn/completed` envelope comes back with
+ * `items: []` / `itemsView: "notLoaded"`, and the real items only arrive on
+ * the parallel `item/completed` stream. The collector subscribes to both and
+ * resolves a merged Turn.
+ *
+ * These tests pin the collector against the protocol contract directly: a
+ * fake notification source (a stand-in for `CodexWsClient`) replays the
+ * exact sequence the daemon emits, and the collector's resolved Turn is
+ * checked field by field.
+ */
+describe('subscribeTurnCollection — turn/item stream merge', () => {
+  function makeFakeClient(): {
+    client: CodexWsClient
+    emit: NotificationHandler
+  } {
+    const handlers: NotificationHandler[] = []
+    const fake = {
+      onNotification(handler: NotificationHandler): void {
+        handlers.push(handler)
+      },
+      // The collector never touches these; the casts below keep the
+      // signature compatible with the real `CodexWsClient` interface.
+      setServerRequestHandler(_h: ServerRequestHandler): void {},
+      ready(): Promise<void> {
+        return Promise.resolve()
+      },
+      request<R = unknown>(): Promise<R> {
+        throw new Error('not used by the collector')
+      },
+      close(): void {},
+    }
+    const emit: NotificationHandler = (notif) => {
+      for (const h of handlers) h(notif)
+    }
+    return { client: fake as unknown as CodexWsClient, emit }
+  }
+
+  test('items emitted before turn/completed are merged into the resolved Turn', async () => {
+    const { client, emit } = makeFakeClient()
+    const collector = subscribeTurnCollection(client, 'thread-1')
+
+    // Daemon protocol: each ItemCompleted is sent on the wire BEFORE the
+    // matching TurnCompleted, in the same mpsc channel. Replay that order.
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-A',
+        completedAtMs: 1,
+        item: { type: 'agentMessage', id: 'm1', text: 'hi', phase: null, memoryCitation: null },
+      },
+    } as never)
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-A',
+        completedAtMs: 2,
+        item: { type: 'reasoning', id: 'r1', summary: ['s'], content: ['c'] },
+      },
+    } as never)
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-A',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 100,
+          completedAt: 101,
+          durationMs: 1000,
+        },
+      },
+    } as never)
+
+    const resolved = await collector.awaitTurn()
+    expect(resolved.threadId).toBe('thread-1')
+    expect(resolved.turn.id).toBe('turn-A')
+    // The fix: items is populated from the stream, not the empty daemon husk.
+    expect(resolved.turn.items.length).toBe(2)
+    expect(resolved.turn.items[0]).toMatchObject({ type: 'agentMessage', text: 'hi' })
+    expect(resolved.turn.items[1]).toMatchObject({ type: 'reasoning' })
+    // itemsView is flipped to "full" because the client now has every item
+    // the daemon emitted for this turn — not the daemon's "notLoaded" status.
+    expect(resolved.turn.itemsView).toBe('full')
+    // Turn metadata (timing, status, error) carries through from turn/completed.
+    expect(resolved.turn.status).toBe('completed')
+    expect(resolved.turn.durationMs).toBe(1000)
+  })
+
+  test('items addressed to a different thread or turn are ignored', async () => {
+    const { client, emit } = makeFakeClient()
+    const collector = subscribeTurnCollection(client, 'thread-1')
+
+    // A noisy daemon (multiple concurrent threads) interleaves item events
+    // across threads. The collector filters by its bound thread; cross-thread
+    // items must not leak into the merged turn.
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-2',
+        turnId: 'turn-X',
+        completedAtMs: 1,
+        item: { type: 'agentMessage', id: 'mX', text: 'other thread', phase: null, memoryCitation: null },
+      },
+    } as never)
+    // An ItemCompleted whose `turnId` doesn't match the eventual
+    // `turn.id` of `turn/completed` is dropped on the floor too — the
+    // collector buckets by turnId and only the matching bucket folds in.
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-stale',
+        completedAtMs: 2,
+        item: { type: 'agentMessage', id: 'mStale', text: 'stale turn', phase: null, memoryCitation: null },
+      },
+    } as never)
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-A',
+        completedAtMs: 3,
+        item: { type: 'agentMessage', id: 'm1', text: 'real', phase: null, memoryCitation: null },
+      },
+    } as never)
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-A',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 0,
+          completedAt: 1,
+          durationMs: 1,
+        },
+      },
+    } as never)
+
+    const resolved = await collector.awaitTurn()
+    expect(resolved.turn.items.length).toBe(1)
+    expect(resolved.turn.items[0]).toMatchObject({ id: 'm1', text: 'real' })
+  })
+
+  test('turn/completed addressed to a different thread does not resolve the wait', async () => {
+    const { client, emit } = makeFakeClient()
+    const collector = subscribeTurnCollection(client, 'thread-1')
+
+    // A turn-completed for an unrelated thread arrives first; the
+    // collector must keep waiting for its own thread's completion.
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-other',
+        turn: {
+          id: 'turn-other',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 0,
+          completedAt: 0,
+          durationMs: 0,
+        },
+      },
+    } as never)
+
+    let resolved = false
+    void collector.awaitTurn().then(() => {
+      resolved = true
+    })
+    // Yield once so the microtask queue drains; a buggy collector would
+    // have resolved on the stranger's turn/completed.
+    await new Promise((res) => setTimeout(res, 5))
+    expect(resolved).toBe(false)
+
+    // Now drive the real thread's completion and confirm resolve.
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-A',
+          items: [],
+          itemsView: 'notLoaded',
+          status: 'completed',
+          error: null,
+          startedAt: 0,
+          completedAt: 0,
+          durationMs: 0,
+        },
+      },
+    } as never)
+    await new Promise((res) => setTimeout(res, 5))
+    expect(resolved).toBe(true)
   })
 })

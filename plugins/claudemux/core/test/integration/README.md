@@ -1,13 +1,15 @@
 # Live-teammate integration suite
 
 This directory drives the **racy hot-path verbs** — `spawn`, `send`, `wait`,
-`compact`, `resume` — against a real `claude` teammate in a real tmux session.
+`compact`, `resume`, plus `ask` on the codex driver — against a real teammate
+of each kind: a `claude` REPL inside tmux, and a `codex app-server` reached
+over a unix-socket WebSocket.
 
 The conformance harness (`test/conformance.test.ts`) pins the migrated verbs to
-`tm`'s behavior with a *faked* tmux and no `claude` process. It cannot reach
-the hot path, whose correctness is the interaction of `tmux send-keys`, a live
-REPL, the claudemux hooks, and the `/tmp/claude-idle` turn signal. This suite
-exercises exactly that.
+`tm`'s behavior with a *faked* tmux and no `claude` process; the unit
+suite for the codex driver fakes the daemon with a node shim that binds
+a socket but never speaks the protocol. The real protocol-layer behavior
+only proves out against the real binaries — that is this suite's job.
 
 ## Files
 
@@ -15,7 +17,8 @@ exercises exactly that.
 |---|---|---|
 | `harness.ts` | The framework — dispatcher fixture, `tm` runner, trust seeding, the live precondition probe. | imported |
 | `harness.test.ts` | Unit tests for the harness's pure pieces (the `~/.claude.json` transforms). Fast, no teammate. | `npm test` (and CI) |
-| `hot-path.itest.ts` | The live suite — one ordered lifecycle against a shared teammate. Slow; real Claude Code turns. | `--config` only |
+| `hot-path.itest.ts` | The live Claude suite — one ordered lifecycle against a shared teammate. Slow; real Claude Code turns. | `--config` only |
+| `codex.itest.ts` | The live codex suite — smoke (spawn/doctor/kill, no turn spend) and an opt-in turn-spending slice (`tm send`, `tm ask`). | `--config` only |
 
 ## Running it
 
@@ -54,6 +57,35 @@ network access. Each run costs a handful of model turns.
 
 See [decision 0020](/.agents/decisions/0020-live-teammate-integration-harness.md)
 for why trust is seeded this way rather than via an isolated config dir.
+
+## codex.itest.ts — live codex driver
+
+`codex.itest.ts` skips itself when `codex` is not on PATH or
+`~/.codex/auth.json` is missing — running it must never accidentally fail
+a local dev box without codex set up.
+
+The suite uses its own throwaway registry root (`/tmp/cmxlive-XXX/`) via
+`CLAUDEMUX_CODEX_REGISTRY_ROOT`, so the user's production
+`/tmp/teammate-codex/` is untouched. `CLAUDEMUX_CODEX_BIN` is honored,
+so a non-default codex install can be pointed at by setting that env.
+
+The suite has two slices:
+
+- **Smoke** runs by default when codex is available. It spawns one
+  daemon, observes `tm doctor` reports it, kills its process out of
+  band so the next doctor pass reaps a dead-pid orphan, and confirms
+  `tm kill` is a no-op on the already-gone teammate. No model usage.
+- **Turn-spending** is gated by `CLAUDEMUX_CODEX_SPEND_TOKENS=1` and
+  drives real `tm send` + `tm ask` turns. Each turn costs OpenAI
+  credits; the gate keeps a routine `--config` run cheap.
+
+```bash
+# Smoke only — no token spend.
+npx vitest run --config vitest.integration.config.ts test/integration/codex.itest.ts
+
+# Smoke + turn-spending slice.
+CLAUDEMUX_CODEX_SPEND_TOKENS=1 npx vitest run --config vitest.integration.config.ts test/integration/codex.itest.ts
+```
 
 ## Re-aiming the suite at the native verbs
 

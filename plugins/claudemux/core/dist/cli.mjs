@@ -4576,14 +4576,50 @@ function readThreadId(name) {
     return null;
   }
 }
-function waitForNotification(client, method) {
-  return new Promise((resolve) => {
-    client.onNotification((notif) => {
-      if (notif.method === method) {
-        resolve(notif);
-      }
-    });
+function subscribeTurnCollection(client, threadId) {
+  const itemsByTurn = /* @__PURE__ */ new Map();
+  let cached = null;
+  let awaiting = null;
+  let resolveTurn = null;
+  let done = false;
+  const onResolve = (params) => {
+    const items = itemsByTurn.get(params.turn.id) ?? [];
+    const itemsView = items.length > 0 ? "full" : "notLoaded";
+    const merged = {
+      ...params,
+      turn: { ...params.turn, items, itemsView }
+    };
+    cached = merged;
+    if (resolveTurn !== null) {
+      resolveTurn(merged);
+      resolveTurn = null;
+    }
+  };
+  client.onNotification((notif) => {
+    if (done) return;
+    if (notif.method === "item/completed") {
+      const params = notif.params;
+      if (params.threadId !== threadId) return;
+      const bucket = itemsByTurn.get(params.turnId) ?? [];
+      bucket.push(params.item);
+      itemsByTurn.set(params.turnId, bucket);
+    } else if (notif.method === "turn/completed") {
+      const params = notif.params;
+      if (params.threadId !== threadId) return;
+      done = true;
+      onResolve(params);
+    }
   });
+  return {
+    awaitTurn() {
+      if (cached !== null) return Promise.resolve(cached);
+      if (awaiting !== null) return awaiting;
+      awaiting = new Promise((res) => {
+        resolveTurn = res;
+      });
+      return awaiting;
+    }
+  };
 }
 async function codexSpawn(name) {
   try {
@@ -4599,14 +4635,13 @@ async function codexSpawn(name) {
   }
 }
 async function runTurn(client, threadId, prompt, wait2) {
-  const completed = wait2 ? waitForNotification(client, "turn/completed") : null;
+  const collector = wait2 ? subscribeTurnCollection(client, threadId) : null;
   await client.request("turn/start", {
     threadId,
     input: [{ type: "text", text: prompt, text_elements: [] }]
   });
-  if (completed === null) return null;
-  const notif = await completed;
-  return notif.params;
+  if (collector === null) return null;
+  return collector.awaitTurn();
 }
 async function codexSend(name, prompt, opts = {}) {
   if (!daemonAlive(name)) {
@@ -4671,14 +4706,25 @@ async function codexWait(name) {
   if (!daemonAlive(name)) {
     return die(`codex teammate '${name}' is not alive`);
   }
+  const threadId = readThreadId(name);
+  if (threadId === null) {
+    return die(
+      `codex teammate '${name}' has no started thread yet \u2014 run 'tm send ${name} --prompt "\u2026"' first`
+    );
+  }
   let client = null;
   try {
     client = await openInitialized(name);
-    const completed = await waitForNotification(client, "turn/completed");
+    await client.request(
+      "thread/resume",
+      { threadId, persistExtendedHistory: false }
+    );
+    const collector = subscribeTurnCollection(client, threadId);
+    const completed = await collector.awaitTurn();
     touchLastSeen(name);
     return {
       code: 0,
-      stdout: JSON.stringify(completed.params, null, 2) + "\n",
+      stdout: JSON.stringify(completed, null, 2) + "\n",
       stderr: ""
     };
   } catch (e) {

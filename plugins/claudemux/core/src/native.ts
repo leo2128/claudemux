@@ -2087,7 +2087,7 @@ const spawn: NativeVerb = async (args, _options, env) => {
   // Codex teammates run as per-teammate daemons and are not tmux sessions.
   // Route explicit `--engine codex`, the legacy `codex-<n>` pool names, and
   // the nested `codex/<name>` shape through the CodexEngine adapter.
-  if (engine === 'codex' || isCodexTarget(repo)) {
+  if (engine === 'codex' || (engine === null && isCodexTarget(repo))) {
     if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
     if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
     if (noWait) return die('tm spawn: --no-wait is not supported for codex teammates')
@@ -2103,10 +2103,6 @@ const spawn: NativeVerb = async (args, _options, env) => {
       displayName: null,
       engine: env.engines?.get('codex'),
     })
-  }
-
-  if (engine === 'claude') {
-    // Explicit Claude stays on the tmux-backed path below.
   }
 
   if (noWait && !hasPrompt) {

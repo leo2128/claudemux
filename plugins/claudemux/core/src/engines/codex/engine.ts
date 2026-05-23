@@ -49,6 +49,8 @@ import type { TurnCompletedNotification } from './events.js'
 import { CodexWsClient } from './rpc.js'
 import { runTurn, subscribeTurnCollection } from './events.js'
 import {
+  CodexDaemonAlreadyAliveError,
+  CodexDaemonSpawnInProgressError,
   daemonAlive,
   isProcessAlive,
   listDaemons,
@@ -221,8 +223,13 @@ export class CodexEngine implements Engine {
       )
       return { kind: 'spawned', name: req.name, firstTurn }
     } catch (e) {
-      await reapDaemon(req.name)
-      removeBaseRecord(req.name)
+      if (e instanceof CodexDaemonAlreadyAliveError) {
+        return { kind: 'already-exists', existingEngine: 'codex' }
+      }
+      if (!(e instanceof CodexDaemonSpawnInProgressError)) {
+        await reapDaemon(req.name)
+        removeBaseRecord(req.name)
+      }
       return {
         kind: 'failed',
         message: e instanceof Error ? e.message : String(e),

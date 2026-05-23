@@ -9,8 +9,17 @@
  * binary.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -30,8 +39,14 @@ import type {
   ServerRequestHandler,
 } from '../src/engines/codex/rpc'
 import { reapDaemon } from '../src/engines/codex/supervisor'
-import { codexTeammateDir } from '../src/engines/codex/persistence'
-import { closeSync, openSync, writeSync } from 'node:fs'
+import {
+  CodexTeammateRecord,
+  codexPidFile,
+  codexStartedAtFile,
+  codexTeammateDir,
+  removeBaseRecord,
+  writeBaseRecord,
+} from '../src/engines/codex/persistence'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
@@ -86,11 +101,37 @@ describe('isCodexTarget — verb-fork prefix detection', () => {
     expect(isCodexTarget('Codex-1')).toBe(false)
     expect(isCodexTarget('')).toBe(false)
   })
+
+  test('a stale daemon registry does not define codex identity', () => {
+    const name = `plain-stale-${Date.now()}`
+    mkdirSync(codexTeammateDir(name), { recursive: true })
+    writeFileSync(codexPidFile(name), `${process.pid}\n`)
+    writeFileSync(codexStartedAtFile(name), `${Math.floor(Date.now() / 1000)}\n`)
+
+    expect(isCodexTarget(name)).toBe(false)
+  })
+
+  test('a base record with engine=codex defines codex identity', () => {
+    const name = `plain-record-${Date.now()}`
+    writeBaseRecord(new CodexTeammateRecord({
+      name,
+      cwd: '/tmp',
+      createdAt: 1,
+      displayName: null,
+    }))
+    try {
+      expect(isCodexTarget(name)).toBe(true)
+    } finally {
+      removeBaseRecord(name)
+    }
+  })
 })
 
 describe('codexKill — idempotency and message shape', () => {
   test('killing a non-existent teammate is a no-op with a clear message', async () => {
-    const result = await codexKill(nameUnder())
+    const name = `codex-missing-${Date.now()}`
+    removeBaseRecord(name)
+    const result = await codexKill(name)
     expect(result.code).toBe(0)
     expect(result.stderr).toMatch(/no codex teammate '.*' to kill \(already gone\)/)
     expect(result.stdout).toBe('')
@@ -106,6 +147,22 @@ describe('codexKill — idempotency and message shape', () => {
     expect(killed.code).toBe(0)
     expect(killed.stderr).toMatch(/^killed: .* \(was pid=\d+\)\n$/)
     expect(existsSync(codexTeammateDir(name))).toBe(false)
+  })
+
+  test('killing a base-record-only codex teammate reports a successful kill', async () => {
+    const name = nameUnder()
+    writeBaseRecord(new CodexTeammateRecord({
+      name,
+      cwd: '/tmp',
+      createdAt: 1,
+      displayName: null,
+    }))
+    try {
+      const killed = await codexKill(name)
+      expect(killed).toEqual({ code: 0, stdout: '', stderr: `killed: ${name}\n` })
+    } finally {
+      removeBaseRecord(name)
+    }
   })
 })
 

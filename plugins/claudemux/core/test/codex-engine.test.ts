@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { CodexEngine } from '../src/engines/codex/engine'
 import {
+  daemonAlive,
   readDaemonState,
   reapDaemon,
 } from '../src/engines/codex/supervisor'
@@ -33,6 +34,10 @@ let counter = 0
 
 function ctx(): EngineContext {
   return { now: () => Date.now(), env: process.env }
+}
+
+function ctxWithEnv(env: NodeJS.ProcessEnv): EngineContext {
+  return { now: () => Date.now(), env }
 }
 
 function nameUnder(): string {
@@ -101,6 +106,29 @@ describe('CodexEngine — core lifecycle', () => {
       ctx(),
     )
     expect(duplicate).toEqual({ kind: 'already-exists', existingEngine: 'codex' })
+  })
+
+  test('concurrent same-name spawn keeps the winning daemon alive', async () => {
+    const name = nameUnder()
+    spawned.push(name)
+    const slowCtx = ctxWithEnv({ ...process.env, CODEX_FAKE_BIND_DELAY_MS: '250' })
+
+    const [first, second] = await Promise.all([
+      engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, slowCtx),
+      engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, slowCtx),
+    ])
+
+    const results = [first, second]
+    expect(results.filter((result) => result.kind === 'spawned')).toHaveLength(1)
+    const loser = results.find((result) => result.kind === 'failed')
+    expect(loser).toMatchObject({ kind: 'failed' })
+    if (loser?.kind === 'failed') expect(loser.message).toMatch(/already being spawned/)
+    expect(daemonAlive(name)).toBe(true)
+    expect(await engine.status({ name, lines: null }, ctx())).toMatchObject({
+      kind: 'present',
+      name,
+      engine: 'codex',
+    })
   })
 
   test('doctor reaps a crashed daemon registry entry', async () => {

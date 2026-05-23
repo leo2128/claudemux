@@ -193,6 +193,23 @@ describe('codex-supervisor — reap', () => {
     await expect(reapDaemon(nameUnder())).resolves.toBeUndefined()
   })
 
+  test('reapDaemon removes only the requested nested-name registry', async () => {
+    const parent = nameUnder()
+    const child = `${parent}/child`
+    toReap.push(parent, child)
+    await spawnDaemon({ name: parent, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    await spawnDaemon({ name: child, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    await reapDaemon(parent)
+
+    expect(readDaemonState(parent)).toBeNull()
+    expect(existsSync(codexPidFile(parent))).toBe(false)
+    expect(existsSync(codexSocketPath(parent))).toBe(false)
+    expect(readDaemonState(child)).not.toBeNull()
+    expect(daemonAlive(child)).toBe(true)
+    expect(existsSync(codexTeammateDir(child))).toBe(true)
+  })
+
   test('reapDaemon tears down a stale entry whose process has already died', async () => {
     const name = nameUnder()
     const state = await spawnDaemon({ name, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
@@ -253,6 +270,20 @@ describe('codex-supervisor — reap', () => {
 })
 
 describe('codex-supervisor — failure paths', () => {
+  test('stale cleanup before parent spawn preserves an existing nested child registry', async () => {
+    const parent = nameUnder()
+    const child = `${parent}/child`
+    toReap.push(parent, child)
+    await spawnDaemon({ name: child, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    await spawnDaemon({ name: parent, binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+
+    expect(readDaemonState(parent)).not.toBeNull()
+    expect(daemonAlive(parent)).toBe(true)
+    expect(readDaemonState(child)).not.toBeNull()
+    expect(daemonAlive(child)).toBe(true)
+  })
+
   test('spawnDaemon rejects when the binary exits before binding the socket', async () => {
     const name = nameUnder()
     toReap.push(name)

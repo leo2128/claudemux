@@ -35,6 +35,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -42,6 +43,7 @@ import {
 } from 'node:fs'
 
 import {
+  codexBorrowLockFile,
   codexLastSeenFile,
   codexMetaFile,
   codexPidFile,
@@ -62,6 +64,20 @@ export interface DaemonState {
   socketPath: string
   threadId: string | null
   lastSeen: number | null
+}
+
+export class CodexDaemonSpawnInProgressError extends Error {
+  constructor(name: string) {
+    super(`codex daemon '${name}' is already being spawned`)
+    this.name = 'CodexDaemonSpawnInProgressError'
+  }
+}
+
+export class CodexDaemonAlreadyAliveError extends Error {
+  constructor(name: string, pid: number | string) {
+    super(`codex daemon '${name}' is already alive (pid ${pid}); reap it first with tm doctor / tm kill`)
+    this.name = 'CodexDaemonAlreadyAliveError'
+  }
 }
 
 export interface SpawnDaemonOptions {
@@ -232,6 +248,28 @@ export function listDaemons(): string[] {
   }
 }
 
+function removeSelfRegistry(name: string): void {
+  for (const file of [
+    codexPidFile(name),
+    codexSocketPath(name),
+    codexStartedAtFile(name),
+    codexThreadFile(name),
+    codexLastSeenFile(name),
+    codexStdoutLogFile(name),
+    codexStderrLogFile(name),
+    codexMetaFile(name),
+    codexBorrowLockFile(name),
+  ]) {
+    rmSync(file, { force: true })
+  }
+  try {
+    rmdirSync(codexTeammateDir(name))
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e
+  }
+}
+
 /**
  * Spawn one `codex app-server` daemon, detached so it outlives this `tm`
  * invocation. Resolves once the listen socket exists on disk.
@@ -252,19 +290,15 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
     lockFd = openSync(spawnLock, 'wx', 0o600)
     writeSync(lockFd, `${process.pid}\n`)
   } catch {
-    throw new Error(`codex daemon '${name}' is already being spawned`)
+    throw new CodexDaemonSpawnInProgressError(name)
   }
 
   try {
     if (daemonAlive(name)) {
-      throw new Error(
-        `codex daemon '${name}' is already alive (pid ${
-          readDaemonState(name)?.pid ?? '?'
-        }); reap it first with tm doctor / tm kill`,
-      )
+      throw new CodexDaemonAlreadyAliveError(name, readDaemonState(name)?.pid ?? '?')
     }
     // Stale entry — torn down first so we never carry a previous pid forward.
-    rmSync(dir, { recursive: true, force: true })
+    removeSelfRegistry(name)
     mkdirSync(dir, { recursive: true })
 
     const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs)
@@ -341,7 +375,7 @@ async function spawnDaemonUnlocked(
   } catch (e) {
     closeSync(stdoutFd)
     closeSync(stderrFd)
-    rmSync(dir, { recursive: true, force: true })
+    removeSelfRegistry(name)
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${(e as Error).message}`,
     )
@@ -362,7 +396,7 @@ async function spawnDaemonUnlocked(
 
   const pid = child.pid
   if (pid === undefined) {
-    rmSync(dir, { recursive: true, force: true })
+    removeSelfRegistry(name)
     throw new Error(`codex daemon '${name}' spawned without a pid`)
   }
 
@@ -383,7 +417,7 @@ async function spawnDaemonUnlocked(
     // spawned the rust binary by the time `waitForSocket` times out
     // in some failure modes, and a leader-only kill would orphan it.
     killProcessGroup(pid, 'SIGKILL')
-    rmSync(dir, { recursive: true, force: true })
+    removeSelfRegistry(name)
     throw e
   }
 
@@ -433,9 +467,9 @@ async function waitForSocket(
 
 /**
  * Tear a daemon down: SIGTERM the whole process group, give it 1s to
- * exit cleanly, then SIGKILL the group, then `rm -rf` the registry
- * directory. Idempotent — a missing entry, an already-dead leader, or
- * a group that no longer has any members is not an error.
+ * exit cleanly, then SIGKILL the group, then remove this teammate's
+ * registry files. Idempotent — a missing entry, an already-dead leader,
+ * or a group that no longer has any members is not an error.
  *
  * Group-kill (`killProcessGroup`) rather than pid-kill is load-bearing:
  * the codex node wrapper `spawn`s the rust binary as a child in its
@@ -446,7 +480,7 @@ async function waitForSocket(
  *
  * The orphan-cleanup path matters even when the registry says the
  * leader is dead — the group can still have a reparented member —
- * so the SIGKILL fires unconditionally before the `rm -rf`.
+ * so the SIGKILL fires unconditionally before registry cleanup.
  */
 export async function reapDaemon(name: string): Promise<void> {
   const state = readDaemonState(name)
@@ -465,7 +499,7 @@ export async function reapDaemon(name: string): Promise<void> {
     // exact case we are guarding against.
     killProcessGroup(state.pid, 'SIGKILL')
   }
-  rmSync(codexTeammateDir(name), { recursive: true, force: true })
+  removeSelfRegistry(name)
 }
 
 /** Touch `last-seen` for `name` — call after a successful RPC. */

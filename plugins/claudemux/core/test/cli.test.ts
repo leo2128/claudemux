@@ -8,7 +8,8 @@
  * tests here are about wiring (which handler was reached, with which args).
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
@@ -17,6 +18,18 @@ import type { ColumnRunner } from '../src/column'
 import type { GrepRunner } from '../src/grep'
 import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from '../src/help'
 import type { NativeEnv } from '../src/native'
+import {
+  codexPidFile,
+  codexStartedAtFile,
+  codexTeammateDir,
+} from '../src/engines/codex/persistence'
+import {
+  cwdFile,
+  lastFileFor,
+  readyFile,
+  sendAtFile,
+  sidFile,
+} from '../src/paths'
 import type { TmuxRunner } from '../src/tmux'
 import { TM_VERBS } from '../src/verbs'
 
@@ -233,6 +246,46 @@ describe('native dispatch', () => {
     // verb at least got past dispatch (it will fail on the missing ledger).
     const result = await runCli(['archive', 'task-9'], fakeEnv(), 'no ledger here')
     expect(result.code).not.toBe(0)
+  })
+
+  test('explicit Claude spawn is not hijacked by a stale codex registry entry', async () => {
+    const repo = `stale-claude-${Date.now()}`
+    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
+    const repoDir = join(dispatcherDir, repo)
+    mkdirSync(repoDir, { recursive: true })
+    mkdirSync(codexTeammateDir(repo), { recursive: true })
+    writeFileSync(codexPidFile(repo), `${process.pid}\n`)
+    writeFileSync(codexStartedAtFile(repo), `${Math.floor(Date.now() / 1000)}\n`)
+    const tmuxCalls: string[][] = []
+    const runTmux: TmuxRunner = async (args) => {
+      tmuxCalls.push([...args])
+      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' }
+      if (args[0] === 'new-session') {
+        mkdirSync(dirname(readyFile(repo)), { recursive: true })
+        writeFileSync(readyFile(repo), '')
+        return { code: 0, stdout: '%1\n', stderr: '' }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    }
+
+    try {
+      const result = await runCli(
+        ['spawn', repo, '--engine', 'claude'],
+        fakeEnv({ dispatcherDir, runTmux }),
+      )
+      expect(result.code).toBe(0)
+      expect(tmuxCalls.some((args) => args[0] === 'new-session')).toBe(true)
+      expect(result.stderr).toContain(`tmux=teammate-${repo}`)
+    } finally {
+      const sid = existsSync(sidFile(repo)) ? readFileSync(sidFile(repo), 'utf8').trim() : ''
+      rmSync(dispatcherDir, { recursive: true, force: true })
+      rmSync(cwdFile(repo), { force: true })
+      rmSync(sidFile(repo), { force: true })
+      rmSync(readyFile(repo), { force: true })
+      rmSync(sendAtFile(repo), { force: true })
+      if (sid.length > 0) rmSync(lastFileFor(sid), { force: true })
+      rmSync(codexTeammateDir(repo), { recursive: true, force: true })
+    }
   })
 })
 

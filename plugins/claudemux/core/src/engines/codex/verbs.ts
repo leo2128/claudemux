@@ -49,7 +49,7 @@ export function isCodexTarget(name: string): boolean {
   if (name.startsWith('codex-') || name.startsWith('codex/')) return true
   const base = readBaseRecord(name)
   if (base?.engine === 'codex') return true
-  return readDaemonState(name) !== null
+  return false
 }
 
 export interface CodexSpawnOptions {
@@ -143,9 +143,10 @@ export async function codexKill(
   opts: { readonly engine?: Engine } = {},
 ): Promise<TmResult> {
   const state = readDaemonState(name)
+  const base = readBaseRecord(name)
   const result = await resolveEngine(opts.engine).kill({ name }, engineContext())
   if (result.kind === 'failed') return die(result.message)
-  if (state === null) {
+  if (result.kind === 'not-found' || (state === null && base === null)) {
     return {
       code: 0,
       stdout: '',
@@ -155,10 +156,7 @@ export async function codexKill(
   return {
     code: 0,
     stdout: '',
-    stderr:
-      state === null
-        ? `killed: ${name}\n`
-        : `killed: ${name} (was pid=${state.pid})\n`,
+    stderr: state === null ? `killed: ${name}\n` : `killed: ${name} (was pid=${state.pid})\n`,
   }
 }
 

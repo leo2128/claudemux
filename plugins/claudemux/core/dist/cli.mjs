@@ -4415,6 +4415,7 @@ import {
   readFileSync as readFileSync2,
   readdirSync,
   renameSync as renameSync2,
+  rmdirSync,
   rmSync as rmSync2,
   statSync,
   writeFileSync as writeFileSync2,
@@ -4592,6 +4593,18 @@ var CodexTeammateRecord = class extends TeammateRecord {
 };
 
 // src/engines/codex/supervisor.ts
+var CodexDaemonSpawnInProgressError = class extends Error {
+  constructor(name) {
+    super(`codex daemon '${name}' is already being spawned`);
+    this.name = "CodexDaemonSpawnInProgressError";
+  }
+};
+var CodexDaemonAlreadyAliveError = class extends Error {
+  constructor(name, pid) {
+    super(`codex daemon '${name}' is already alive (pid ${pid}); reap it first with tm doctor / tm kill`);
+    this.name = "CodexDaemonAlreadyAliveError";
+  }
+};
 function atomicWrite2(path, content) {
   const tmpPath = `${path}.tmp`;
   const fd = openSync(tmpPath, "w", 384);
@@ -4680,6 +4693,27 @@ function listDaemons() {
     throw e;
   }
 }
+function removeSelfRegistry(name) {
+  for (const file of [
+    codexPidFile(name),
+    codexSocketPath(name),
+    codexStartedAtFile(name),
+    codexThreadFile(name),
+    codexLastSeenFile(name),
+    codexStdoutLogFile(name),
+    codexStderrLogFile(name),
+    codexMetaFile(name),
+    codexBorrowLockFile(name)
+  ]) {
+    rmSync2(file, { force: true });
+  }
+  try {
+    rmdirSync(codexTeammateDir(name));
+  } catch (e) {
+    const code = e.code;
+    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw e;
+  }
+}
 async function spawnDaemon(opts) {
   const { name } = opts;
   const dir = codexTeammateDir(name);
@@ -4693,15 +4727,13 @@ async function spawnDaemon(opts) {
     writeSync(lockFd, `${process.pid}
 `);
   } catch {
-    throw new Error(`codex daemon '${name}' is already being spawned`);
+    throw new CodexDaemonSpawnInProgressError(name);
   }
   try {
     if (daemonAlive(name)) {
-      throw new Error(
-        `codex daemon '${name}' is already alive (pid ${readDaemonState(name)?.pid ?? "?"}); reap it first with tm doctor / tm kill`
-      );
+      throw new CodexDaemonAlreadyAliveError(name, readDaemonState(name)?.pid ?? "?");
     }
-    rmSync2(dir, { recursive: true, force: true });
+    removeSelfRegistry(name);
     mkdirSync2(dir, { recursive: true });
     const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs);
     return state;
@@ -4743,7 +4775,7 @@ async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
   } catch (e) {
     closeSync(stdoutFd);
     closeSync(stderrFd);
-    rmSync2(dir, { recursive: true, force: true });
+    removeSelfRegistry(name);
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
     );
@@ -4755,7 +4787,7 @@ async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
   });
   const pid = child.pid;
   if (pid === void 0) {
-    rmSync2(dir, { recursive: true, force: true });
+    removeSelfRegistry(name);
     throw new Error(`codex daemon '${name}' spawned without a pid`);
   }
   const startedAt = nowSec();
@@ -4770,7 +4802,7 @@ async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
     await waitForSocket(socketPath, pid, readyTimeoutMs);
   } catch (e) {
     killProcessGroup(pid, "SIGKILL");
-    rmSync2(dir, { recursive: true, force: true });
+    removeSelfRegistry(name);
     throw e;
   }
   return {
@@ -4816,7 +4848,7 @@ async function reapDaemon(name) {
     }
     killProcessGroup(state.pid, "SIGKILL");
   }
-  rmSync2(codexTeammateDir(name), { recursive: true, force: true });
+  removeSelfRegistry(name);
 }
 function touchLastSeen(name) {
   writeFileSync2(codexLastSeenFile(name), `${nowSec()}
@@ -4960,8 +4992,13 @@ var CodexEngine = class {
       );
       return { kind: "spawned", name: req.name, firstTurn };
     } catch (e) {
-      await reapDaemon(req.name);
-      removeBaseRecord(req.name);
+      if (e instanceof CodexDaemonAlreadyAliveError) {
+        return { kind: "already-exists", existingEngine: "codex" };
+      }
+      if (!(e instanceof CodexDaemonSpawnInProgressError)) {
+        await reapDaemon(req.name);
+        removeBaseRecord(req.name);
+      }
       return {
         kind: "failed",
         message: e instanceof Error ? e.message : String(e)
@@ -5197,7 +5234,7 @@ function isCodexTarget(name) {
   if (name.startsWith("codex-") || name.startsWith("codex/")) return true;
   const base = readBaseRecord(name);
   if (base?.engine === "codex") return true;
-  return readDaemonState(name) !== null;
+  return false;
 }
 async function codexSpawn(name, opts = {}) {
   const engine = resolveEngine(opts.engine);
@@ -5254,9 +5291,10 @@ async function codexWait(name, opts = {}) {
 }
 async function codexKill(name, opts = {}) {
   const state = readDaemonState(name);
+  const base = readBaseRecord(name);
   const result = await resolveEngine(opts.engine).kill({ name }, engineContext());
   if (result.kind === "failed") return die(result.message);
-  if (state === null) {
+  if (result.kind === "not-found" || state === null && base === null) {
     return {
       code: 0,
       stdout: "",
@@ -6671,7 +6709,7 @@ var spawn2 = async (args, _options, env) => {
   const parsed = parseSpawnArgs(args.slice(1));
   if ("error" in parsed) return parsed.error;
   const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed;
-  if (engine === "codex" || isCodexTarget(repo)) {
+  if (engine === "codex" || engine === null && isCodexTarget(repo)) {
     if (resumeSid.length > 0) return die2("tm spawn: --resume is not supported for codex teammates");
     if (task.length > 0) return die2("tm spawn: --task is not supported for codex teammates");
     if (noWait) return die2("tm spawn: --no-wait is not supported for codex teammates");
@@ -6687,8 +6725,6 @@ var spawn2 = async (args, _options, env) => {
       displayName: null,
       engine: env.engines?.get("codex")
     });
-  }
-  if (engine === "claude") {
   }
   if (noWait && !hasPrompt) {
     return die2(

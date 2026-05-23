@@ -148,6 +148,43 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Send `signal` to every process in the group led by `pgid`.
+ *
+ * The codex CLI is a node wrapper that `spawn`s the real rust binary
+ * as a child, so a spawned daemon is two pids: the wrapper (PPID == us,
+ * which we record) and the rust process (PPID == wrapper). Both land
+ * in the same process group, with the wrapper as the group leader —
+ * `child_process.spawn({ detached: true })` arranges this on POSIX,
+ * no explicit `setpgid` needed.
+ *
+ * Killing only the leader pid (the historical behaviour) left the
+ * child reparented to init and quietly consuming the unix socket;
+ * `tm doctor` would `rm -rf` the registry directory but the rust
+ * process would keep running until the box rebooted. The dispatcher
+ * found 11 leaked codex processes from a single afternoon of stage 4
+ * dogfooding this way.
+ *
+ * Posix `kill(-pgid, sig)` delivers to every process in the group,
+ * including the reparented child. Node's `process.kill` passes the
+ * negative pid through unchanged. ESRCH (empty group) is the
+ * expected idempotent case; EPERM means the leader died and a child
+ * the kernel resolved out of our uid — also nothing more we can do
+ * here. Either is success from this function's point of view.
+ */
+export function killProcessGroup(pgid: number, signal: NodeJS.Signals | number): void {
+  if (!Number.isFinite(pgid) || pgid <= 0) return
+  try {
+    process.kill(-pgid, signal)
+  } catch (e) {
+    const errno = (e as NodeJS.ErrnoException).code
+    if (errno === 'ESRCH' || errno === 'EPERM') return
+    // Anything else (EINVAL on an unsupported signal, etc) is the
+    // caller's bug, not a runtime condition — let it surface.
+    throw e
+  }
+}
+
 /** Read the on-disk state for one daemon. `null` if no registry entry. */
 export function readDaemonState(name: string): DaemonState | null {
   const pid = readIntFile(codexPidFile(name))
@@ -302,9 +339,10 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
     // Daemon failed its readiness probe — kill it (if alive) and tear the
     // registry entry back down. We do not want a half-spawned daemon
     // lingering with a pid the next `tm` call would treat as healthy.
-    if (isProcessAlive(pid)) {
-      try { process.kill(pid, 'SIGKILL') } catch { /* may already be dead */ }
-    }
+    // Group-kill, not pid-kill — the codex node wrapper has already
+    // spawned the rust binary by the time `waitForSocket` times out
+    // in some failure modes, and a leader-only kill would orphan it.
+    killProcessGroup(pid, 'SIGKILL')
     rmSync(dir, { recursive: true, force: true })
     throw e
   }
@@ -354,27 +392,38 @@ async function waitForSocket(
 }
 
 /**
- * Tear a daemon down: kill the process if alive, then `rm -rf` the
- * registry directory. Idempotent — a missing entry is not an error.
+ * Tear a daemon down: SIGTERM the whole process group, give it 1s to
+ * exit cleanly, then SIGKILL the group, then `rm -rf` the registry
+ * directory. Idempotent — a missing entry, an already-dead leader, or
+ * a group that no longer has any members is not an error.
  *
- * The kill is SIGTERM with a 1s grace, then SIGKILL. A daemon that
- * ignores SIGTERM (a wedged WebSocket loop, say) is killed hard — a
- * `tm` invocation is the wrong place to wait minutes for a graceful
- * shutdown, and the FS registry already captures every restart
- * preservation we need (decision 0019 §5).
+ * Group-kill (`killProcessGroup`) rather than pid-kill is load-bearing:
+ * the codex node wrapper `spawn`s the rust binary as a child in its
+ * own process group; a SIGKILL to only the leader leaves the child
+ * reparented to init and still serving the unix socket. See the
+ * `killProcessGroup` docstring for the dispatcher-found orphan
+ * incident this fixes.
+ *
+ * The orphan-cleanup path matters even when the registry says the
+ * leader is dead — the group can still have a reparented member —
+ * so the SIGKILL fires unconditionally before the `rm -rf`.
  */
 export async function reapDaemon(name: string): Promise<void> {
   const state = readDaemonState(name)
-  if (state !== null && isProcessAlive(state.pid)) {
-    try { process.kill(state.pid, 'SIGTERM') } catch { /* already dying */ }
-    const deadline = Date.now() + 1000
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(state.pid)) break
-      await new Promise<void>((res) => setTimeout(res, 25))
-    }
+  if (state !== null) {
     if (isProcessAlive(state.pid)) {
-      try { process.kill(state.pid, 'SIGKILL') } catch { /* already gone */ }
+      killProcessGroup(state.pid, 'SIGTERM')
+      const deadline = Date.now() + 1000
+      while (Date.now() < deadline) {
+        if (!isProcessAlive(state.pid)) break
+        await new Promise<void>((res) => setTimeout(res, 25))
+      }
     }
+    // Always SIGKILL the group, even if the leader is already dead —
+    // an orphan (the wrapper's child after the wrapper exited) shows
+    // up here as "leader gone, group still has members" and is the
+    // exact case we are guarding against.
+    killProcessGroup(state.pid, 'SIGKILL')
   }
   rmSync(codexTeammateDir(name), { recursive: true, force: true })
 }

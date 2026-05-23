@@ -32,13 +32,14 @@
  * fail a local dev box that does not have codex set up.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
+import { isProcessAlive, killProcessGroup } from '../../src/codex-supervisor'
 import { resolveTmBinary } from '../../src/tm'
 import { spawnCapture } from '../../src/proc'
 
@@ -95,9 +96,41 @@ beforeAll(() => {
 })
 
 afterAll(() => {
-  if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
-  else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
-  rmSync(registryRoot, { recursive: true, force: true })
+  // Belt-and-suspenders teardown safety net. The dispatcher hit 11
+  // leaked codex daemons during stage 4 dogfooding because
+  // single-pid reap (now fixed in the supervisor) orphaned the
+  // wrapper's child. The supervisor fix means `tm kill` is now
+  // correct, but a test that throws mid-execution can still leave a
+  // registry entry whose `pid` points at a live process group.
+  // Scan the test's registry root, group-kill any surviving leaders,
+  // then remove the tree.
+  try {
+    if (existsSync(registryRoot)) {
+      for (const name of readdirSync(registryRoot)) {
+        const pidFile = join(registryRoot, name, 'pid')
+        let pid: number | null = null
+        try {
+          pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+        } catch {
+          pid = null
+        }
+        if (pid !== null && Number.isFinite(pid) && pid > 0) {
+          // Always group-kill, even if the leader looks dead — an
+          // orphan child can still be holding the socket.
+          killProcessGroup(pid, 'SIGKILL')
+          if (isProcessAlive(pid)) {
+            // Should not happen after group-kill, but if it does we
+            // surface a stronger signal than "test passed but leaked".
+            console.warn(`[teardown] leader pid ${pid} (${name}) survived SIGKILL`)
+          }
+        }
+      }
+    }
+  } finally {
+    if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+    else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
+    rmSync(registryRoot, { recursive: true, force: true })
+  }
 })
 
 /**

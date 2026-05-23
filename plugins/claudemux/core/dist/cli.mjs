@@ -4376,6 +4376,16 @@ function isProcessAlive(pid) {
     return false;
   }
 }
+function killProcessGroup(pgid, signal) {
+  if (!Number.isFinite(pgid) || pgid <= 0) return;
+  try {
+    process.kill(-pgid, signal);
+  } catch (e) {
+    const errno = e.code;
+    if (errno === "ESRCH" || errno === "EPERM") return;
+    throw e;
+  }
+}
 function readDaemonState(name) {
   const pid = readIntFile(codexPidFile(name));
   const startedAt = readIntFile(codexStartedAtFile(name));
@@ -4471,12 +4481,7 @@ async function spawnDaemon(opts) {
   try {
     await waitForSocket(socketPath, pid, readyTimeoutMs);
   } catch (e) {
-    if (isProcessAlive(pid)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-      }
-    }
+    killProcessGroup(pid, "SIGKILL");
     rmSync(dir, { recursive: true, force: true });
     throw e;
   }
@@ -4512,22 +4517,16 @@ async function waitForSocket(path, pid, timeoutMs) {
 }
 async function reapDaemon(name) {
   const state = readDaemonState(name);
-  if (state !== null && isProcessAlive(state.pid)) {
-    try {
-      process.kill(state.pid, "SIGTERM");
-    } catch {
-    }
-    const deadline = Date.now() + 1e3;
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(state.pid)) break;
-      await new Promise((res) => setTimeout(res, 25));
-    }
+  if (state !== null) {
     if (isProcessAlive(state.pid)) {
-      try {
-        process.kill(state.pid, "SIGKILL");
-      } catch {
+      killProcessGroup(state.pid, "SIGTERM");
+      const deadline = Date.now() + 1e3;
+      while (Date.now() < deadline) {
+        if (!isProcessAlive(state.pid)) break;
+        await new Promise((res) => setTimeout(res, 25));
       }
     }
+    killProcessGroup(state.pid, "SIGKILL");
   }
   rmSync(codexTeammateDir(name), { recursive: true, force: true });
 }

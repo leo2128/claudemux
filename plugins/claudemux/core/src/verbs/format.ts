@@ -53,9 +53,11 @@ export function formatListing(rows: readonly TeammateListing[]): TmResult {
 export function formatStatus(status: TeammateStatus): TmResult {
   switch (status.kind) {
     case 'present': {
-      const head = `${status.name}\t${status.engine}\t${status.state}\t${status.cwd}\n`
-      const pane = status.pane === null ? '' : `${status.pane}\n`
-      return { code: 0, stdout: `${head}${pane}`, stderr: '' }
+      // Phase 2a-1: the verb prints the captured pane text — same as the
+      // legacy `tm status` did via `tmux capture-pane`. Phase 2a-2 may
+      // prepend a structured header once the dispatcher consumers are
+      // aware of the format change.
+      return { code: 0, stdout: status.pane ?? '', stderr: '' }
     }
     case 'not-found':
       return { code: 1, stdout: '', stderr: 'tm: status: not found\n' }
@@ -64,12 +66,12 @@ export function formatStatus(status: TeammateStatus): TmResult {
   }
 }
 
-export function formatKill(result: KillResult): TmResult {
+export function formatKill(name: TeammateName, result: KillResult): TmResult {
   switch (result.kind) {
     case 'killed':
-      return { code: 0, stdout: 'killed\n', stderr: '' }
+      return { code: 0, stdout: `killed: ${name}\n`, stderr: '' }
     case 'not-found':
-      return { code: 1, stdout: '', stderr: 'tm: kill: not found\n' }
+      return { code: 0, stdout: `not running: ${name}\n`, stderr: '' }
     case 'failed':
       return { code: 1, stdout: '', stderr: `tm: kill: ${result.message}\n` }
   }

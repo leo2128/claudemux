@@ -19,5 +19,5 @@ export async function killVerb(name: TeammateName, ctx: VerbContext): Promise<Tm
   if (resolved === null) return teammateNotFound(name)
   const result = await resolved.engine.kill({ name }, ctx.engineContext)
   if (result.kind === 'killed') await ctx.identity.remove(name)
-  return formatKill(result)
+  return formatKill(name, result)
 }

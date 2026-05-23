@@ -14,7 +14,7 @@ are the domain spec,
 this document is the **component** view — what the `core/` modules are and what
 contracts they hold.
 
-> **Status — the bash `tm` is retired; the codex driver has landed.**
+> **Status — Phase 2a-1 has landed the multi-engine architecture's first cut.**
 > All 17 `tm` verbs are reimplemented in TypeScript and dispatched by
 > [`cli.ts`](/plugins/claudemux/core/src/cli.ts); help text lives natively
 > in [`help.ts`](/plugins/claudemux/core/src/help.ts). The user-installed
@@ -22,20 +22,41 @@ contracts they hold.
 > `exec`s `node` against the esbuild bundle committed at
 > [`core/dist/cli.mjs`](/plugins/claudemux/core/dist/cli.mjs); a dev launcher
 > at [`core/bin/tm`](/plugins/claudemux/core/bin/tm) runs the same code
-> through `tsx` so source edits need no rebuild. The conformance harness
-> compares native output to committed golden JSON files under
-> [`core/test/goldens/`](/plugins/claudemux/core/test/goldens) rather than a
-> bash oracle.
+> through `tsx` so source edits need no rebuild.
+>
+> [Decision 0024](/.agents/decisions/0024-multi-engine-tui-architecture.md)
+> reshapes the core around an `Engine` interface, a single `TeammateRecord`
+> JSON keyed by name, and a verb layer that fans out across engines.
+> **Phase 2a-1** ships the load-bearing infrastructure on the `next` branch:
+> shared persistence + identity modules ([`persistence/`](/plugins/claudemux/core/src/persistence)
+> and [`identity/`](/plugins/claudemux/core/src/identity)),
+> the `Engine` contract and verb skeletons ([`engines/`](/plugins/claudemux/core/src/engines)
+> and [`verbs/`](/plugins/claudemux/core/src/verbs)), a Phase-2a-1
+> `ClaudeEngine` implementation
+> ([`engines/claude/claude-engine.ts`](/plugins/claudemux/core/src/engines/claude/claude-engine.ts))
+> whose four fleet-visibility methods (`list` / `status` / `kill`) carry
+> real native impls and whose other twelve methods delegate back to the
+> legacy `NATIVE_VERBS` table while their bodies wait to be moved.
+> `cli.ts` routes the four fleet-visibility verbs (`tm ls`, `tm states`,
+> `tm status`, `tm kill`) and the dispatcher-only `tm archive` through the
+> new layers; the remaining 13 verbs still dispatch through `NATIVE_VERBS`.
+>
+> **Phase 2a-2** is the follow-up PR. It physically moves the body of every
+> remaining verb out of `native.ts` into `engines/claude/*.ts`, deletes
+> `native.ts`, drops the `--no-wait` flag from `tm send` / `tm spawn`,
+> switches the conformance harness to run through `runCli` (regenerating
+> the fleet 4 verb goldens once), and lands the remaining verb skeletons
+> (`poll`, `doctor`, `ask`).
 >
 > Stage 4 added the Codex driver — `tm spawn codex-<n>`, `tm send codex-<n>`,
 > `tm wait codex-<n>`, `tm kill codex-<n>`, and `tm ask "<prompt>"` route
 > through [`codex-verbs.ts`](/plugins/claudemux/core/src/codex-verbs.ts),
 > backed by [`codex-supervisor.ts`](/plugins/claudemux/core/src/codex-supervisor.ts)
 > for daemon lifecycle and [`codex-ws.ts`](/plugins/claudemux/core/src/codex-ws.ts)
-> for the protocol. The wire schema is vendored as the output of
-> `codex app-server generate-ts --experimental` under
-> [`codex-protocol/`](/plugins/claudemux/core/src/codex-protocol) and pinned
-> by a CI drift gate; see [decision 0022](/.agents/decisions/0022-codex-driver.md).
+> for the protocol. Phase 2b lands `CodexEngine` and the Codex registration
+> line in `productionVerbContext`; see
+> [decision 0022](/.agents/decisions/0022-codex-driver.md) and
+> [decision 0024](/.agents/decisions/0024-multi-engine-tui-architecture.md).
 
 ## Module layout
 
@@ -45,17 +66,27 @@ single-purpose; routing, verb code, and process wiring each have their own home.
 | Module | Role |
 |---|---|
 | `main.ts` | The process entrypoint — read `process.argv` / `process.stdin`, hand to `runCli`, write the result's streams to `process`, set `process.exitCode`. esbuild bundles this file for production; the dev launcher runs it through `tsx`. |
-| `cli.ts` | `runCli` and `productionEnv` — the per-invocation router (help pre-scan, `help <verb>` form, removed-verb migration messages, native dispatch, unknown-verb error) and the production backend wiring. |
+| `cli.ts` | `runCli` and `productionEnv` — the per-invocation router (help pre-scan, `help <verb>` form, removed-verb migration messages, engine-routed dispatch for the fleet 4 verbs + `archive`, native dispatch for the remaining 13 verbs, unknown-verb error) and the production backend wiring. |
 | `help.ts` | `HELP_TEXTS`, `OVERVIEW_HELP`, `REMOVED_VERB_MESSAGES` — the user-facing help strings, the single source of truth that `tm <verb> --help` and `tm help <verb>` print. |
-| `native.ts` | Every verb's implementation, plus `NATIVE_VERBS` keyed by verb name and `NativeEnv` (the injected backends). |
+| `native.ts` | The remaining-13-verbs implementation (Phase 2a-1 keeps it so the conformance harness stays byte-stable for the unmigrated verbs); Phase 2a-2 deletes this file once the bodies move to `engines/claude/`. |
 | `verbs.ts` | `TM_VERBS` — the catalog of the 17 `tm` verbs. |
+| `verbs/` | Verb-layer dispatch — `verbs/{ls,states,status,kill,spawn,send,wait,compact,resume,last,ctx,history,mem,reload,archive}.ts`. Each verb is parse-then-route: build the engine request, resolve the teammate name through `identity/router.ts`, call the engine method, format the discriminated result through `verbs/format.ts`. `verbs/archive.ts` is dispatcher-only (no engine). |
+| `engines/engine.ts`, `engines/types.ts`, `engines/registry.ts`, `engines/teammate-record.ts` | The `Engine` interface, the shared request/result/value types (decision 0024 §"Engine interface" and §"Capabilities"), the invocation-scoped `EngineRegistry`, and the abstract `TeammateRecord` base whose subclasses live under `engines/<kind>/persistence.ts`. |
+| `engines/claude/` | The Claude engine. `claude-engine.ts` implements `Engine`; `persistence.ts` owns the `.cwd` / `.sid` / `.ready` / `.send-at` builders and the `tmuxSessionName` encoding for nested teammate names (decision 0024 §"Nested teammate names"). Phase 2a-2 will land `claude-session.ts` / `claude-transcript.ts` / `claude-events.ts` to receive `native.ts`'s remaining bodies. |
+| `engines/codex/` | The Codex engine. `persistence.ts` owns the `/tmp/teammate-codex/<name>/` registry-directory builders; the engine class lands in Phase 2b. |
+| `persistence/atomic-file.ts` | Atomic write primitives (`atomicWrite`, `reserveExclusive`, `readIfPresent`) — every teammate-record write goes through these so a concurrent verb never observes a torn file. |
+| `persistence/identity-store.ts` | The only file that writes / reads `/tmp/teammate-<name>.json` — decision 0024 §"TeammateRecord" enforcement. `reserve` is the `O_CREAT \| O_EXCL` spawn-time race winner; `list()` recursively scans `/tmp/teammate*` so nested names (D9) are visible. |
+| `persistence/project-dir.ts` | `encodeProjectDir` — Claude Code's on-disk projects-dir encoding ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md) one-source-of-truth). |
+| `persistence/identity-writer.ts` | `ProductionIdentityStore` — the verb-layer-facing `IdentityStore.remove()` seam (`killVerb` uses it after a successful kill). |
+| `identity/name.ts` | `validateTeammateName` — single-segment + nested-name (`flow/flow-1`) validator; rejects `__` so the Claude engine's `tmuxSessionName` encoding stays round-trippable. |
+| `identity/router.ts` | `ProductionTeammateRouter` reads the identity JSON; `LegacyClaudeTmuxRouter` falls back to a tmux session probe while spawn still lives in `native.ts`; `CompositeTeammateRouter` chains them. |
 | `proc.ts` | `spawnCapture` — the `node:child_process` spawn primitive every shell-out backend is built on. |
 | `tm.ts` | `TmResult` / `TmRunOptions` types, and `resolveTmBinary` — the live-teammate harness's seam for locating the user-installed `tm` PATH entry (honors `CLAUDEMUX_TM`). |
 | `tmux.ts` | The `tmux` backend — `runTmux`, used by every verb that queries tmux. |
 | `column.ts` | The `column` backend — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs. |
 | `grep.ts` | The `grep` backend — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
-| `paths.ts` | Path builders for every `/tmp` protocol file and `~/.claude/projects` path — the path-builder discipline ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)) on the TypeScript side. Includes the codex-daemon registry builders under `/tmp/teammate-codex/<name>/` (overridable via `CLAUDEMUX_CODEX_REGISTRY_ROOT` for tests). |
-| `codex-verbs.ts` | The codex-teammate verbs — `codexSpawn`, `codexSend`, `codexWait`, `codexKill`, `codexAsk`, plus `isCodexTarget(name)` for the prefix fork. Each returns the same `TmResult` shape every other verb does. |
+| `paths.ts` | Path builders for every `/tmp` protocol file and `~/.claude/projects` path the legacy `native.ts` still consumes ([decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md)). Phase 2a-2 retires this file in favour of the engine-local `engines/<kind>/persistence.ts` builders. Includes the codex-daemon registry builders under `/tmp/teammate-codex/<name>/` (overridable via `CLAUDEMUX_CODEX_REGISTRY_ROOT` for tests). |
+| `codex-verbs.ts` | The codex-teammate verbs — `codexSpawn`, `codexSend`, `codexWait`, `codexKill`, `codexAsk`, plus `isCodexTarget(name)` for the prefix fork. Phase 2b folds this into a `CodexEngine` implementation. Each returns the same `TmResult` shape every other verb does. |
 | `codex-supervisor.ts` | Daemon lifecycle — `spawnDaemon`, `daemonAlive`, `readDaemonState`, `listDaemons`, `reapDaemon`, and the per-call bookkeeping helpers. Owns spawn-detached, the unix-socket readiness probe, and SIGTERM-then-SIGKILL reap. |
 | `codex-ws.ts` | The WebSocket JSON-RPC client. Routes incoming frames by envelope shape (`method+id+params` is a server-request, `method+params` is a notification, `id+result\|error` is a response), pinned by [`codex-schema.test.ts`](/plugins/claudemux/core/test/codex-schema.test.ts). |
 | `codex-protocol/` | Generated by `codex app-server generate-ts --experimental`. Treat as vendored ground truth; the CI drift gate (`Install codex CLI` + `codex-protocol not stale`) regenerates it on every push and asserts the diff is empty. |
@@ -69,7 +100,7 @@ marker protocol, and `~/.claude/projects`. See
 ## Verb dispatch
 
 `runCli` ([`cli.ts`](/plugins/claudemux/core/src/cli.ts)) is the one place
-that routes one CLI invocation. The order mirrors the bash `main` it replaced:
+that routes one CLI invocation. The order:
 
 1. Bare `tm` → `OVERVIEW_HELP`, exit 0.
 2. `tm help` / `tm -h` / `tm --help` / `tm help <verb>` → the matching entry
@@ -78,9 +109,21 @@ that routes one CLI invocation. The order mirrors the bash `main` it replaced:
 3. Help pre-scan on the verb's argument list — a `-h`/`--help` before the
    first positional or before `--prompt` prints that verb's help; otherwise
    the scan stops and dispatch proceeds.
-4. Removed verb (`ask`, `wait-idle`, `wait-quiet`) → the migration message
-   from `REMOVED_VERB_MESSAGES`, exit 2.
-5. Native verb → `NATIVE_VERBS[verb]` is called with the argument tail.
+4. Removed verb (`wait-idle`, `wait-quiet`) → the migration message from
+   `REMOVED_VERB_MESSAGES`, exit 2.
+5. **Engine-routed verbs** (Phase 2a-1's fleet-visibility cut) — `tm ls`,
+   `tm states`, `tm status`, `tm kill` build a `productionVerbContext`
+   (`EngineRegistry` registered with `ClaudeEngine`, `CompositeTeammateRouter`
+   composing the identity-store lookup with the legacy tmux-session probe,
+   the `ProductionIdentityStore` for `tm kill`'s identity-remove step) and
+   hand it to `verbs/<v>.ts`'s default impl.
+5b. **Dispatcher-only verbs** — `tm archive` lives in `verbs/archive.ts`
+   and takes no engine (it only touches the dispatcher's own ledger
+   files under `~/.claude/projects/<encoded>/memory/`).
+5c. **Native verb** — `NATIVE_VERBS[verb]` is called for the remaining 13
+   verbs (`spawn` / `send` / `wait` / `compact` / `resume` / `last` / `ctx` /
+   `history` / `mem` / `reload` / `poll` / `doctor` / `ask`). Phase 2a-2
+   moves their bodies into `engines/claude/*.ts`.
 6. Unknown verb → stderr line plus overview, exit 1.
 
 Every path produces the same `{code, stdout, stderr}` `TmResult`. The process

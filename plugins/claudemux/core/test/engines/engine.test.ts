@@ -50,7 +50,11 @@ import type {
   TurnResult,
   WaitRequest,
 } from '../../src/engines/types'
-import { ClaudeTeammateRecord } from '../../src/engines/claude/persistence'
+import {
+  ClaudeTeammateRecord,
+  decodeTmuxSessionName,
+  tmuxSessionName,
+} from '../../src/engines/claude/persistence'
 import { CodexTeammateRecord } from '../../src/engines/codex/persistence'
 import { EmptyTeammateRouter } from '../../src/identity/router'
 import { killVerb } from '../../src/verbs/kill'
@@ -178,14 +182,37 @@ describe('TeammateRecord subclasses', () => {
     expect(rec.toJson().displayName).toBeNull()
   })
 
-  test('engineExtensionFiles throws not-implemented in Phase 1', () => {
+  test('ClaudeTeammateRecord.engineExtensionFiles enumerates the four Phase 2a extension files', () => {
     const rec = new ClaudeTeammateRecord({
       name: 'alpha',
       cwd: '/tmp/alpha',
       createdAt: 0,
       displayName: null,
     })
-    expect(() => rec.engineExtensionFiles()).toThrow(/not implemented in Phase 1/)
+    expect(rec.engineExtensionFiles()).toEqual([
+      '/tmp/teammate-alpha.cwd',
+      '/tmp/teammate-alpha.sid',
+      '/tmp/teammate-alpha.ready',
+      '/tmp/teammate-alpha.send-at',
+    ])
+  })
+
+  test('ClaudeTeammateRecord.tmuxSession encodes / as __', () => {
+    const rec = new ClaudeTeammateRecord({
+      name: 'flow/flow-1',
+      cwd: '/tmp/flow/flow-1',
+      createdAt: 0,
+      displayName: null,
+    })
+    expect(rec.tmuxSession()).toBe('teammate-flow__flow-1')
+  })
+
+  test('tmuxSessionName / decodeTmuxSessionName round-trip', () => {
+    expect(tmuxSessionName('foo')).toBe('teammate-foo')
+    expect(tmuxSessionName('flow/flow-1')).toBe('teammate-flow__flow-1')
+    expect(decodeTmuxSessionName('teammate-foo')).toBe('foo')
+    expect(decodeTmuxSessionName('teammate-flow__flow-1')).toBe('flow/flow-1')
+    expect(decodeTmuxSessionName('not-a-teammate')).toBeNull()
   })
 })
 

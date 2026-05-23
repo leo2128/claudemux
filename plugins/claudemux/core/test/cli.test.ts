@@ -194,13 +194,16 @@ describe('native dispatch', () => {
     }
   })
 
-  test('ls runs the native handler, returning the empty-fleet sentinel', async () => {
+  test('ls routes through the Engine layer (Phase 2a-1), returning a structured teammate row', async () => {
+    // Phase 2a-1: `tm ls` now goes through `ClaudeEngine.list()` and the
+    // verb-side formatter, so the row is `name\tengine\tstate\tcwd\n`
+    // with the `teammate-` prefix stripped from the tmux session name.
     const result = await runCli(
       ['ls'],
       fakeEnv({ runTmux: async () => ({ code: 0, stdout: 'teammate-x: 1 windows\n', stderr: '' }) }),
     )
     expect(result.code).toBe(0)
-    expect(result.stdout).toContain('teammate-x')
+    expect(result.stdout).toContain('x\tclaude')
   })
 
   test('arguments reach the native handler', async () => {
@@ -216,6 +219,45 @@ describe('native dispatch', () => {
     // verb at least got past dispatch (it will fail on the missing ledger).
     const result = await runCli(['archive', 'task-9'], fakeEnv(), 'no ledger here')
     expect(result.code).not.toBe(0)
+  })
+})
+
+describe('engine-routed verbs (Phase 2a-1 fleet visibility)', () => {
+  // Decision 0024 §"Fleet-visibility verbs" routes `tm ls` / `tm states` /
+  // `tm status` through `EngineRegistry` instead of straight to tmux. The
+  // tests here cover the dispatch wiring; per-engine output shape is
+  // covered by ClaudeEngine's own unit tests + the conformance file
+  // (which is updated when Phase 2a-2 inlines the verb bodies).
+  //
+  // `tm kill` is NOT in this set yet: the legacy NATIVE_VERBS.kill carries
+  // an `isCodexTarget` codex hand-off that has no replacement until Phase
+  // 2b registers a CodexEngine. Routing `kill` through ClaudeEngine
+  // prematurely would silently regress `tm kill codex-<n>` callers.
+
+  test('tm states returns code 0 on an empty fleet', async () => {
+    const result = await runCli(
+      ['states'],
+      fakeEnv({ runTmux: async () => ({ code: 0, stdout: '', stderr: '' }) }),
+    )
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe('')
+  })
+
+  test('tm status without a repo fails with a usage line', async () => {
+    const result = await runCli(['status'], fakeEnv())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('tm status <repo>')
+  })
+
+  test('tm status for a missing teammate returns not-found via the router', async () => {
+    // No tmux session matches `=teammate-missing`, so the legacy fallback
+    // router resolves `null` and the verb formats "no such teammate".
+    const result = await runCli(
+      ['status', 'missing'],
+      fakeEnv({ runTmux: async () => ({ code: 1, stdout: '', stderr: '' }) }),
+    )
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('no such teammate')
   })
 })
 

@@ -28,6 +28,98 @@ import { runTmux } from './tmux'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { archiveVerb } from './verbs/archive'
+import { ClaudeEngine } from './engines/claude/claude-engine'
+import { EngineRegistry } from './engines/registry'
+import type { EngineContext } from './engines/types'
+import {
+  CompositeTeammateRouter,
+  LegacyClaudeTmuxRouter,
+  ProductionTeammateRouter,
+} from './identity/router'
+import { ProductionIdentityStore } from './persistence/identity-writer'
+import type { VerbContext } from './verbs/context'
+import { lsVerb } from './verbs/ls'
+import { statesVerb } from './verbs/states'
+import { statusVerb } from './verbs/status'
+
+/**
+ * The Phase 2a-1 verb-side wiring. Decision 0024 §"Verb is the
+ * abstraction" lets the verb layer fan out across engines through this
+ * context; `cli.ts` builds one per invocation, hands the fleet-
+ * visibility verbs the context, and lets the remaining 13 verbs keep
+ * the legacy `NATIVE_VERBS` path until Phase 2a-2 moves their bodies
+ * into `engines/claude/`.
+ *
+ * `ProductionTeammateRouter` reads `/tmp/teammate-<name>.json`; Phase
+ * 2a-2 makes that the only path. While `tm spawn` still lives in
+ * `native.ts` and does not write that JSON, `LegacyClaudeTmuxRouter`
+ * runs a tmux session probe as a fallback so `tm status` / `tm kill`
+ * keep finding existing teammates.
+ */
+function productionVerbContext(env: NativeEnv): VerbContext {
+  const registry = new EngineRegistry()
+  registry.register(new ClaudeEngine(env))
+  // TODO Phase 2b: registry.register(new CodexEngine(...)) lands once the
+  // Codex engine class implements the `Engine` interface.
+
+  const router = new CompositeTeammateRouter([
+    new ProductionTeammateRouter(registry),
+    new LegacyClaudeTmuxRouter(registry, async (session) => {
+      try {
+        return (await env.runTmux(['has-session', '-t', `=${session}`])).code === 0
+      } catch {
+        return false
+      }
+    }),
+  ])
+
+  const engineContext: EngineContext = { now: () => Date.now(), env: process.env }
+  return {
+    engines: registry,
+    router,
+    engineContext,
+    identity: new ProductionIdentityStore(),
+  }
+}
+
+/**
+ * Verbs that route through the Engine layer in Phase 2a-1.
+ *
+ * `kill` is intentionally NOT on this list: the legacy `NATIVE_VERBS.kill`
+ * has an `isCodexTarget(repo)` arm that hands off to `codexKill(repo)`, and
+ * Phase 2a-1 does not yet register a `CodexEngine`. Routing `kill` through
+ * `ClaudeEngine` would silently regress `tm kill codex-<n>` to
+ * `no such teammate`. Phase 2b lands `CodexEngine` and only then `kill`
+ * joins this set.
+ */
+const ENGINE_VERBS: ReadonlySet<string> = new Set(['ls', 'states', 'status'])
+
+/** Dispatch one of the fleet-visibility verbs through the verb context. */
+async function dispatchEngineVerb(
+  verb: string,
+  rest: readonly string[],
+  ctx: VerbContext,
+): Promise<TmResult> {
+  switch (verb) {
+    case 'ls':
+      return lsVerb(ctx)
+    case 'states':
+      return statesVerb(ctx)
+    case 'status': {
+      if (rest.length === 0) {
+        return { code: 1, stdout: '', stderr: 'tm: usage: tm status <repo> [lines=80]\n' }
+      }
+      const lines = rest[1]
+      const parsed = lines === undefined ? null : Number(lines)
+      const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed
+      return statusVerb(rest[0]!, ctx, { lines: linesArg })
+    }
+    default:
+      return { code: 1, stdout: '', stderr: `tm: unsupported engine verb: ${verb}\n` }
+  }
+}
+
 /**
  * Whether `tm`'s help pre-scan would intercept these verb arguments. The
  * scan walks left to right: a `-h`/`--help` triggers help; a `--prompt` value
@@ -138,7 +230,26 @@ export async function runCli(
     return removedVerb(REMOVED_VERB_MESSAGES[verb]!)
   }
 
-  // 5. Native dispatch. After 3c every verb is in `NATIVE_VERBS`.
+  // 5a. Engine-routed verbs — Phase 2a-1's fleet-visibility cut. These
+  //     four verbs go through `verbs/<v>.ts` → `EngineRegistry` →
+  //     `ClaudeEngine.<method>`; Codex registration lands in Phase 2b.
+  if (ENGINE_VERBS.has(verb)) {
+    return dispatchEngineVerb(verb, rest, productionVerbContext(env))
+  }
+
+  // 5b. `archive` — a dispatcher-only verb (no engine). Phase 2a-1 moves
+  //     its body into `verbs/archive.ts`; the legacy `NATIVE_VERBS.archive`
+  //     stays in `native.ts` as a fallback the conformance harness still
+  //     pins until Phase 2a-2.
+  if (verb === 'archive') {
+    return archiveVerb(rest, stdin, {
+      dispatcherDir: env.dispatcherDir,
+      projectsDir: env.projectsDir,
+    })
+  }
+
+  // 5b. Native dispatch — the remaining 13 verbs still live in `native.ts`.
+  //     Phase 2a-2 follow-up PR moves them into `engines/claude/`.
   if (Object.hasOwn(NATIVE_VERBS, verb)) {
     const handler = NATIVE_VERBS[verb]!
     const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined

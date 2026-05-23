@@ -2127,7 +2127,7 @@ var require_extension = __commonJS({
       if (dest[name] === void 0) dest[name] = [elem];
       else dest[name].push(elem);
     }
-    function parse(header) {
+    function parse2(header) {
       const offers = /* @__PURE__ */ Object.create(null);
       let params = /* @__PURE__ */ Object.create(null);
       let mustUnescape = false;
@@ -2267,7 +2267,7 @@ var require_extension = __commonJS({
         }).join(", ");
       }).join(", ");
     }
-    module.exports = { format, parse };
+    module.exports = { format, parse: parse2 };
   }
 });
 
@@ -2301,7 +2301,7 @@ var require_websocket = __commonJS({
     var {
       EventTarget: { addEventListener, removeEventListener }
     } = require_event_target();
-    var { format, parse } = require_extension();
+    var { format, parse: parse2 } = require_extension();
     var { toBuffer } = require_buffer_util();
     var kAborted = Symbol("kAborted");
     var protocolVersions = [8, 13];
@@ -2978,7 +2978,7 @@ var require_websocket = __commonJS({
           }
           let extensions;
           try {
-            extensions = parse(secWebSocketExtensions);
+            extensions = parse2(secWebSocketExtensions);
           } catch (err) {
             const message = "Invalid Sec-WebSocket-Extensions header";
             abortHandshake(websocket, socket, message);
@@ -3270,7 +3270,7 @@ var require_subprotocol = __commonJS({
   "node_modules/ws/lib/subprotocol.js"(exports, module) {
     "use strict";
     var { tokenChars } = require_validation();
-    function parse(header) {
+    function parse2(header) {
       const protocols = /* @__PURE__ */ new Set();
       let start = -1;
       let end = -1;
@@ -3306,7 +3306,7 @@ var require_subprotocol = __commonJS({
       protocols.add(protocol);
       return protocols;
     }
-    module.exports = { parse };
+    module.exports = { parse: parse2 };
   }
 });
 
@@ -6653,7 +6653,743 @@ var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], op
 
 // src/cli.ts
 import { homedir } from "node:os";
+import { join as join7 } from "node:path";
+
+// src/verbs/archive.ts
+import { readFileSync as readFileSync4, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join5 } from "node:path";
+
+// src/persistence/project-dir.ts
+function encodeProjectDir2(cwd) {
+  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+// src/verbs/archive.ts
+var ARCHIVE_TEMPLATE2 = `${[
+  "---",
+  "name: dispatcher-tasks-archive",
+  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
+  "metadata:",
+  "  node_type: memory",
+  "  type: project",
+  "---",
+  "",
+  "# Dispatcher task archive",
+  "",
+  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
+  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
+  "that outlives a task should be promoted to its own memory file, not kept here.",
+  "",
+  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
+].join("\n")}
+`;
+function die3(message) {
+  return { code: 1, stdout: "", stderr: `tm: ${message}
+` };
+}
+function isRegularFile2(path) {
+  try {
+    return statSync3(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function fmtLocalDate2() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function ledgerLines2(content) {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+function parseArchiveArgs2(args) {
+  let id = "";
+  let status2 = "";
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--status") {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
+      status2 = args[i + 1];
+      i++;
+    } else if (arg.startsWith("--status=")) {
+      status2 = arg.slice("--status=".length);
+    } else if (arg.startsWith("-")) {
+      return { error: die3(`tm archive: unknown flag: ${arg}`) };
+    } else if (id === "") {
+      id = arg;
+    } else {
+      return { error: die3(`tm archive: unexpected arg: ${arg}`) };
+    }
+  }
+  return { id, status: status2 };
+}
+async function archiveVerb(args, stdin, env) {
+  const parsed = parseArchiveArgs2(args);
+  if ("error" in parsed) return parsed.error;
+  const { id } = parsed;
+  if (id === "") {
+    return die3("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
+  }
+  const memoryDir = join5(env.projectsDir, encodeProjectDir2(env.dispatcherDir), "memory");
+  const activePath = join5(memoryDir, "active-dispatcher-tasks.md");
+  const archivePath = join5(memoryDir, "dispatcher-tasks-archive.md");
+  if (!isRegularFile2(activePath)) return die3(`no active ledger at ${activePath}`);
+  const outcome = (stdin ?? "").replace(/\n+$/, "");
+  if (outcome.replace(/\s/g, "") === "") {
+    return die3(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
+  }
+  const activeContent = readFileSync4(activePath, "utf8");
+  const activeLines = ledgerLines2(activeContent);
+  let headerRe;
+  try {
+    headerRe = new RegExp(`^### ${id}(\\s|$)`);
+  } catch {
+    headerRe = /(?!)/;
+  }
+  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
+  if (headerLines.length === 0) {
+    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
+    return die3(`id not found in active ledger: ${id}
+  available: ${available}`);
+  }
+  if (headerLines.length !== 1) {
+    return die3(`id matches ${headerLines.length} entries in active ledger: ${id}`);
+  }
+  const start = headerLines[0];
+  const total = (activeContent.match(/\n/g) ?? []).length;
+  let end = total;
+  for (let index = start; index < activeLines.length; index++) {
+    if (/^(### |## )/.test(activeLines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const blockLines = activeLines.slice(start - 1, end);
+  let status2 = parsed.status;
+  if (status2 === "") {
+    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
+    status2 = tag ? tag[1] : "done";
+  }
+  const field = (name) => {
+    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
+    if (line === void 0) return "(unknown)";
+    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
+    return value === "" ? "(unknown)" : value;
+  };
+  const entry = `### ${id}  [${status2}]
+- repo/branch: ${field("repo")} / ${field("branch")}
+- intent: ${field("intent")}
+- outcome: ${outcome}
+- closed: ${fmtLocalDate2()}`;
+  const archiveContent = isRegularFile2(archivePath) ? readFileSync4(archivePath, "utf8") : ARCHIVE_TEMPLATE2;
+  const archiveLines = ledgerLines2(archiveContent);
+  let firstEntry = 0;
+  for (let index = 0; index < archiveLines.length; index++) {
+    if (archiveLines[index].startsWith("### ")) {
+      firstEntry = index + 1;
+      break;
+    }
+  }
+  let newArchive;
+  if (firstEntry > 0) {
+    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
+` : "";
+    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
+`;
+    newArchive = `${head}${entry}
+
+${tail}`;
+  } else {
+    newArchive = `${archiveContent}
+${entry}
+`;
+  }
+  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
+  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
+` : "";
+  writeFileSync3(archivePath, newArchive);
+  writeFileSync3(activePath, newActive);
+  return {
+    code: 0,
+    stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
+`,
+    stderr: ""
+  };
+}
+
+// src/engines/claude/claude-engine.ts
+import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync4, statSync as statSync4 } from "node:fs";
+
+// src/engines/claude/persistence.ts
+import { join as join6 } from "node:path";
+
+// src/engines/teammate-record.ts
+var TEAMMATE_RECORD_SCHEMA = 1;
+
+// src/engines/claude/persistence.ts
+var TEAMMATE_ROOT = "/tmp";
+function cwdFile2(name) {
+  return join6(TEAMMATE_ROOT, `teammate-${name}.cwd`);
+}
+function sidFile2(name) {
+  return join6(TEAMMATE_ROOT, `teammate-${name}.sid`);
+}
+function readyFile2(name) {
+  return join6(TEAMMATE_ROOT, `teammate-${name}.ready`);
+}
+function sendAtFile2(name) {
+  return join6(TEAMMATE_ROOT, `teammate-${name}.send-at`);
+}
+function idleDir2() {
+  return "/tmp/claude-idle";
+}
+function idleMarkerFor2(sid) {
+  return join6(idleDir2(), sid);
+}
+function busyMarkerFor2(sid) {
+  return join6(idleDir2(), `${sid}.busy`);
+}
+function lastFileFor2(sid) {
+  return join6(idleDir2(), `${sid}.last`);
+}
+var TMUX_SESSION_PREFIX = "teammate-";
+
+// src/engines/claude/claude-engine.ts
+var CLAUDE_CAPABILITIES = {
+  atomicSend: true,
+  atomicSpawnPrompt: true,
+  compaction: "manual",
+  contextUsage: "transcript-jsonl",
+  history: "transcript-files",
+  memory: "claude-project-memory",
+  reload: "prompt-command",
+  resume: "transcript-id",
+  detachedTurn: "replayable",
+  events: "synthesized"
+};
+async function callNative(env, verb, argv, options) {
+  const handler = NATIVE_VERBS[verb];
+  if (handler === void 0) {
+    return { code: 1, stdout: "", stderr: `tm: native verb not registered: ${verb}
+` };
+  }
+  return handler(argv, options, env);
+}
+function rstrip(text) {
+  return text.replace(/\n+$/, "");
+}
+function readIfNonEmpty2(path) {
+  try {
+    if (statSync4(path).size === 0) return null;
+    return readFileSync5(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+function readSid(name) {
+  const raw = readIfNonEmpty2(sidFile2(name));
+  return raw === null ? null : rstrip(raw);
+}
+function readCwd(name) {
+  const raw = readIfNonEmpty2(cwdFile2(name));
+  return raw === null ? null : rstrip(raw);
+}
+async function hasTmuxSession(env, sessionName) {
+  try {
+    return (await env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
+  } catch {
+    return false;
+  }
+}
+function deriveState(name) {
+  const sid = readSid(name);
+  if (sid === null) return "unknown";
+  if (existsSync3(busyMarkerFor2(sid))) return "busy";
+  if (existsSync3(idleMarkerFor2(sid))) return "idle";
+  return "unknown";
+}
+var ClaudeEngine = class {
+  /** The Claude engine carries the `NativeEnv` only because Phase 2a-1 still
+   *  delegates 12 of its 16 methods to `NATIVE_VERBS`. Phase 2a-2 inlines
+   *  the implementations and shrinks the constructor accordingly. */
+  constructor(env) {
+    this.env = env;
+  }
+  kind = "claude";
+  capabilities = CLAUDE_CAPABILITIES;
+  // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
+  async list(_ctx) {
+    let listing = "";
+    try {
+      listing = (await this.env.runTmux(["ls"])).stdout;
+    } catch {
+      listing = "";
+    }
+    const out = [];
+    for (const line of listing.split("\n")) {
+      const colon = line.indexOf(":");
+      const session = colon >= 0 ? line.slice(0, colon) : line;
+      if (!session.startsWith(TMUX_SESSION_PREFIX)) continue;
+      const name = session.slice(TMUX_SESSION_PREFIX.length).replace(/__/g, "/");
+      out.push({
+        name,
+        engine: "claude",
+        state: deriveState(name),
+        cwd: readCwd(name) ?? "",
+        displayName: null,
+        extras: {}
+      });
+    }
+    return out;
+  }
+  async status(req, _ctx) {
+    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
+    if (!await hasTmuxSession(this.env, sessionName)) return { kind: "not-found" };
+    const linesArg = String(req.lines ?? 80);
+    let pane = null;
+    try {
+      const list = await this.env.runTmux(["list-sessions", "-F", "#{session_id} #{session_name}"]);
+      for (const line of list.stdout.split("\n")) {
+        const space = line.indexOf(" ");
+        if (space >= 0 && line.slice(space + 1) === sessionName) {
+          pane = line.slice(0, space);
+          break;
+        }
+      }
+    } catch {
+      pane = null;
+    }
+    let capture = "";
+    if (pane !== null) {
+      try {
+        const result = await this.env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${linesArg}`]);
+        if (result.code === 0) capture = result.stdout;
+      } catch {
+        capture = "";
+      }
+    }
+    return {
+      kind: "present",
+      name: req.name,
+      engine: "claude",
+      state: deriveState(req.name),
+      cwd: readCwd(req.name) ?? "",
+      pane: capture === "" ? pane : capture,
+      diagnostics: {
+        tmuxSession: sessionName,
+        sid: readSid(req.name) ?? ""
+      }
+    };
+  }
+  async kill(req, _ctx) {
+    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
+    const sid = readSid(req.name);
+    if (sid !== null) {
+      rmSync4(idleMarkerFor2(sid), { force: true });
+      rmSync4(lastFileFor2(sid), { force: true });
+      rmSync4(busyMarkerFor2(sid), { force: true });
+    }
+    for (const file of [sidFile2(req.name), sendAtFile2(req.name), readyFile2(req.name), cwdFile2(req.name)]) {
+      rmSync4(file, { force: true });
+    }
+    let running = false;
+    try {
+      running = (await this.env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
+    } catch {
+      running = false;
+    }
+    if (!running) return { kind: "not-found" };
+    try {
+      await this.env.runTmux(["kill-session", "-t", `=${sessionName}`]);
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
+    }
+    return { kind: "killed" };
+  }
+  // ─── Hot path / session-shape — Phase 2a-1 delegate to NATIVE_VERBS ─
+  async spawn(req, _ctx) {
+    const argv = [req.name];
+    if (req.displayName !== null) argv.push("--task", req.displayName);
+    if (req.prompt !== null) argv.push("--prompt", req.prompt);
+    const result = await callNative(this.env, "spawn", argv);
+    if (result.code !== 0) return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+    return {
+      kind: "spawned",
+      name: req.name,
+      firstTurn: req.prompt === null ? null : { kind: "completed", text: result.stdout, items: [], context: null }
+    };
+  }
+  async send(req, _ctx) {
+    const argv = [req.name, "--prompt", req.prompt];
+    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    const result = await callNative(this.env, "send", argv);
+    if (result.code !== 0) {
+      return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: false };
+    }
+    return { kind: "completed", text: result.stdout, items: [], context: null };
+  }
+  async wait(req, _ctx) {
+    const argv = [req.name];
+    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    const result = await callNative(this.env, "wait", argv);
+    if (result.code !== 0) {
+      return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: true };
+    }
+    return { kind: "completed", text: result.stdout, items: [], context: null };
+  }
+  async compact(req, _ctx) {
+    const result = await callNative(this.env, "compact", [req.name]);
+    if (result.code === 0) return { kind: "compacted" };
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async resume(req, _ctx) {
+    const result = await callNative(this.env, "resume", [req.name, "--sid", req.checkpoint]);
+    if (result.code === 0) return { kind: "resumed", checkpoint: req.checkpoint };
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async last(req, _ctx) {
+    const result = await callNative(this.env, "last", [req.name]);
+    if (result.code === 0) return { kind: "text", text: result.stdout };
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async ctx(req, _ctx) {
+    const result = await callNative(this.env, "ctx", [req.name]);
+    if (result.code === 0) {
+      const match = /\b(\d+)\/(\d+)\b/.exec(result.stdout);
+      if (match) {
+        const used = Number(match[1]);
+        const total = Number(match[2]);
+        return { kind: "usage", tokensUsed: used, tokensTotal: total, pct: Math.floor(used * 100 / total) };
+      }
+      return { kind: "not-supported", reason: "could not parse usage line" };
+    }
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async history(req, _ctx) {
+    const argv = [req.name];
+    if (req.index !== null) argv.push(String(req.index));
+    const result = await callNative(this.env, "history", argv);
+    if (result.code === 0) {
+      return {
+        kind: "list",
+        turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip(result.stdout) }]
+      };
+    }
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async mem(req, _ctx) {
+    const result = await callNative(this.env, "mem", [req.name]);
+    if (result.code === 0) return { kind: "text", text: result.stdout };
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  async reload(req, _ctx) {
+    const result = await callNative(this.env, "reload", [req.name]);
+    if (result.code === 0) return { kind: "reloaded" };
+    return { kind: "failed", message: rstrip(result.stderr) || rstrip(result.stdout) };
+  }
+  // ─── Diagnostic ─────────────────────────────────────────────────────
+  async inspect(req, _ctx) {
+    return {
+      engine: "claude",
+      name: req.name,
+      fields: {
+        sid: readSid(req.name) ?? "",
+        cwd: readCwd(req.name) ?? "",
+        tmuxSession: `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`
+      }
+    };
+  }
+  async doctor(_ctx) {
+    const result = await callNative(this.env, "doctor", []);
+    return {
+      engine: "claude",
+      findings: [
+        {
+          severity: result.code === 0 ? "ok" : "warn",
+          summary: rstrip(result.stdout) || rstrip(result.stderr) || "no doctor output",
+          fix: null
+        }
+      ]
+    };
+  }
+};
+
+// src/engines/registry.ts
+var EngineRegistry = class {
+  engines = /* @__PURE__ */ new Map();
+  /** Add an engine; throws if a kind is registered twice in one process. */
+  register(engine) {
+    if (this.engines.has(engine.kind)) {
+      throw new Error(
+        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
+      );
+    }
+    this.engines.set(engine.kind, engine);
+  }
+  get(kind) {
+    return this.engines.get(kind);
+  }
+  registered() {
+    return Array.from(this.engines.values());
+  }
+  kinds() {
+    return Array.from(this.engines.keys());
+  }
+};
+
+// src/persistence/atomic-file.ts
+import {
+  closeSync as closeSync3,
+  mkdirSync as mkdirSync3,
+  openSync as openSync3,
+  readFileSync as readFileSync6,
+  renameSync as renameSync2,
+  rmSync as rmSync5,
+  statSync as statSync5,
+  writeFileSync as writeFileSync4
+} from "node:fs";
+function readIfPresent(path) {
+  try {
+    return readFileSync6(path, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+function removeIfPresent(path) {
+  rmSync5(path, { force: true });
+}
+
+// src/persistence/identity-store.ts
+function identityFile(name) {
+  return `/tmp/teammate-${name}.json`;
+}
+function read(name) {
+  const raw = readIfPresent(identityFile(name));
+  if (raw === null) return null;
+  return parse(raw);
+}
+function remove(name) {
+  removeIfPresent(identityFile(name));
+}
+function parse(raw) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const obj = value;
+  if (obj["schema"] !== TEAMMATE_RECORD_SCHEMA) return null;
+  if (typeof obj["name"] !== "string") return null;
+  if (typeof obj["engine"] !== "string") return null;
+  if (typeof obj["cwd"] !== "string") return null;
+  if (typeof obj["createdAt"] !== "number") return null;
+  const displayName = obj["displayName"];
+  if (displayName !== null && typeof displayName !== "string") return null;
+  return {
+    schema: TEAMMATE_RECORD_SCHEMA,
+    name: obj["name"],
+    engine: obj["engine"],
+    cwd: obj["cwd"],
+    createdAt: obj["createdAt"],
+    displayName
+  };
+}
+
+// src/identity/name.ts
+var SEGMENT_REGEX = /^[A-Za-z0-9._-]+$/;
+function validateTeammateName(raw) {
+  if (raw.length === 0) return { kind: "invalid", reason: "empty" };
+  if (raw.includes("__")) {
+    return {
+      kind: "invalid",
+      reason: "'__' is reserved (the Claude engine uses it to encode '/' in tmux session names)"
+    };
+  }
+  if (raw.startsWith("/") || raw.endsWith("/")) {
+    return { kind: "invalid", reason: "leading or trailing '/'" };
+  }
+  const segments = raw.split("/");
+  for (const seg of segments) {
+    if (seg.length === 0) return { kind: "invalid", reason: "empty segment ('//' not allowed)" };
+    if (seg === "." || seg === "..") return { kind: "invalid", reason: `segment '${seg}' is reserved` };
+    if (seg.startsWith(".")) return { kind: "invalid", reason: `segment '${seg}' starts with '.'` };
+    if (!SEGMENT_REGEX.test(seg)) {
+      return {
+        kind: "invalid",
+        reason: `segment '${seg}' contains characters outside [A-Za-z0-9._-]`
+      };
+    }
+  }
+  return { kind: "ok", name: raw, segments };
+}
+
+// src/identity/router.ts
+var ProductionTeammateRouter = class {
+  constructor(engines) {
+    this.engines = engines;
+  }
+  async resolve(name) {
+    if (validateTeammateName(name).kind !== "ok") return null;
+    const record = read(name);
+    if (record === null) return null;
+    const engine = this.engines.get(record.engine);
+    if (engine === void 0) return null;
+    return { name, engine };
+  }
+};
+var LegacyClaudeTmuxRouter = class {
+  constructor(engines, tmuxProbe) {
+    this.engines = engines;
+    this.tmuxProbe = tmuxProbe;
+  }
+  async resolve(name) {
+    if (validateTeammateName(name).kind !== "ok") return null;
+    const claude = this.engines.get("claude");
+    if (claude === void 0) return null;
+    const sessionName = `teammate-${name.replace(/\//g, "__")}`;
+    if (!await this.tmuxProbe(sessionName)) return null;
+    return { name, engine: claude };
+  }
+};
+var CompositeTeammateRouter = class {
+  constructor(routers) {
+    this.routers = routers;
+  }
+  async resolve(name) {
+    for (const r of this.routers) {
+      const out = await r.resolve(name);
+      if (out !== null) return out;
+    }
+    return null;
+  }
+};
+
+// src/persistence/identity-writer.ts
+var ProductionIdentityStore = class {
+  async remove(name) {
+    remove(name);
+  }
+};
+
+// src/verbs/format.ts
+function teammateNotFound(name) {
+  return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
+` };
+}
+function noEngineRegistered() {
+  return {
+    code: 1,
+    stdout: "",
+    stderr: "tm: no engine registered in this process (Phase 2 wiring pending)\n"
+  };
+}
+function formatListing(rows) {
+  if (rows.length === 0) return { code: 0, stdout: "", stderr: "" };
+  const lines = rows.map((r) => `${r.name}	${r.engine}	${r.state}	${r.cwd}`);
+  return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+}
+function formatStatus(status2) {
+  switch (status2.kind) {
+    case "present": {
+      return { code: 0, stdout: status2.pane ?? "", stderr: "" };
+    }
+    case "not-found":
+      return { code: 1, stdout: "", stderr: "tm: status: not found\n" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: status: ${status2.message}
+` };
+  }
+}
+
+// src/verbs/ls.ts
+async function lsVerb(ctx2) {
+  const engines = ctx2.engines.registered();
+  if (engines.length === 0) return noEngineRegistered();
+  const listings = await Promise.all(engines.map((engine) => engine.list(ctx2.engineContext)));
+  return formatListing(listings.flat());
+}
+
+// src/verbs/states.ts
+async function statesVerb(ctx2) {
+  const engines = ctx2.engines.registered();
+  if (engines.length === 0) return noEngineRegistered();
+  const listings = (await Promise.all(engines.map((engine) => engine.list(ctx2.engineContext)))).flat();
+  if (listings.length === 0) return { code: 0, stdout: "", stderr: "" };
+  const rows = await Promise.all(
+    listings.map(async (row) => {
+      const engine = ctx2.engines.get(row.engine);
+      if (engine === void 0) return `${row.name}	${row.engine}	${row.state}	${row.cwd}`;
+      const status2 = await engine.status({ name: row.name, lines: null }, ctx2.engineContext);
+      if (status2.kind !== "present") {
+        return `${row.name}	${row.engine}	${row.state}	${row.cwd}`;
+      }
+      return `${status2.name}	${status2.engine}	${status2.state}	${status2.cwd}`;
+    })
+  );
+  return { code: 0, stdout: `${rows.join("\n")}
+`, stderr: "" };
+}
+
+// src/verbs/status.ts
+async function statusVerb(name, ctx2, options = { lines: null }) {
+  const resolved = await ctx2.router.resolve(name);
+  if (resolved === null) return teammateNotFound(name);
+  const status2 = await resolved.engine.status(
+    { name, lines: options.lines },
+    ctx2.engineContext
+  );
+  return formatStatus(status2);
+}
+
+// src/cli.ts
+function productionVerbContext(env) {
+  const registry = new EngineRegistry();
+  registry.register(new ClaudeEngine(env));
+  const router = new CompositeTeammateRouter([
+    new ProductionTeammateRouter(registry),
+    new LegacyClaudeTmuxRouter(registry, async (session) => {
+      try {
+        return (await env.runTmux(["has-session", "-t", `=${session}`])).code === 0;
+      } catch {
+        return false;
+      }
+    })
+  ]);
+  const engineContext = { now: () => Date.now(), env: process.env };
+  return {
+    engines: registry,
+    router,
+    engineContext,
+    identity: new ProductionIdentityStore()
+  };
+}
+var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status"]);
+async function dispatchEngineVerb(verb, rest, ctx2) {
+  switch (verb) {
+    case "ls":
+      return lsVerb(ctx2);
+    case "states":
+      return statesVerb(ctx2);
+    case "status": {
+      if (rest.length === 0) {
+        return { code: 1, stdout: "", stderr: "tm: usage: tm status <repo> [lines=80]\n" };
+      }
+      const lines = rest[1];
+      const parsed = lines === void 0 ? null : Number(lines);
+      const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed;
+      return statusVerb(rest[0], ctx2, { lines: linesArg });
+    }
+    default:
+      return { code: 1, stdout: "", stderr: `tm: unsupported engine verb: ${verb}
+` };
+  }
+}
 function triggersHelp(args) {
   for (const arg of args) {
     if (arg === "-h" || arg === "--help") return true;
@@ -6704,6 +7440,15 @@ async function runCli(argv, env, stdin) {
   if (Object.hasOwn(REMOVED_VERB_MESSAGES, verb)) {
     return removedVerb(REMOVED_VERB_MESSAGES[verb]);
   }
+  if (ENGINE_VERBS.has(verb)) {
+    return dispatchEngineVerb(verb, rest, productionVerbContext(env));
+  }
+  if (verb === "archive") {
+    return archiveVerb(rest, stdin, {
+      dispatcherDir: env.dispatcherDir,
+      projectsDir: env.projectsDir
+    });
+  }
   if (Object.hasOwn(NATIVE_VERBS, verb)) {
     const handler = NATIVE_VERBS[verb];
     const options = stdin != null ? { stdin } : void 0;
@@ -6730,7 +7475,7 @@ function productionEnv() {
     //     `""`, while `tm doctor`'s own check treats empty as unset and
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
-    projectsDir: join5(process.env.HOME ?? homedir(), ".claude", "projects")
+    projectsDir: join7(process.env.HOME ?? homedir(), ".claude", "projects")
   };
 }
 

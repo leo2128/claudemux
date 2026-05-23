@@ -102,23 +102,34 @@ let savedCapture: string | undefined
 let savedTz: string | undefined
 
 /**
- * The resolved-realpath form of `scratchDir`, and its `encodeProjectDir`
- * encoding. Computed in `beforeAll` (after the dir is created), used by
- * `sanitize()` to absorb the macOS-vs-Linux `/tmp` symlink difference:
+ * The resolved-realpath form of `scratchDir` and the two `encodeProjectDir`
+ * encodings that can appear in a verb's output — one for the realpath form
+ * and one for the literal `scratchDir`. Computed in `beforeAll` (after the
+ * dir is created), used by `sanitize()` to absorb the macOS-vs-Linux `/tmp`
+ * symlink difference.
  *
  *   - On Linux `/tmp` is a real directory, so `realpathSync(scratchDir)` is
- *     `scratchDir` itself and the encoded form is `-tmp-claudemux-conf-test`.
- *   - On macOS `/tmp` is a symlink to `/private/tmp`, so `realpathSync`
- *     returns `/private/tmp/claudemux-conf-test` and the encoded form is
- *     `-private-tmp-claudemux-conf-test`.
+ *     `scratchDir` itself and both encoded forms collapse to
+ *     `-tmp-claudemux-conf-test`.
+ *   - On macOS `/tmp` is a symlink to `/private/tmp`. `realpathSync` returns
+ *     `/private/tmp/claudemux-conf-test` and that encodes to
+ *     `-private-tmp-claudemux-conf-test`; the literal `scratchDir` still
+ *     encodes to `-tmp-claudemux-conf-test`.
  *
- * Native verbs that encode a project dir go through `realpathSync` first
- * (mirroring `tm`'s `cd && pwd -P`), so the *encoded* path in any golden
- * carries that OS-specific shape. Substituting both forms to one placeholder
- * keeps the goldens byte-stable across the CI matrix.
+ * Different verbs reach different forms in their output:
+ *
+ *   - `tm history` realpaths the repo path before encoding (mirroring
+ *     `tm`'s `cd && pwd -P`), so its `file:` line carries the realpath form.
+ *   - `tm archive` and `tm mem` encode `dispatcherDir` *without* realpath,
+ *     so their stderr / file paths carry the literal form regardless of OS.
+ *
+ * Substituting both forms to the same `<SCRATCH-ENC>` placeholder keeps the
+ * golden byte-stable whichever path each verb takes — on Linux the two
+ * substitutions are duplicates and the second is a no-op.
  */
 let scratchDirReal = ''
 let encodedScratchReal = ''
+let encodedScratchLiteral = ''
 
 // Pin the timezone for the whole conformance file — set at module load so
 // the FIXED_NOW Date literal below resolves under UTC, before any Date
@@ -163,10 +174,11 @@ beforeAll(() => {
   writeFileSync(sessionsFile, '')
   writeFileSync(captureFile, '')
 
-  // Now that the dir exists, capture its realpath form and the encoded
-  // realpath form. See the variable docs above.
+  // Now that the dir exists, capture its realpath form and *both* encoded
+  // forms — realpath-encoded and literal-encoded. See the variable docs above.
   scratchDirReal = realpathSync(scratchDir)
   encodedScratchReal = encodeProjectDir(scratchDirReal)
+  encodedScratchLiteral = encodeProjectDir(scratchDir)
 
   // Point native `runTmux` at the fake `tmux`.
   process.env.CLAUDEMUX_TMUX = FAKE_TMUX
@@ -267,6 +279,7 @@ function saveGolden(path: string, value: unknown): void {
 function sanitize(value: string): string {
   return value
     .replaceAll(encodedScratchReal, '<SCRATCH-ENC>')
+    .replaceAll(encodedScratchLiteral, '<SCRATCH-ENC>')
     .replaceAll(sandboxHome, '<HOME>')
     .replaceAll(scratchDirReal, '<SCRATCH>')
     .replaceAll(scratchDir, '<SCRATCH>')

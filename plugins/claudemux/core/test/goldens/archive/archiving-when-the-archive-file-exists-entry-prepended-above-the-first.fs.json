@@ -1,4 +1,4 @@
 {
-  "<HOME>/.claude/projects/-tmp-claudemux-conf-test-dispatcher/memory/active-dispatcher-tasks.md": "# Active dispatcher tasks\n\n### t-beta  [PAUSED — waiting on infra]\n- repo: widgets\n- branch: main\n- intent: ship the widget\n",
-  "<HOME>/.claude/projects/-tmp-claudemux-conf-test-dispatcher/memory/dispatcher-tasks-archive.md": "# Dispatcher task archive\n\n### t-alpha  [in progress]\n- repo/branch: acme / feature/login\n- intent: wire up the login flow\n- outcome: shipped it\n- closed: 2026-05-23\n\n### t-old  [done]\n- outcome: an earlier task\n"
+  "<HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher/memory/active-dispatcher-tasks.md": "# Active dispatcher tasks\n\n### t-beta  [PAUSED — waiting on infra]\n- repo: widgets\n- branch: main\n- intent: ship the widget\n",
+  "<HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher/memory/dispatcher-tasks-archive.md": "# Dispatcher task archive\n\n### t-alpha  [in progress]\n- repo/branch: acme / feature/login\n- intent: wire up the login flow\n- outcome: shipped it\n- closed: 2026-05-23\n\n### t-old  [done]\n- outcome: an earlier task\n"
 }

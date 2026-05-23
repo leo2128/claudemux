@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "claudemux-conftest-6fd83840f762: ? (no transcript at <HOME>/.claude/projects/-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-6fd83840f762/claudemux-conftest-3c6bbc4a1afe.jsonl)\n",
+  "stdout": "claudemux-conftest-6fd83840f762: ? (no transcript at <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-6fd83840f762/claudemux-conftest-3c6bbc4a1afe.jsonl)\n",
   "stderr": ""
 }

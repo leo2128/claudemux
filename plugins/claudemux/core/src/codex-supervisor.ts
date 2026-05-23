@@ -189,7 +189,12 @@ export function listDaemons(): string[] {
  */
 export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState> {
   const { name } = opts
-  const binPath = opts.binPath ?? 'codex'
+  // Precedence: explicit `opts.binPath` (tests) > `CLAUDEMUX_CODEX_BIN`
+  // env override (the integration-suite seam) > the default `'codex'`
+  // on PATH (production). The env hook lets the live-codex suite point
+  // at a non-default codex install without surgery on verb code.
+  const binPath =
+    opts.binPath ?? process.env['CLAUDEMUX_CODEX_BIN'] ?? 'codex'
   const dir = codexTeammateDir(name)
   const socketPath = codexSocketPath(name)
   const readyTimeoutMs = opts.readyTimeoutMs ?? 10000

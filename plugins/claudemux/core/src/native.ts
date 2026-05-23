@@ -55,6 +55,13 @@ import type { TmResult, TmRunOptions } from './tm'
 import type { ColumnRunner } from './column'
 import type { GrepRunner } from './grep'
 import type { TmuxRunner } from './tmux'
+import {
+  codexKill,
+  codexSend,
+  codexSpawn,
+  codexWait,
+  isCodexTarget,
+} from './codex-verbs'
 
 /** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
 const SESSION_PREFIX = 'teammate-'
@@ -1132,6 +1139,7 @@ function clearIdle(sid: string): void {
 const kill: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm kill <repo>')
+  if (isCodexTarget(repo)) return codexKill(repo)
   const name = `${SESSION_PREFIX}${repo}`
 
   // A recorded sid means there are hook artifacts to clear first.
@@ -1991,6 +1999,19 @@ const spawn: NativeVerb = async (args, _options, env) => {
   if (repo.length === 0) {
     return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
   }
+  // A `codex-<n>` target spawns a codex `app-server` daemon instead of a
+  // Claude REPL inside tmux. The codex driver has its own argument
+  // surface (no `--task`, no `--resume` yet); the dispatcher gets a
+  // uniform `TmResult` back either way. See `codex-verbs.ts`.
+  if (isCodexTarget(repo)) {
+    if (args.length > 1) {
+      return die(
+        `tm spawn: codex teammate '${repo}' takes no additional arguments yet ` +
+          `(stage 4 surface is just 'tm spawn ${repo}'; --prompt etc. land later)`,
+      )
+    }
+    return codexSpawn(repo)
+  }
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
   const { resumeSid, task, prompt, hasPrompt, noWait } = parsed
@@ -2240,6 +2261,31 @@ function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } 
  * to ..." preamble, the post-turn ctx echo) ride stderr exclusively.
  */
 const send: NativeVerb = async (args, _options, env) => {
+  const firstArg = args[0] ?? ''
+  if (isCodexTarget(firstArg)) {
+    // Codex teammates speak over WebSocket, not tmux + hooks. The codex
+    // `send` understands `--prompt`; flags whose meaning is tmux-bound
+    // (`--pane-quiet`, `--timeout`, `--no-wait` semantics) are rejected
+    // explicitly rather than silently ignored — silent acceptance would
+    // mislead a dispatcher into thinking it had set a meaningful knob.
+    const rest = args.slice(1)
+    let prompt: string | null = null
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i]
+      if (a === '--prompt') {
+        if (i + 1 >= rest.length) return die('tm send: --prompt requires a value')
+        prompt = rest[i + 1] ?? ''
+        i += 1
+      } else {
+        return die(
+          `tm send: codex teammate '${firstArg}' does not yet accept '${a}' ` +
+            `(stage 4 surface is just '--prompt')`,
+        )
+      }
+    }
+    if (prompt === null) return die('tm send: missing --prompt')
+    return codexSend(firstArg, prompt)
+  }
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
@@ -2344,6 +2390,21 @@ function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } 
  * Stop that wakes the wait, not a prior one.
  */
 const wait: NativeVerb = async (args, _options, env) => {
+  const firstArg = args[0] ?? ''
+  if (isCodexTarget(firstArg)) {
+    // Codex `wait`: block on the next `turn/completed` notification from
+    // the daemon. The tmux-bound flags (timeout, --fresh, --pane-quiet)
+    // are not applicable yet — they encode signal-detection knobs for
+    // the hooks-based driver.
+    const rest = args.slice(1)
+    if (rest.length > 0) {
+      return die(
+        `tm wait: codex teammate '${firstArg}' takes no additional arguments yet ` +
+          `(stage 4 surface is just 'tm wait ${firstArg}')`,
+      )
+    }
+    return codexWait(firstArg)
+  }
   const parsed = parseWaitArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, timeout, fresh, paneQuiet } = parsed

@@ -55,6 +55,7 @@ import { CodexTeammateRecord } from '../../src/engines/codex/persistence'
 import { EmptyTeammateRouter } from '../../src/identity/router'
 import { killVerb } from '../../src/verbs/kill'
 import { lsVerb } from '../../src/verbs/ls'
+import { statesVerb } from '../../src/verbs/states'
 import { statusVerb } from '../../src/verbs/status'
 import { NoopIdentityStore, type VerbContext } from '../../src/verbs/context'
 
@@ -213,9 +214,19 @@ describe('EngineRegistry', () => {
 })
 
 describe('Verb-layer default impls — Phase 1 wiring', () => {
-  test('lsVerb against an empty registry produces an empty TmResult', async () => {
+  test('lsVerb against an empty registry raises no-engine-registered', async () => {
+    // A zero-engine process is a wiring failure, not a fleet state. The verb
+    // must surface that loudly so a Phase 2 production process missing an
+    // engine registration fails here, not later in a confused dispatcher.
     const result = await lsVerb(emptyVerbContext())
-    expect(result).toEqual({ code: 0, stdout: '', stderr: '' })
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('no engine registered')
+  })
+
+  test('statesVerb against an empty registry raises no-engine-registered', async () => {
+    const result = await statesVerb(emptyVerbContext())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('no engine registered')
   })
 
   test('statusVerb falls through to teammate-not-found with the empty router', async () => {

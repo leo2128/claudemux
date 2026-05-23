@@ -11,13 +11,17 @@
  * the row shape, not the verb.
  */
 
-import { formatListing } from './format'
+import { formatListing, noEngineRegistered } from './format'
 import type { VerbContext } from './context'
 import type { TmResult } from '../tm'
 
 export async function lsVerb(ctx: VerbContext): Promise<TmResult> {
-  const listings = await Promise.all(
-    ctx.engines.registered().map((engine) => engine.list(ctx.engineContext)),
-  )
+  // An empty registry means production wiring is incomplete — the verb must
+  // surface that loudly, not silently report "no teammates". A zero-engine
+  // process is a misconfiguration, not a fleet state.
+  const engines = ctx.engines.registered()
+  if (engines.length === 0) return noEngineRegistered()
+
+  const listings = await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))
   return formatListing(listings.flat())
 }

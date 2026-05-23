@@ -11,11 +11,18 @@
  */
 
 import type { TmResult } from '../tm'
+import { noEngineRegistered } from './format'
 import type { VerbContext } from './context'
 
 export async function statesVerb(ctx: VerbContext): Promise<TmResult> {
+  // Same rule as `lsVerb`: an empty registry is a wiring failure, not a
+  // fleet state. Surface it explicitly so a Phase 2 production process
+  // that forgets to register an engine fails loudly here.
+  const engines = ctx.engines.registered()
+  if (engines.length === 0) return noEngineRegistered()
+
   const listings = (
-    await Promise.all(ctx.engines.registered().map((engine) => engine.list(ctx.engineContext)))
+    await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))
   ).flat()
 
   if (listings.length === 0) return { code: 0, stdout: '', stderr: '' }

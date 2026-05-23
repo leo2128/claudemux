@@ -43,6 +43,7 @@ import type {
   InitializeResponse,
   ServerNotification,
 } from './codex-protocol/index.js'
+import type { ThreadResumeResponse } from './codex-protocol/v2/ThreadResumeResponse.js'
 import type { ThreadStartResponse } from './codex-protocol/v2/ThreadStartResponse.js'
 import type { TurnCompletedNotification } from './codex-protocol/v2/TurnCompletedNotification.js'
 import type { TurnStartResponse } from './codex-protocol/v2/TurnStartResponse.js'
@@ -201,6 +202,7 @@ export async function codexSend(
     client = await openInitialized(name)
     let threadId = readThreadId(name)
     if (threadId === null) {
+      // First send for this teammate: create a new thread, persist its id.
       const resp = await client.request<'thread/start', ThreadStartResponse>(
         'thread/start',
         {
@@ -210,6 +212,24 @@ export async function codexSend(
       )
       threadId = resp.thread.id
       writeThreadId(name, threadId)
+    } else {
+      // Subsequent send: the existing thread is owned by a *prior*
+      // WebSocket connection that has since disconnected. The codex
+      // daemon does not let `turn/start` address a thread the current
+      // connection has not joined — it just silently never replies,
+      // observed empirically as `tm send` hanging until killed. A
+      // `thread/resume { threadId }` rejoins the running thread on
+      // this connection (see vendored ThreadResumeParams docstring).
+      await client.request<'thread/resume', ThreadResumeResponse>(
+        'thread/resume',
+        {
+          threadId,
+          // `persistExtendedHistory` is the one required ThreadResumeParams
+          // field beyond `threadId`; it does not have `experimentalRawEvents`
+          // the way ThreadStartParams does.
+          persistExtendedHistory: false,
+        },
+      )
     }
 
     const params = await runTurn(client, threadId, prompt, !noWait)

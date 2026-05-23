@@ -4080,7 +4080,7 @@ import {
 } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname, join as join3 } from "node:path";
+import { dirname, join as join4 } from "node:path";
 
 // src/paths.ts
 import { join } from "node:path";
@@ -4138,7 +4138,7 @@ function codexMetaFile(name) {
 
 // src/codex-verbs.ts
 import { closeSync as closeSync2, openSync as openSync2, readFileSync as readFileSync2, rmSync as rmSync2, writeSync as writeSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 
 // node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -4162,10 +4162,11 @@ var CodexWsClient = class {
   closed = false;
   closeReason = null;
   constructor(opts) {
+    const wsOpts = { perMessageDeflate: false };
     if (opts.socketPath !== void 0) {
-      this.ws = new wrapper_default(`ws+unix://${opts.socketPath}`);
+      this.ws = new wrapper_default(`ws+unix://${opts.socketPath}`, wsOpts);
     } else if (opts.url !== void 0) {
-      this.ws = new wrapper_default(opts.url);
+      this.ws = new wrapper_default(opts.url, wsOpts);
     } else {
       throw new Error("CodexWsClient: socketPath or url required");
     }
@@ -4320,6 +4321,7 @@ var CodexWsClient = class {
 import {
   spawn as spawnChild
 } from "node:child_process";
+import { join as join2 } from "node:path";
 import {
   closeSync,
   existsSync,
@@ -4414,11 +4416,15 @@ async function spawnDaemon(opts) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const args = ["app-server", "--listen", `unix://${socketPath}`, ...opts.extraArgs ?? []];
+  const stdoutLog = join2(dir, "stdout.log");
+  const stderrLog = join2(dir, "stderr.log");
+  const stdoutFd = openSync(stdoutLog, "a", 384);
+  const stderrFd = openSync(stderrLog, "a", 384);
   const spawnOpts = {
     cwd: opts.cwd ?? process.cwd(),
     env: opts.env ?? process.env,
     detached: true,
-    stdio: "ignore"
+    stdio: ["ignore", stdoutFd, stderrFd]
   };
   let child;
   try {
@@ -4437,11 +4443,15 @@ async function spawnDaemon(opts) {
       });
     });
   } catch (e) {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
     rmSync(dir, { recursive: true, force: true });
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
     );
   }
+  closeSync(stdoutFd);
+  closeSync(stderrFd);
   child.unref();
   child.on("error", () => {
   });
@@ -4623,6 +4633,17 @@ async function codexSend(name, prompt, opts = {}) {
       );
       threadId = resp.thread.id;
       writeThreadId(name, threadId);
+    } else {
+      await client.request(
+        "thread/resume",
+        {
+          threadId,
+          // `persistExtendedHistory` is the one required ThreadResumeParams
+          // field beyond `threadId`; it does not have `experimentalRawEvents`
+          // the way ThreadStartParams does.
+          persistExtendedHistory: false
+        }
+      );
     }
     const params = await runTurn(client, threadId, prompt, !noWait);
     touchLastSeen(name);
@@ -4688,7 +4709,7 @@ async function codexKill(name) {
   };
 }
 function tryBorrow(name) {
-  const lockPath = join2(codexTeammateDir(name), "lock");
+  const lockPath = join3(codexTeammateDir(name), "lock");
   try {
     const fd = openSync2(lockPath, "wx", 384);
     try {
@@ -4703,7 +4724,7 @@ function tryBorrow(name) {
   }
 }
 function releaseBorrow(name) {
-  rmSync2(join2(codexTeammateDir(name), "lock"), { force: true });
+  rmSync2(join3(codexTeammateDir(name), "lock"), { force: true });
 }
 async function codexAsk(prompt) {
   if (prompt.length === 0) {
@@ -4866,7 +4887,7 @@ function readCtxUsage(jsonl) {
   return { used: inputs[inputs.length - 1], out: lastOut, peak };
 }
 function transcriptFile(projectsDir, cwd, sid) {
-  return join3(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
+  return join4(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
 }
 function isRegularFile(path) {
   try {
@@ -5012,7 +5033,7 @@ var states = async (_args, _options, env) => {
 `);
 };
 function dieRepoNotFound(verb, repo, path, dispatcherDir) {
-  if (isDirectory(join3(dispatcherDir, ".git"))) {
+  if (isDirectory(join4(dispatcherDir, ".git"))) {
     return die2(
       `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
     The dispatcher dir should be the PARENT of your sibling repos.
@@ -5026,15 +5047,15 @@ function dieRepoNotFound(verb, repo, path, dispatcherDir) {
   );
 }
 function projectDirForRepo(repo, env) {
-  const phys = realpathSync(join3(env.dispatcherDir, repo));
-  return join3(env.projectsDir, encodeProjectDir(phys));
+  const phys = realpathSync(join4(env.dispatcherDir, repo));
+  return join4(env.projectsDir, encodeProjectDir(phys));
 }
 var mem = async (args, _options, env) => {
   const repo = args[0] ?? "";
   if (repo.length === 0) return die2("usage: tm mem <repo>");
-  const path = join3(env.dispatcherDir, repo);
+  const path = join4(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("mem", repo, path, env.dispatcherDir);
-  const mfile = join3(projectDirForRepo(repo, env), "memory", "MEMORY.md");
+  const mfile = join4(projectDirForRepo(repo, env), "memory", "MEMORY.md");
   if (!isRegularFile(mfile)) {
     return {
       code: 0,
@@ -5234,7 +5255,7 @@ async function historyList(repo, projectDir, env) {
   const files = names.map((name) => {
     let mtime = 0;
     try {
-      mtime = Math.floor(statSync2(join3(projectDir, name)).mtimeMs / 1e3);
+      mtime = Math.floor(statSync2(join4(projectDir, name)).mtimeMs / 1e3);
     } catch {
       mtime = 0;
     }
@@ -5245,7 +5266,7 @@ async function historyList(repo, projectDir, env) {
   const now = Math.floor(Date.now() / 1e3);
   const rows = [[" ", "SID", "AGE", "SIZE", "TOPIC"]];
   for (const { name, mtime } of files) {
-    const full = join3(projectDir, name);
+    const full = join4(projectDir, name);
     const sidFull = name.replace(/\.jsonl$/, "");
     let size = 0;
     try {
@@ -5283,7 +5304,7 @@ function historyDetail(repo, projectDir, prefix) {
   let names;
   try {
     names = readdirSync2(projectDir).filter(
-      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile(join3(projectDir, name2))
+      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile(join4(projectDir, name2))
     );
   } catch {
     names = [];
@@ -5299,7 +5320,7 @@ function historyDetail(repo, projectDir, prefix) {
     );
   }
   const name = names[0];
-  const file = join3(projectDir, name);
+  const file = join4(projectDir, name);
   const sidFull = name.replace(/\.jsonl$/, "");
   let size = 0;
   let mtime = 0;
@@ -5358,7 +5379,7 @@ resume: tm resume ${repo} ${sidFull}
 var history = async (args, _options, env) => {
   const repo = args[0] ?? "";
   if (repo.length === 0) return die2("usage: tm history <repo> [<sid-or-prefix>]");
-  const path = join3(env.dispatcherDir, repo);
+  const path = join4(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("history", repo, path, env.dispatcherDir);
   const projectDir = projectDirForRepo(repo, env);
   const sidArg = args[1] ?? "";
@@ -5515,9 +5536,9 @@ var archive = async (args, options, env) => {
   if (id === "") {
     return die2("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
   }
-  const memoryDir = join3(env.projectsDir, encodeProjectDir(env.dispatcherDir), "memory");
-  const activePath = join3(memoryDir, "active-dispatcher-tasks.md");
-  const archivePath = join3(memoryDir, "dispatcher-tasks-archive.md");
+  const memoryDir = join4(env.projectsDir, encodeProjectDir(env.dispatcherDir), "memory");
+  const activePath = join4(memoryDir, "active-dispatcher-tasks.md");
+  const archivePath = join4(memoryDir, "dispatcher-tasks-archive.md");
   if (!isRegularFile(activePath)) return die2(`no active ledger at ${activePath}`);
   const outcome = (options?.stdin ?? "").replace(/\n+$/, "");
   if (outcome.replace(/\s/g, "") === "") {
@@ -5824,8 +5845,8 @@ var doctor = async (args, _options, env) => {
   };
   let out = "";
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const tmWrapper = join3(moduleDir, "..", "..", "bin", "tm");
-  const pluginJson = join3(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
+  const tmWrapper = join4(moduleDir, "..", "..", "bin", "tm");
+  const pluginJson = join4(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
   let version = "unknown";
   let pluginJsonPresent = false;
   try {
@@ -6037,7 +6058,7 @@ var spawn2 = async (args, _options, env) => {
       "tm spawn: --no-wait is only valid with --prompt (a fresh spawn without a prompt already returns as soon as the REPL is ready)"
     );
   }
-  const path = join3(env.dispatcherDir, repo);
+  const path = join4(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("spawn", repo, path, env.dispatcherDir);
   const cwdPhys = realpathSync(path);
   const dispatcherPhys = realpathSync(env.dispatcherDir);
@@ -6482,7 +6503,7 @@ var resume = async (args, _options, env) => {
   if (noWait && !hasPrompt) {
     return die2("tm resume: --no-wait is only valid with --prompt");
   }
-  const path = join3(env.dispatcherDir, repo);
+  const path = join4(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("resume", repo, path, env.dispatcherDir);
   const name = `${SESSION_PREFIX}${repo}`;
   if (await sessionExists(name, env.runTmux)) {
@@ -6510,7 +6531,7 @@ var resume = async (args, _options, env) => {
     const stats = names.map((file) => {
       let mtime = 0;
       try {
-        mtime = Math.floor(statSync2(join3(projectDir, file)).mtimeMs / 1e3);
+        mtime = Math.floor(statSync2(join4(projectDir, file)).mtimeMs / 1e3);
       } catch {
         mtime = 0;
       }
@@ -6522,7 +6543,7 @@ var resume = async (args, _options, env) => {
     autoPickStderr = `tm resume: no sid given \u2014 auto-picked ${sid} (jsonl mtime ${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.
 `;
   } else {
-    const target = join3(projectDir, `${sid}.jsonl`);
+    const target = join4(projectDir, `${sid}.jsonl`);
     if (!isRegularFile(target)) {
       return die2(
         `no transcript at ${target} \u2014 wrong repo for this sid, or sid does not exist. Check 'ls ${projectDir}/'.`
@@ -6587,7 +6608,7 @@ var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], op
 
 // src/cli.ts
 import { homedir } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 function triggersHelp(args) {
   for (const arg of args) {
     if (arg === "-h" || arg === "--help") return true;
@@ -6664,7 +6685,7 @@ function productionEnv() {
     //     `""`, while `tm doctor`'s own check treats empty as unset and
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
-    projectsDir: join4(process.env.HOME ?? homedir(), ".claude", "projects")
+    projectsDir: join5(process.env.HOME ?? homedir(), ".claude", "projects")
   };
 }
 

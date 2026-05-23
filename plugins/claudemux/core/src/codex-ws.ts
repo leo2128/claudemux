@@ -108,10 +108,21 @@ export class CodexWsClient {
   private closeReason: Error | null = null
 
   constructor(opts: CodexWsClientOptions) {
+    // `perMessageDeflate: false` is load-bearing. The codex app-server's
+    // WebSocket upgrade is strict about the `Sec-WebSocket-Extensions`
+    // header — the `ws` library's default
+    // `permessage-deflate; client_max_window_bits` proposal makes
+    // tokio-tungstenite (on the daemon's side) reject the upgrade with
+    // `Missing, duplicated or incorrect header sec-websocket-extensions`,
+    // and the client sees only a bare "socket hang up" with no stderr
+    // line on the daemon unless RUST_LOG is on. Verified empirically
+    // against codex 0.133.0; disabling the extension makes the upgrade
+    // complete and JSON-RPC traffic begin.
+    const wsOpts = { perMessageDeflate: false }
     if (opts.socketPath !== undefined) {
-      this.ws = new WebSocket(`ws+unix://${opts.socketPath}`)
+      this.ws = new WebSocket(`ws+unix://${opts.socketPath}`, wsOpts)
     } else if (opts.url !== undefined) {
-      this.ws = new WebSocket(opts.url)
+      this.ws = new WebSocket(opts.url, wsOpts)
     } else {
       throw new Error('CodexWsClient: socketPath or url required')
     }

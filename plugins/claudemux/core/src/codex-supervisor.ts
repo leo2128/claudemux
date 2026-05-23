@@ -26,6 +26,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from 'node:child_process'
+import { join } from 'node:path'
 import {
   closeSync,
   existsSync,
@@ -217,11 +218,25 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
   mkdirSync(dir, { recursive: true })
 
   const args = ['app-server', '--listen', `unix://${socketPath}`, ...(opts.extraArgs ?? [])]
+  // Daemon stdio:
+  //   stdin  → /dev/null (ignored) — codex app-server is a pure socket server.
+  //   stdout → `<dir>/stdout.log`  — diagnostic; usually empty.
+  //   stderr → `<dir>/stderr.log`  — load-bearing. The codex protocol is
+  //     `[experimental]`; when a request bounces or a turn aborts, codex
+  //     writes its reason to stderr. Routing this to /dev/null hid the
+  //     reason during stage 4 turn-roundtrip debugging — leave it on disk
+  //     under the registry directory so `tail -f /tmp/teammate-codex/<n>/stderr.log`
+  //     is one step away. The teammate's reap removes the directory and
+  //     the log files with it.
+  const stdoutLog = join(dir, 'stdout.log')
+  const stderrLog = join(dir, 'stderr.log')
+  const stdoutFd = openSync(stdoutLog, 'a', 0o600)
+  const stderrFd = openSync(stderrLog, 'a', 0o600)
   const spawnOpts: SpawnOptions = {
     cwd: opts.cwd ?? process.cwd(),
     env: opts.env ?? process.env,
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', stdoutFd, stderrFd],
   }
 
   let child: ChildProcess
@@ -247,11 +262,18 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
       })
     })
   } catch (e) {
+    closeSync(stdoutFd)
+    closeSync(stderrFd)
     rmSync(dir, { recursive: true, force: true })
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${(e as Error).message}`,
     )
   }
+  // The child holds its own duplicated fds for stdout/stderr after spawn;
+  // the parent's copies can be released so they don't leak across many
+  // spawn calls in long-running tests.
+  closeSync(stdoutFd)
+  closeSync(stderrFd)
   // `unref` releases the parent's event loop from the child — the daemon
   // keeps running after this Node process exits.
   child.unref()

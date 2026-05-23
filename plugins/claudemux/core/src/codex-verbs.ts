@@ -192,8 +192,13 @@ export async function codexSend(
   }
   const noWait = opts.noWait ?? false
 
-  const client = await openInitialized(name)
+  // Wrap the whole protocol round-trip so a ws-connect or RPC failure
+  // surfaces as the standard `tm: <message>` stderr line rather than
+  // bubbling up to main.ts's `[tm] …` catch-all (which a dispatcher
+  // grep-matching `^tm:` would miss).
+  let client: CodexWsClient | null = null
   try {
+    client = await openInitialized(name)
     let threadId = readThreadId(name)
     if (threadId === null) {
       const resp = await client.request<'thread/start', ThreadStartResponse>(
@@ -223,8 +228,12 @@ export async function codexSend(
       stdout: JSON.stringify(params, null, 2) + '\n',
       stderr: '',
     }
+  } catch (e) {
+    return die(
+      `codex send on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`,
+    )
   } finally {
-    client.close()
+    if (client !== null) client.close()
   }
 }
 
@@ -240,8 +249,9 @@ export async function codexWait(name: string): Promise<TmResult> {
     return die(`codex teammate '${name}' is not alive`)
   }
 
-  const client = await openInitialized(name)
+  let client: CodexWsClient | null = null
   try {
+    client = await openInitialized(name)
     const completed = await waitForNotification(client, 'turn/completed')
     touchLastSeen(name)
     return {
@@ -249,8 +259,12 @@ export async function codexWait(name: string): Promise<TmResult> {
       stdout: JSON.stringify(completed.params, null, 2) + '\n',
       stderr: '',
     }
+  } catch (e) {
+    return die(
+      `codex wait on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`,
+    )
   } finally {
-    client.close()
+    if (client !== null) client.close()
   }
 }
 
@@ -362,8 +376,14 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
     )
   }
 
-  const client = await openInitialized(borrowed)
+  // The borrow lock must be released even when `openInitialized` itself
+  // throws (daemon crashed between the alive check and ws connect, ws
+  // hello rejected, initialize RPC errored). A `try` *around* the
+  // initialization is the contract decision 0022 §3 step 4 promises:
+  // release unconditionally, including on error.
+  let client: CodexWsClient | null = null
   try {
+    client = await openInitialized(borrowed)
     const resp = await client.request<'thread/start', ThreadStartResponse>(
       'thread/start',
       {
@@ -383,8 +403,12 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
       stdout: JSON.stringify(params, null, 2) + '\n',
       stderr: '',
     }
+  } catch (e) {
+    return die(
+      `codex ask on '${borrowed}' failed: ${e instanceof Error ? e.message : String(e)}`,
+    )
   } finally {
-    client.close()
+    if (client !== null) client.close()
     releaseBorrow(borrowed)
   }
 }

@@ -4112,7 +4112,7 @@ function encodeProjectDir(cwd) {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 function codexRegistryRoot() {
-  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] ?? "/tmp/teammate-codex";
+  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
 }
 function codexTeammateDir(name) {
   return join(codexRegistryRoot(), name);
@@ -4262,7 +4262,11 @@ var CodexWsClient = class {
     const hasResult = "result" in env;
     const hasError = "error" in env;
     if (hasMethod && hasId) {
-      void this.handleServerRequest(env);
+      this.handleServerRequest(env).catch(
+        (err) => this.tearDown(
+          err instanceof Error ? err : new Error(String(err))
+        )
+      );
     } else if (hasMethod) {
       this.dispatchNotification(env);
     } else if (hasId && (hasResult || hasError)) {
@@ -4398,7 +4402,7 @@ function listDaemons() {
 }
 async function spawnDaemon(opts) {
   const { name } = opts;
-  const binPath = opts.binPath ?? process.env["CLAUDEMUX_CODEX_BIN"] ?? "codex";
+  const binPath = opts.binPath ?? (process.env["CLAUDEMUX_CODEX_BIN"] || "codex");
   const dir = codexTeammateDir(name);
   const socketPath = codexSocketPath(name);
   const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
@@ -4605,8 +4609,9 @@ async function codexSend(name, prompt, opts = {}) {
     return die('usage: tm send <teammate> "<prompt>"');
   }
   const noWait = opts.noWait ?? false;
-  const client = await openInitialized(name);
+  let client = null;
   try {
+    client = await openInitialized(name);
     let threadId = readThreadId(name);
     if (threadId === null) {
       const resp = await client.request(
@@ -4634,16 +4639,21 @@ async function codexSend(name, prompt, opts = {}) {
       stdout: JSON.stringify(params, null, 2) + "\n",
       stderr: ""
     };
+  } catch (e) {
+    return die(
+      `codex send on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`
+    );
   } finally {
-    client.close();
+    if (client !== null) client.close();
   }
 }
 async function codexWait(name) {
   if (!daemonAlive(name)) {
     return die(`codex teammate '${name}' is not alive`);
   }
-  const client = await openInitialized(name);
+  let client = null;
   try {
+    client = await openInitialized(name);
     const completed = await waitForNotification(client, "turn/completed");
     touchLastSeen(name);
     return {
@@ -4651,8 +4661,12 @@ async function codexWait(name) {
       stdout: JSON.stringify(completed.params, null, 2) + "\n",
       stderr: ""
     };
+  } catch (e) {
+    return die(
+      `codex wait on '${name}' failed: ${e instanceof Error ? e.message : String(e)}`
+    );
   } finally {
-    client.close();
+    if (client !== null) client.close();
   }
 }
 async function codexKill(name) {
@@ -4721,8 +4735,9 @@ async function codexAsk(prompt) {
       `all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`
     );
   }
-  const client = await openInitialized(borrowed);
+  let client = null;
   try {
+    client = await openInitialized(borrowed);
     const resp = await client.request(
       "thread/start",
       {
@@ -4742,8 +4757,12 @@ async function codexAsk(prompt) {
       stdout: JSON.stringify(params, null, 2) + "\n",
       stderr: ""
     };
+  } catch (e) {
+    return die(
+      `codex ask on '${borrowed}' failed: ${e instanceof Error ? e.message : String(e)}`
+    );
   } finally {
-    client.close();
+    if (client !== null) client.close();
     releaseBorrow(borrowed);
   }
 }

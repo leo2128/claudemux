@@ -93,7 +93,12 @@ export function encodeProjectDir(cwd: string): string {
  * `/tmp/teammate-codex/` directory. Production never sets this.
  */
 export function codexRegistryRoot(): string {
-  return process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] ?? '/tmp/teammate-codex'
+  // `||` not `??`: an empty `CLAUDEMUX_CODEX_REGISTRY_ROOT` (a partial
+  // shell expansion produces one) is treated as "unset", matching the
+  // bash `${VAR:-default}` convention this codebase chose elsewhere
+  // (see cli.ts:160-170). With `??`, an empty string would propagate
+  // and every registry path would resolve under the filesystem root.
+  return process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] || '/tmp/teammate-codex'
 }
 
 /** This teammate's registry subdirectory — created by `tm spawn codex-<n>`. */

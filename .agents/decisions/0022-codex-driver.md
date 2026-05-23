@@ -81,16 +81,29 @@ The named `codex-<n>` teammates serve as the pool. `tm ask "<prompt>"`:
 1. Enumerates codex teammates from the FS registry.
 2. Picks the first alive one whose borrow lock (`<dir>/lock`, created with
    `O_EXCL`) can be claimed atomically.
-3. Shelves the teammate's persisted thread id, runs one turn on a fresh
-   thread (so the borrowed teammate's primary conversation thread is not
-   polluted), then restores the shelved thread.
-4. Releases the lock, unconditionally, including on error.
+3. Opens a fresh ws connection, calls `thread/start` with
+   `ephemeral: true` so codex side does not bind the turn to the
+   teammate's persistent conversation history. The teammate's
+   `<dir>/thread` file is not touched at all — a later
+   `tm send <name>` continues the user's primary thread exactly as
+   before.
+4. Drives one turn through the shared `runTurn` helper.
+5. Releases the lock, unconditionally, including on error — the
+   borrow/initialize/turn flow is wrapped in `try { … } finally {
+   releaseBorrow(borrowed) }` so a thrown ws-connect or RPC error
+   never leaks the lock.
+
+`ephemeral: true` is what makes ask cheap on the daemon: without it
+every ask leaks one server-side thread per call (a shelve-and-restore
+dance on the persisted `<dir>/thread` file does not free the
+daemon-side thread the call allocated).
 
 `tm send` does not currently acquire the lock; concurrent
 `tm send codex-N` + `tm ask` against the same teammate is guarded by codex's
-own per-thread sequencing (codex rejects overlapping `turn/start` on a
-thread). A future PR can teach `send` to acquire the lock if user feedback
-shows that matters.
+own per-thread sequencing — and since ask runs on a different
+(ephemeral) thread from send, there is no server-side contention even
+if the timing overlaps. A future PR can teach `send` to acquire the
+lock if user feedback shows that matters.
 
 ### 4. Doctor reaps dead-pid orphans, never live ones
 

@@ -193,8 +193,14 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
   // env override (the integration-suite seam) > the default `'codex'`
   // on PATH (production). The env hook lets the live-codex suite point
   // at a non-default codex install without surgery on verb code.
+  //
+  // `||` not `??` for the env step: an empty string in the env is treated
+  // as "unset" (matching the bash `${VAR:-default}` convention this
+  // codebase chose elsewhere — see cli.ts:160-170). `opts.binPath` keeps
+  // `??` because an empty explicit option from a test would be a real
+  // intent to disable the binary, not a default-trigger.
   const binPath =
-    opts.binPath ?? process.env['CLAUDEMUX_CODEX_BIN'] ?? 'codex'
+    opts.binPath ?? (process.env['CLAUDEMUX_CODEX_BIN'] || 'codex')
   const dir = codexTeammateDir(name)
   const socketPath = codexSocketPath(name)
   const readyTimeoutMs = opts.readyTimeoutMs ?? 10000

@@ -219,7 +219,19 @@ export class CodexWsClient {
     const hasError = 'error' in env
 
     if (hasMethod && hasId) {
-      void this.handleServerRequest(env as unknown as ServerRequestEnvelope)
+      // `.catch` on the floating promise: handleServerRequest is async
+      // and posts via `this.ws.send`, which can synchronously throw if
+      // the socket is in CLOSING/CLOSED at the moment the reply lands.
+      // Without a .catch the rejection escapes as `unhandledRejection`,
+      // which Node 22 currently warns about and future versions exit on.
+      // Tearing the connection down on a failed reply is the correct
+      // disposition — there is no useful retry from here.
+      this.handleServerRequest(env as unknown as ServerRequestEnvelope).catch(
+        (err) =>
+          this.tearDown(
+            err instanceof Error ? err : new Error(String(err)),
+          ),
+      )
     } else if (hasMethod) {
       this.dispatchNotification(env as unknown as ServerNotification)
     } else if (hasId && (hasResult || hasError)) {

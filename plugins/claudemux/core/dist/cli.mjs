@@ -3869,6 +3869,13 @@ var HELP_TEXTS = {
       and --no-wait (nothing waited).
       On timeout: stderr warning, partial .last to stdout if any,
       exit 1.
+
+      When <repo> is a codex teammate (name starts with 'codex-'),
+      this verb routes into the codex driver instead: only --prompt
+      and --no-wait are accepted, the reply on stdout is the raw
+      Turn JSON, and --no-wait composes with 'tm wait codex-<n>' for
+      the async case. Tmux-bound flags (--pane-quiet, --timeout) are
+      rejected explicitly rather than silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
@@ -4578,7 +4585,17 @@ async function codexSpawn(name) {
     return die(e.message);
   }
 }
-async function codexSend(name, prompt) {
+async function runTurn(client, threadId, prompt, wait2) {
+  const completed = wait2 ? waitForNotification(client, "turn/completed") : null;
+  await client.request("turn/start", {
+    threadId,
+    input: [{ type: "text", text: prompt, text_elements: [] }]
+  });
+  if (completed === null) return null;
+  const notif = await completed;
+  return notif.params;
+}
+async function codexSend(name, prompt, opts = {}) {
   if (!daemonAlive(name)) {
     return die(
       `codex teammate '${name}' is not alive \u2014 try 'tm spawn ${name}' first`
@@ -4587,6 +4604,7 @@ async function codexSend(name, prompt) {
   if (prompt.length === 0) {
     return die('usage: tm send <teammate> "<prompt>"');
   }
+  const noWait = opts.noWait ?? false;
   const client = await openInitialized(name);
   try {
     let threadId = readThreadId(name);
@@ -4601,16 +4619,19 @@ async function codexSend(name, prompt) {
       threadId = resp.thread.id;
       writeThreadId(name, threadId);
     }
-    const completed = waitForNotification(client, "turn/completed");
-    await client.request("turn/start", {
-      threadId,
-      input: [{ type: "text", text: prompt, text_elements: [] }]
-    });
-    const notif = await completed;
+    const params = await runTurn(client, threadId, prompt, !noWait);
     touchLastSeen(name);
+    if (params === null) {
+      return {
+        code: 0,
+        stdout: "",
+        stderr: `sent: ${name} (thread=${threadId}, --no-wait; use 'tm wait ${name}' for the reply)
+`
+      };
+    }
     return {
       code: 0,
-      stdout: JSON.stringify(notif.params, null, 2) + "\n",
+      stdout: JSON.stringify(params, null, 2) + "\n",
       stderr: ""
     };
   } finally {
@@ -4700,23 +4721,29 @@ async function codexAsk(prompt) {
       `all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`
     );
   }
-  let shelvedThread = null;
+  const client = await openInitialized(borrowed);
   try {
-    shelvedThread = readFileSync2(codexThreadFile(borrowed), "utf8").trim() || null;
-  } catch {
-    shelvedThread = null;
-  }
-  if (shelvedThread !== null) {
-    rmSync2(codexThreadFile(borrowed), { force: true });
-  }
-  try {
-    return await codexSend(borrowed, prompt);
+    const resp = await client.request(
+      "thread/start",
+      {
+        // Daemon-side throwaway thread: codex treats it as not part of
+        // the teammate's persistent history, and frees it once the turn
+        // completes. Without this the borrow leaks one server-side
+        // thread per ask, accumulating over the daemon's lifetime.
+        ephemeral: true,
+        experimentalRawEvents: false,
+        persistExtendedHistory: false
+      }
+    );
+    const params = await runTurn(client, resp.thread.id, prompt, true);
+    touchLastSeen(borrowed);
+    return {
+      code: 0,
+      stdout: JSON.stringify(params, null, 2) + "\n",
+      stderr: ""
+    };
   } finally {
-    if (shelvedThread !== null) {
-      writeThreadId(borrowed, shelvedThread);
-    } else {
-      rmSync2(codexThreadFile(borrowed), { force: true });
-    }
+    client.close();
     releaseBorrow(borrowed);
   }
 }
@@ -6160,20 +6187,23 @@ var send = async (args, _options, env) => {
   if (isCodexTarget(firstArg)) {
     const rest = args.slice(1);
     let prompt2 = null;
+    let noWait2 = false;
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === "--prompt") {
         if (i + 1 >= rest.length) return die2("tm send: --prompt requires a value");
         prompt2 = rest[i + 1] ?? "";
         i += 1;
+      } else if (a === "--no-wait") {
+        noWait2 = true;
       } else {
         return die2(
-          `tm send: codex teammate '${firstArg}' does not yet accept '${a}' (stage 4 surface is just '--prompt')`
+          `tm send: codex teammate '${firstArg}' does not yet accept '${a}' (stage 4 surface is '--prompt' and '--no-wait')`
         );
       }
     }
     if (prompt2 === null) return die2("tm send: missing --prompt");
-    return codexSend(firstArg, prompt2);
+    return codexSend(firstArg, prompt2, { noWait: noWait2 });
   }
   const parsed = parseSendArgs(args);
   if ("error" in parsed) return parsed.error;

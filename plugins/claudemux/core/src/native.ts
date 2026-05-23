@@ -2309,27 +2309,33 @@ const send: NativeVerb = async (args, _options, env) => {
   const firstArg = args[0] ?? ''
   if (isCodexTarget(firstArg)) {
     // Codex teammates speak over WebSocket, not tmux + hooks. The codex
-    // `send` understands `--prompt`; flags whose meaning is tmux-bound
-    // (`--pane-quiet`, `--timeout`, `--no-wait` semantics) are rejected
-    // explicitly rather than silently ignored — silent acceptance would
-    // mislead a dispatcher into thinking it had set a meaningful knob.
+    // `send` understands `--prompt` and `--no-wait`; tmux-bound flags
+    // (`--pane-quiet`, `--timeout`) are rejected explicitly rather than
+    // silently ignored. `--no-wait` here means "fire turn/start and
+    // return without blocking on turn/completed" — the matching
+    // `tm wait codex-<n>` picks up the completion later, so the verb
+    // pair behaves like the Claude-side `tm send --no-wait` / `tm wait`
+    // composition.
     const rest = args.slice(1)
     let prompt: string | null = null
+    let noWait = false
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]
       if (a === '--prompt') {
         if (i + 1 >= rest.length) return die('tm send: --prompt requires a value')
         prompt = rest[i + 1] ?? ''
         i += 1
+      } else if (a === '--no-wait') {
+        noWait = true
       } else {
         return die(
           `tm send: codex teammate '${firstArg}' does not yet accept '${a}' ` +
-            `(stage 4 surface is just '--prompt')`,
+            `(stage 4 surface is '--prompt' and '--no-wait')`,
         )
       }
     }
     if (prompt === null) return die('tm send: missing --prompt')
-    return codexSend(firstArg, prompt)
+    return codexSend(firstArg, prompt, { noWait })
   }
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error

@@ -141,16 +141,47 @@ export async function codexSpawn(name: string): Promise<TmResult> {
 }
 
 /**
+ * Drive one `turn/start` on `threadId`. If `wait` is true, install the
+ * notification listener *before* sending the request and resolve with the
+ * matching `turn/completed.params`. If `wait` is false, send the request
+ * and return; the caller will subscribe to `turn/completed` from a later
+ * `tm wait codex-<n>` invocation.
+ */
+async function runTurn(
+  client: CodexWsClient,
+  threadId: string,
+  prompt: string,
+  wait: boolean,
+): Promise<TurnCompletedNotification | null> {
+  // The listener has to register before the request fires so a fast-
+  // firing completion (common on a short, cached prompt) cannot land
+  // between the `await` returning and `onNotification` being installed.
+  const completed = wait ? waitForNotification(client, 'turn/completed') : null
+
+  await client.request<'turn/start', TurnStartResponse>('turn/start', {
+    threadId,
+    input: [{ type: 'text', text: prompt, text_elements: [] }],
+  })
+
+  if (completed === null) return null
+  const notif = await completed
+  return notif.params
+}
+
+/**
  * `tm send codex-<n> "<prompt>"` — drive one turn on the codex teammate's
  * thread. Starts a thread on first send, reuses it after.
  *
- * Returns the raw `Turn` JSON on stdout for stage 4 — the assistant
- * message lives inside `turn.items` as `{ type: 'agentMessage', text }`,
- * but extracting it cleanly needs a real codex to validate against, so
- * the parser lands with the integration suite. A consumer of the JSON
- * can already pluck `.items[].text` themselves.
+ * With `--no-wait`, fires `turn/start` and returns immediately; the turn
+ * proceeds on the daemon and a subsequent `tm wait codex-<n>` blocks on
+ * its `turn/completed`. Without `--no-wait` the call blocks on completion
+ * and returns the raw `Turn` JSON on stdout.
  */
-export async function codexSend(name: string, prompt: string): Promise<TmResult> {
+export async function codexSend(
+  name: string,
+  prompt: string,
+  opts: { noWait?: boolean } = {},
+): Promise<TmResult> {
   if (!daemonAlive(name)) {
     return die(
       `codex teammate '${name}' is not alive — try 'tm spawn ${name}' first`,
@@ -159,6 +190,7 @@ export async function codexSend(name: string, prompt: string): Promise<TmResult>
   if (prompt.length === 0) {
     return die('usage: tm send <teammate> "<prompt>"')
   }
+  const noWait = opts.noWait ?? false
 
   const client = await openInitialized(name)
   try {
@@ -175,22 +207,20 @@ export async function codexSend(name: string, prompt: string): Promise<TmResult>
       writeThreadId(name, threadId)
     }
 
-    // Listen for the completion notification *before* sending the request
-    // so we cannot miss a fast-firing notification between turn/start
-    // returning and the listener being installed.
-    const completed = waitForNotification(client, 'turn/completed')
-
-    await client.request<'turn/start', TurnStartResponse>('turn/start', {
-      threadId,
-      input: [{ type: 'text', text: prompt, text_elements: [] }],
-    })
-
-    const notif = await completed
+    const params = await runTurn(client, threadId, prompt, !noWait)
     touchLastSeen(name)
+
+    if (params === null) {
+      return {
+        code: 0,
+        stdout: '',
+        stderr: `sent: ${name} (thread=${threadId}, --no-wait; use 'tm wait ${name}' for the reply)\n`,
+      }
+    }
 
     return {
       code: 0,
-      stdout: JSON.stringify(notif.params, null, 2) + '\n',
+      stdout: JSON.stringify(params, null, 2) + '\n',
       stderr: '',
     }
   } finally {
@@ -277,21 +307,27 @@ function releaseBorrow(name: string): void {
 
 /**
  * `tm ask "<prompt>"` — borrow an idle named codex teammate from the
- * pool, drive one turn on a *fresh* thread, return the borrowed teammate.
+ * pool, drive one turn on an **ephemeral** thread (so the borrowed
+ * teammate's persistent conversation thread is neither touched on disk
+ * nor cloned server-side), return the teammate.
  *
- * Stage 4's ask mode is intentionally minimal: it picks any idle
- * `codex-<n>` teammate (the user does not name one), runs the turn
- * outside the teammate's persistent conversation thread (the thread
- * file is shelved across the call), and prints the raw `Turn` JSON for
- * the same reason `codexSend` does — assistant-message extraction
- * lands with the live integration suite.
+ * The ephemeral thread is created with `thread/start { ephemeral: true }`
+ * — the codex daemon treats it as a throwaway and does not bind it to
+ * the teammate's primary conversation history. The teammate's persisted
+ * `thread` file under `codexTeammateDir(name)` is never touched, so a
+ * later `tm send <name>` continues the user's original conversation
+ * exactly as before. This is intentionally narrower than a
+ * shelve-and-restore dance on the persistent thread file, because that
+ * dance would still allocate a fresh server-side thread per ask without
+ * ever freeing it.
  *
- * "Idle" here means "has no active borrow lock". Two parallel `tm ask`
- * invocations land on different teammates (or one of them gets the
- * "all busy" error and retries); a `tm ask` running while the user
- * also runs `tm send` against the same teammate is not guarded — codex
- * itself sequences turns on a thread and will reject overlap, but
- * `tm send` does not currently acquire the borrow lock.
+ * "Idle" means "has no active borrow lock". Two parallel `tm ask`
+ * invocations land on different teammates (or one gets "all busy" and
+ * retries). `tm send` does not currently acquire the borrow lock; a
+ * `tm send <name>` racing a `tm ask` against the same teammate is
+ * guarded only by codex's per-thread sequencing — which on the ask
+ * side acts on a different (ephemeral) thread, so there is no
+ * server-side contention even if the timing overlaps.
  */
 export async function codexAsk(prompt: string): Promise<TmResult> {
   if (prompt.length === 0) {
@@ -326,31 +362,29 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
     )
   }
 
-  // Shelve the persistent thread id (if any) so this turn runs on a
-  // fresh thread without polluting the borrowed teammate's primary
-  // conversation. Whatever happens during the turn, the persisted
-  // thread is restored in the `finally`.
-  let shelvedThread: string | null = null
+  const client = await openInitialized(borrowed)
   try {
-    shelvedThread = readFileSync(codexThreadFile(borrowed), 'utf8').trim() || null
-  } catch {
-    shelvedThread = null
-  }
-  if (shelvedThread !== null) {
-    rmSync(codexThreadFile(borrowed), { force: true })
-  }
-
-  try {
-    return await codexSend(borrowed, prompt)
-  } finally {
-    // Replace whatever thread `codexSend` wrote with the one we shelved,
-    // so future `tm send <name>` continues the user's original
-    // conversation.
-    if (shelvedThread !== null) {
-      writeThreadId(borrowed, shelvedThread)
-    } else {
-      rmSync(codexThreadFile(borrowed), { force: true })
+    const resp = await client.request<'thread/start', ThreadStartResponse>(
+      'thread/start',
+      {
+        // Daemon-side throwaway thread: codex treats it as not part of
+        // the teammate's persistent history, and frees it once the turn
+        // completes. Without this the borrow leaks one server-side
+        // thread per ask, accumulating over the daemon's lifetime.
+        ephemeral: true,
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
+      },
+    )
+    const params = await runTurn(client, resp.thread.id, prompt, true)
+    touchLastSeen(borrowed)
+    return {
+      code: 0,
+      stdout: JSON.stringify(params, null, 2) + '\n',
+      stderr: '',
     }
+  } finally {
+    client.close()
     releaseBorrow(borrowed)
   }
 }

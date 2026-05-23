@@ -128,6 +128,13 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       and --no-wait (nothing waited).
       On timeout: stderr warning, partial .last to stdout if any,
       exit 1.
+
+      When <repo> is a codex teammate (name starts with 'codex-'),
+      this verb routes into the codex driver instead: only --prompt
+      and --no-wait are accepted, the reply on stdout is the raw
+      Turn JSON, and --no-wait composes with 'tm wait codex-<n>' for
+      the async case. Tmux-bound flags (--pane-quiet, --timeout) are
+      rejected explicitly rather than silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 

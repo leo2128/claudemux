@@ -157,6 +157,29 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # The codex app-server protocol bindings under `src/codex-protocol/`
+      # are emitted by `codex app-server generate-ts --experimental`. They
+      # are vendored as ground truth: a codex upgrade that changes the
+      # wire schema must regenerate this directory in the same change.
+      # The drift gate installs the pinned codex CLI, reruns generate-ts,
+      # and asserts `git diff --exit-code` — a feature commit with a
+      # protocol drift but no regenerated `codex-protocol/` is the bug.
+      #
+      # `@openai/codex` ships as a Node-wrapped binary; `npm install -g`
+      # is enough on both runners. The version is pinned alongside the
+      # vendored output so the gate is deterministic; bumping codex means
+      # bumping this line and regenerating in the same PR.
+      - name: Install codex CLI
+        run: npm install -g '@openai/codex@0.133.0'
+
+      - name: codex-protocol not stale
+        # `--experimental` matches how the directory was generated; without
+        # it the experimental methods (turn/*, thread/*, etc) would drop
+        # out of the output and the diff would always be red.
+        run: |
+          codex app-server generate-ts --experimental --out src/codex-protocol/
+          git diff --exit-code -- src/codex-protocol/
+
       - name: Build bundle
         # Rebuild `dist/cli.mjs` from current source. The bundle is the
         # production launcher's payload (`plugins/claudemux/bin/tm` execs

@@ -1,0 +1,6 @@
+# Mark generated trees so GitHub's PR diff view collapses them by default and
+# language-stats ignores them. The contents are emitted by external tools
+# (`codex app-server generate-ts` for the codex protocol bindings; esbuild for
+# the production CLI bundle) and never hand-edited.
+plugins/claudemux/core/src/codex-protocol/** linguist-generated=true
+plugins/claudemux/core/dist/** linguist-generated=true

@@ -101,6 +101,25 @@ let savedSessions: string | undefined
 let savedCapture: string | undefined
 let savedTz: string | undefined
 
+/**
+ * The resolved-realpath form of `scratchDir`, and its `encodeProjectDir`
+ * encoding. Computed in `beforeAll` (after the dir is created), used by
+ * `sanitize()` to absorb the macOS-vs-Linux `/tmp` symlink difference:
+ *
+ *   - On Linux `/tmp` is a real directory, so `realpathSync(scratchDir)` is
+ *     `scratchDir` itself and the encoded form is `-tmp-claudemux-conf-test`.
+ *   - On macOS `/tmp` is a symlink to `/private/tmp`, so `realpathSync`
+ *     returns `/private/tmp/claudemux-conf-test` and the encoded form is
+ *     `-private-tmp-claudemux-conf-test`.
+ *
+ * Native verbs that encode a project dir go through `realpathSync` first
+ * (mirroring `tm`'s `cd && pwd -P`), so the *encoded* path in any golden
+ * carries that OS-specific shape. Substituting both forms to one placeholder
+ * keeps the goldens byte-stable across the CI matrix.
+ */
+let scratchDirReal = ''
+let encodedScratchReal = ''
+
 // Pin the timezone for the whole conformance file — set at module load so
 // the FIXED_NOW Date literal below resolves under UTC, before any Date
 // operation reaches the OS's local zone. `tm history`'s detail page formats
@@ -143,6 +162,11 @@ beforeAll(() => {
   mkdirSync(idleDir(), { recursive: true })
   writeFileSync(sessionsFile, '')
   writeFileSync(captureFile, '')
+
+  // Now that the dir exists, capture its realpath form and the encoded
+  // realpath form. See the variable docs above.
+  scratchDirReal = realpathSync(scratchDir)
+  encodedScratchReal = encodeProjectDir(scratchDirReal)
 
   // Point native `runTmux` at the fake `tmux`.
   process.env.CLAUDEMUX_TMUX = FAKE_TMUX
@@ -228,12 +252,23 @@ function saveGolden(path: string, value: unknown): void {
 
 /**
  * Sanitize a string by replacing run-specific paths with stable placeholders.
- * `scratchDir` is already fixed, but `sandboxHome` resolves to it; substitute
- * it last so the placeholder is consistent across encoded and raw forms.
+ * `scratchDir` is fixed, but: on macOS `/tmp` is a symlink to `/private/tmp`,
+ * so `realpathSync(scratchDir)` differs from `scratchDir` and the encoded
+ * project-dir name (`encodeProjectDir(realpath)`) carries that difference
+ * into every golden. Substitute the realpath and encoded-realpath forms too
+ * so a golden generated on either OS reads identically.
+ *
+ * Substitution order: most-specific first.
+ *   `sandboxHome` ⊂ `scratchDir`, so the `<HOME>` pass must run first or
+ *   `<SCRATCH>` would absorb the `/home`-suffix path before `<HOME>` saw it.
+ *   The encoded form has no overlap with the slash-bearing path forms, so
+ *   its order is independent.
  */
 function sanitize(value: string): string {
   return value
+    .replaceAll(encodedScratchReal, '<SCRATCH-ENC>')
     .replaceAll(sandboxHome, '<HOME>')
+    .replaceAll(scratchDirReal, '<SCRATCH>')
     .replaceAll(scratchDir, '<SCRATCH>')
 }
 

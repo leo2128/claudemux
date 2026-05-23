@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "sid:        1b499f05-e0ce-5978-8a9a-6fe967819eeb\nfile:       <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-6b1e7be57768/1b499f05-e0ce-5978-8a9a-6fe967819eeb.jsonl\n            (184B · 2 lines)\ncreated:    2026-05-12 09:15:00\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        (no usage data)\n\nfirst prompt:\n  a question\n\nlast assistant:\n  an answer\n\nresume: tm resume claudemux-conftest-6b1e7be57768 1b499f05-e0ce-5978-8a9a-6fe967819eeb\n",
+  "stdout": "sid:        1b499f05-e0ce-5978-8a9a-6fe967819eeb\nfile:       <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-6b1e7be57768/1b499f05-e0ce-5978-8a9a-6fe967819eeb.jsonl\n            (184B · 2 lines)\ncreated:    2026-05-12 09:15:00\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        (no usage data)\n\nfirst prompt:\n  a question\n\nlast assistant:\n  an answer\n\nresume: tm resume claudemux-conftest-6b1e7be57768 1b499f05-e0ce-5978-8a9a-6fe967819eeb\n",
   "stderr": ""
 }

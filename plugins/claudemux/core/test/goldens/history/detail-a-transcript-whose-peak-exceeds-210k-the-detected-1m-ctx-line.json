@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "sid:        0d10ce95-cc03-3195-3632-c8f377a6253d\nfile:       <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-dd570fe0700c/0d10ce95-cc03-3195-3632-c8f377a6253d.jsonl\n            (345B · 3 lines)\ncreated:    2026-05-12 09:15:00\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        250000 tokens · 25% of 1M (detected 1M)\n\nfirst prompt:\n  a long-running session\n\nlast assistant:\n  working on it\n\nresume: tm resume claudemux-conftest-dd570fe0700c 0d10ce95-cc03-3195-3632-c8f377a6253d\n",
+  "stdout": "sid:        0d10ce95-cc03-3195-3632-c8f377a6253d\nfile:       <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-dd570fe0700c/0d10ce95-cc03-3195-3632-c8f377a6253d.jsonl\n            (345B · 3 lines)\ncreated:    2026-05-12 09:15:00\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        250000 tokens · 25% of 1M (detected 1M)\n\nfirst prompt:\n  a long-running session\n\nlast assistant:\n  working on it\n\nresume: tm resume claudemux-conftest-dd570fe0700c 0d10ce95-cc03-3195-3632-c8f377a6253d\n",
   "stderr": ""
 }

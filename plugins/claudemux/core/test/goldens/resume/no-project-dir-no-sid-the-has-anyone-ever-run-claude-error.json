@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: no project dir at <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-ab077a9d99aa — has anyone ever run claude inside <SCRATCH>/dispatcher/claudemux-conftest-ab077a9d99aa? Try 'tm spawn claudemux-conftest-ab077a9d99aa' first.\n"
+  "stderr": "tm: no project dir at <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-ab077a9d99aa — has anyone ever run claude inside <SCRATCH>/dispatcher/claudemux-conftest-ab077a9d99aa? Try 'tm spawn claudemux-conftest-ab077a9d99aa' first.\n"
 }

@@ -1,5 +1,5 @@
 {
   "code": 0,
   "stdout": "",
-  "stderr": "tm mem: no auto-memory recorded for claudemux-conftest-7ce362cdff9e (looked at <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-7ce362cdff9e/memory/MEMORY.md)\n"
+  "stderr": "tm mem: no auto-memory recorded for claudemux-conftest-7ce362cdff9e (looked at <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-7ce362cdff9e/memory/MEMORY.md)\n"
 }

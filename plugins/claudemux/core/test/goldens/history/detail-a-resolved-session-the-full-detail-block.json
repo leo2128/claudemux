@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "sid:        6f93e570-8c50-6146-38e6-cfca9b2120c7\nfile:       <HOME>/.claude/projects/-private-tmp-claudemux-conf-test-dispatcher-claudemux-conftest-1ff860553267/6f93e570-8c50-6146-38e6-cfca9b2120c7.jsonl\n            (369B · 3 lines)\ncreated:    2026-05-12 14:21:33\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        11000 tokens · 5% of 200k (assumed 200k)\n\nfirst prompt:\n  review the auth flow\n\nlast assistant:\n  here is the review of the auth flow\n\nresume: tm resume claudemux-conftest-1ff860553267 6f93e570-8c50-6146-38e6-cfca9b2120c7\n",
+  "stdout": "sid:        6f93e570-8c50-6146-38e6-cfca9b2120c7\nfile:       <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-1ff860553267/6f93e570-8c50-6146-38e6-cfca9b2120c7.jsonl\n            (369B · 3 lines)\ncreated:    2026-05-12 14:21:33\nlast_seen:  2026-05-23 09:13:20  (2h ago)\nctx:        11000 tokens · 5% of 200k (assumed 200k)\n\nfirst prompt:\n  review the auth flow\n\nlast assistant:\n  here is the review of the auth flow\n\nresume: tm resume claudemux-conftest-1ff860553267 6f93e570-8c50-6146-38e6-cfca9b2120c7\n",
   "stderr": ""
 }

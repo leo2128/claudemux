@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-24
-- **Affects:** `claudemux/plugins/claudemux/core/`, `claudemux/plugins/claudemux/hooks/`, `claudemux/plugins/claudemux/bin/tm`, decision [0023](/.agents/decisions/0023-codex-engine-flag.md) (partially superseded), the cross-process `/tmp/teammate-*` and `/tmp/claude-idle/*` protocol.
+- **Affects:** `plugins/claudemux/core/`, `plugins/claudemux/hooks/`, `plugins/claudemux/bin/tm`, decision [0023](/.agents/decisions/0023-codex-engine-flag.md) (partially superseded), the cross-process `/tmp/teammate-*` and `/tmp/claude-idle/*` protocol.
 
 ## Context
 
@@ -31,10 +31,10 @@ What broke:
 
 | Cost | Where it shows |
 |---|---|
-| `native.ts` is the dump | 2829 LoC, 18 verbs interleaved with 50 helpers; a `tm send` bug fix scrolls past `tm history` formatters. |
+| `plugins/claudemux/core/src/native.ts` is the dump | 2829 LoC, 18 verbs interleaved with 50 helpers; a `tm send` bug fix scrolls past `tm history` formatters. |
 | Engine fork at the verb head | `isCodexTarget(name)` re-decides the engine at four near-identical sites (kill / spawn / send / wait). |
-| Two parallel verb trees | Claude verbs in `native.ts`, Codex verbs in `codex-verbs.ts`, no shared interface — the third engine forks a third tree. |
-| Path builders mixed | `paths.ts` carries Claude marker paths and Codex registry paths side by side, no ownership hint. |
+| Two parallel verb trees | Claude verbs in `plugins/claudemux/core/src/native.ts`, Codex verbs in `plugins/claudemux/core/src/codex-verbs.ts`, no shared interface — the third engine forks a third tree. |
+| Path builders mixed | `plugins/claudemux/core/src/paths.ts` carries Claude marker paths and Codex registry paths side by side, no ownership hint. |
 | Identity ambiguous | [0023](/.agents/decisions/0023-codex-engine-flag.md) §2 infers engine identity from "which registry directory happens to exist", which holds for two engines with disjoint persistence and breaks the moment a third engine wants to share an idle-marker root or write its own `.cwd`. |
 
 Two parallel architecture drafts were written and cross-read
@@ -47,9 +47,8 @@ sequencing is out of scope here.
 
 The Node core is reshaped around an `Engine` interface, a single
 TeammateRecord JSON keyed by name, and a directory tree where every
-file's owning layer is named by where it lives. The nine sub-decisions
-below are load-bearing; the directory tree at the end follows from
-them.
+file's owning layer is named by where it lives. The sub-decisions below
+are load-bearing; the directory tree at the end follows from them.
 
 ### Engine interface — `implements Engine`, no optional methods
 
@@ -73,6 +72,8 @@ export interface Engine {
   send(req: SendRequest, ctx: EngineContext): Promise<TurnResult>
   wait(req: WaitRequest, ctx: EngineContext): Promise<TurnResult>
   kill(req: KillRequest, ctx: EngineContext): Promise<KillResult>
+  list(ctx: EngineContext): Promise<readonly TeammateListing[]>
+  status(req: StatusRequest, ctx: EngineContext): Promise<TeammateStatus>
 
   compact(req: CompactRequest, ctx: EngineContext): Promise<CompactResult>
   resume(req: ResumeRequest, ctx: EngineContext): Promise<ResumeResult>
@@ -112,7 +113,8 @@ tm compact reviewer
 Exit code is `0` (no-op for not-supported is the right shape — the
 caller asked for a thing that does not apply; we tell them so without
 flagging it as a script-breaking error). Whether to fail or no-op is
-chosen per verb in `verbs/<v>.ts`; the engine never decides exit codes.
+chosen per verb in `plugins/claudemux/core/src/verbs/<v>.ts`; the
+engine never decides exit codes.
 
 **Why this shape**, in three reasons. First, Codex really cannot do
 manual compaction — its app-server runs an auto-summary when the
@@ -131,19 +133,84 @@ implements all methods, returns a discriminated result" is the
 hard guarantee against the next engine quietly going `if (engine.foo)`
 at the verb head and forgetting to handle the no-`foo` branch.
 
-### Verb is the abstraction; EventStream is engine-private
+### Verb is the abstraction — and it ships default implementations
+
+The verb layer is not a pure abstract dispatch table. It ships the
+default implementations for cross-engine composition: argument parsing,
+name resolution, aggregation, output formatting, and the fallback for a
+missing teammate stay in `plugins/claudemux/core/src/verbs/`. Engines
+implement the required TUI operations; a verb changes its default only
+when the public verb behavior genuinely differs. If an engine does not
+need differentiated output or behavior for a verb, it uses the shared
+verb default and only supplies the Engine API methods that default calls.
+
+Three examples are load-bearing:
+
+```ts
+async function lsVerb(ctx: VerbContext): Promise<TmResult> {
+  const listings = await Promise.all(
+    ctx.engines.registered().map((engine) => engine.list(ctx.engineContext)),
+  )
+  return formatListing(listings.flat())
+}
+
+async function statusVerb(name: TeammateName, ctx: VerbContext): Promise<TmResult> {
+  const resolved = await ctx.router.resolve(name)
+  if (resolved === null) return teammateNotFound(name)
+  return formatStatus(await resolved.engine.status({ name }, ctx.engineContext))
+}
+
+async function killVerb(name: TeammateName, ctx: VerbContext): Promise<TmResult> {
+  const resolved = await ctx.router.resolve(name)
+  if (resolved === null) return teammateNotFound(name)
+  const result = await resolved.engine.kill({ name }, ctx.engineContext)
+  if (result.kind === 'killed') await ctx.identity.remove(name)
+  return formatKill(result)
+}
+```
+
+This rule is what keeps the third engine from creating a third verb
+tree. `tm ls` has one default implementation that enumerates all
+registered engines, calls `Engine.list()` in parallel, and aggregates
+the rows. `tm status <name>` and `tm kill <name>` share the same
+default routing pattern: parse the teammate name, resolve it through
+the identity router, call `Engine.status` or `Engine.kill`, and let
+the verb own the not-found output. The engine can still decide what
+"status" or "kill" means for its own runtime; it does not own the CLI
+grammar or the default formatter.
+
+Fleet-visibility verbs are explicitly detached from tmux. `tm ls`,
+`tm states`, `tm status`, and `tm kill` must not talk directly to
+tmux from the verb layer. The current code sites that must move are
+`plugins/claudemux/core/src/native.ts:127` (`tm ls` using `tmux ls`),
+`plugins/claudemux/core/src/native.ts:486` (`tm states` enumerating
+through `iterRepos()` / tmux), `plugins/claudemux/core/src/native.ts:1067`
+(`tm status` using `tmux capture-pane`), and
+`plugins/claudemux/core/src/native.ts:1146` (`tm kill` routing the
+non-Codex-prefix path straight to tmux). A Codex daemon teammate has
+no tmux session, so those verbs cannot see it today even though its
+state is present under `/tmp/teammate-codex/<name>/{pid,socket,thread}`.
+The default Engine aggregation makes it visible without special-case
+tmux knowledge in the verb.
+
+### EventStream is engine-private
 
 The verb layer is the abstraction shared across engines. Each engine's
 mechanism for "watching for turn completion" lives **inside that
 engine's directory**. Codex's notification stream
 (`turn/started`, `item/completed`, `turn/completed` over the
-JSON-RPC WebSocket) is wrapped by `engines/codex/codex-events.ts` and
-consumed by `engines/codex/codex-turn-collector.ts`; that collector
+JSON-RPC WebSocket) is wrapped by
+`plugins/claudemux/core/src/engines/codex/codex-events.ts` and
+consumed by
+`plugins/claudemux/core/src/engines/codex/codex-turn-collector.ts`;
+that collector
 returns a `TurnResult` to the Codex engine's `send` / `wait`
 implementation. Claude's mechanism (`SessionStart` / `Stop` /
 `PostCompact` hook touches under `/tmp/claude-idle/<sid>{,.busy,.last}`)
-is wrapped by `engines/claude/claude-events.ts` and consumed by
-`engines/claude/claude-wait.ts`. No interface above the engine
+is wrapped by
+`plugins/claudemux/core/src/engines/claude/claude-events.ts` and
+consumed by `plugins/claudemux/core/src/engines/claude/claude-wait.ts`.
+No interface above the engine
 mentions an event union.
 
 ```mermaid
@@ -180,7 +247,8 @@ The same rule covers `Transport`: a tmux pane and a WebSocket
 JSON-RPC connection do not share a useful API. Each engine owns its
 transport module; tests inject it at the engine boundary. Process
 primitives that genuinely are shared (`spawn-and-capture`, atomic
-file write) live in `runtime/` and `persistence/atomic-file.ts`.
+file write) live in `plugins/claudemux/core/src/runtime/` and
+`plugins/claudemux/core/src/persistence/atomic-file.ts`.
 
 ### TeammateRecord — one base JSON, engine-private extensions, hooks-managed files left alone
 
@@ -204,10 +272,11 @@ export interface TeammateRecord {
 ```
 
 `tm` writes this file atomically at spawn (`reserve → commit` against
-`atomic-file.ts`), reads it on every verb that resolves a teammate by
-name, and removes it only on `tm kill` (or `tm doctor` after a
-deliberate orphan-reaping prompt). It is the single source of truth
-for engine routing. The on-disk format is documented JSON and
+`plugins/claudemux/core/src/persistence/atomic-file.ts`), reads it on
+every verb that resolves a teammate by name, and removes it only on
+`tm kill` (or `tm doctor` after a deliberate orphan-reaping prompt).
+It is the single source of truth for engine routing. The on-disk
+format is documented JSON and
 machine-readable from Bash via `jq` when a hook needs it; hooks today
 do **not** need it (the env-identity gate plus the cwd-byte-match
 already pin the right teammate, and hooks read `cwd` from their own
@@ -262,7 +331,7 @@ flowchart TB
     base["{ schema, name, engine, cwd, createdAt, displayName }"]
   end
 
-  subgraph CE_EXT["ClaudeTeammateRecord — engines/claude/persistence.ts"]
+  subgraph CE_EXT["ClaudeTeammateRecord — plugins/claudemux/core/src/engines/claude/persistence.ts"]
     ccwd[".cwd"]
     csid[".sid"]
     cready[".ready"]
@@ -411,7 +480,8 @@ silent fall-through.
 Today, each Codex teammate has its own `codex app-server` daemon
 process (one daemon, one `--listen unix://<socket>`,
 one teammate). The reshape preserves this. Within
-`engines/codex/codex-supervisor.ts` the runtime state is per teammate
+`plugins/claudemux/core/src/engines/codex/codex-supervisor.ts` the
+runtime state is per teammate
 (pid, socket path, thread id, last-seen). Whether engines share or
 isolate their internal runtimes is **invisible to verbs** — verbs
 talk to the engine via the `Engine` interface; the engine decides
@@ -456,8 +526,8 @@ that round-trips losslessly and stays inside POSIX-safe identifiers";
 the exact character is implementation-time choice). Path builders
 under `/tmp/teammate-<name>` already treat the name as opaque; the
 encoding lives behind a single `tmuxSessionName(name)` builder in
-`engines/claude/persistence.ts` so the choice is changeable in one
-place.
+`plugins/claudemux/core/src/engines/claude/persistence.ts` so the
+choice is changeable in one place.
 
 The Codex engine has no equivalent constraint — the registry
 directory is `/tmp/teammate-codex/<name>/` and `mkdir -p` handles
@@ -465,6 +535,23 @@ directory is `/tmp/teammate-codex/<name>/` and `mkdir -p` handles
 `/tmp/teammate-codex/flow/flow-1/socket`, which is a valid Unix
 socket node path under macOS's 104-byte sun_path ceiling for any
 realistic `<name>`).
+
+### Development workflow
+
+These process decisions are part of the contract for the implementation
+PRs that follow this architecture record, not only PR-body context.
+
+Q1 is C: the dispatcher does not serialize PRs at the PR layer. Each
+teammate may work in its own worktree, and that worktree owns merge
+conflict resolution when parallel changes meet.
+
+Q2 is teammate-driven verification: each teammate runs its own review
+skill before handoff, fixes its own CI failures, and reports "CI all
+green, review all green, unit tests all green" before the dispatcher
+squash-merges that PR.
+
+Every implementation phase that follows this decision targets the
+`next` branch. It does not target `main`.
 
 ## Target shape
 
@@ -477,7 +564,7 @@ decision-record commitment, and is enforced by the rules listed in
 "Enforcement against silent regression" below.
 
 ```text
-claudemux/plugins/claudemux/core/src/
+plugins/claudemux/core/src/
   main.ts                                   process entrypoint
   cli/
     dispatch.ts                             top-level CLI routing + help pre-scan
@@ -533,7 +620,7 @@ claudemux/plugins/claudemux/core/src/
     spawn.ts                                parse, select engine, atomic spawn (+ atomic prompt if given)
     send.ts                                 parse, resolve engine, atomic round-trip
     wait.ts                                 parse, resolve engine, recovery wait
-    kill.ts                                 parse, resolve engine, remove identity on success
+    kill.ts                                 default impl: resolve name, call Engine.kill, remove identity on success
     compact.ts                              parse, resolve engine, format compact result
     resume.ts                               parse, resolve engine, route to engine.resume
     last.ts                                 parse, resolve engine, format last reply
@@ -541,11 +628,11 @@ claudemux/plugins/claudemux/core/src/
     mem.ts                                  parse, resolve engine, format memory section
     history.ts                              parse, resolve engine, format history result
     reload.ts                               parse, resolve engine, fan out reload
-    ls.ts                                   identity list + per-engine inspect
-    states.ts                               identity list + per-engine inspect (rich)
+    ls.ts                                   default impl: aggregate all Engine.list rows
+    states.ts                               default impl: aggregate Engine.status snapshots (rich)
     archive.ts                              dispatcher task-archive verb (no engine)
     doctor.ts                               global checks + per-engine doctor section
-    status.ts                               diagnostic pane / screen capture
+    status.ts                               default impl: resolve name, route to Engine.status
     poll.ts                                 diagnostic pattern wait
     ask.ts                                  Codex ask-pool reviewer
   presentation/
@@ -559,10 +646,10 @@ claudemux/plugins/claudemux/core/src/
     tm-binary.ts                            resolve installed tm for integration harnesses
 ```
 
-`claudemux/plugins/claudemux/bin/tm` stays a thin Bash launcher that
+`plugins/claudemux/bin/tm` stays a thin Bash launcher that
 resolves the bundled Node entrypoint and `exec`s Node. It does not
 regain verb parsing or engine routing.
-`claudemux/plugins/claudemux/core/src/engines/codex/protocol/` is
+`plugins/claudemux/core/src/engines/codex/protocol/` is
 regenerated by `codex app-server generate-ts --experimental` and not
 hand-edited.
 
@@ -571,30 +658,39 @@ hand-edited.
 | | |
 |---|---|
 | **Decision 0023 §2 / §3** | Retired by this record. 0023's status updates to `Superseded by 0024`; §1 (the spawn `--engine` flag) and §4 (cross-engine name reuse forbidden) carry forward unchanged. |
-| **`isCodexTarget` predicate** | Removed. Engine routing flows through one read of `/tmp/teammate-<name>.json` via `identity/router.ts`. Each verb file in `verbs/<v>.ts` calls `router.resolve(name).<method>(req, ctx)` once. |
-| **`native.ts` and `codex-verbs.ts`** | Both disappear. Their content lands in `verbs/` (CLI-shape) and `engines/<kind>/` (engine-flavored). |
-| **`verbs.ts` (stale 0018 MCP-tool catalog)** | Deleted. No current code reads it; it is from a superseded decision (0018). |
-| **`paths.ts` (claude + codex mixed)** | Split. Engine-agnostic path builders move to `persistence/`; engine-specific ones move to `engines/<kind>/persistence.ts`. |
+| **`isCodexTarget` predicate** | Removed. Engine routing flows through one read of `/tmp/teammate-<name>.json` via `plugins/claudemux/core/src/identity/router.ts`. Each teammate-targeted verb file in `plugins/claudemux/core/src/verbs/<v>.ts` calls `router.resolve(name).<method>(req, ctx)` once. |
+| **Fleet-visibility verbs** | `tm ls`, `tm states`, `tm status`, and `tm kill` stop talking to tmux directly. Their default implementations aggregate or route through the Engine API, so Codex daemon teammates with only `/tmp/teammate-codex/<name>/{pid,socket,thread}` state are visible. |
+| **`plugins/claudemux/core/src/native.ts` and `plugins/claudemux/core/src/codex-verbs.ts`** | Both disappear. Their content lands in `plugins/claudemux/core/src/verbs/` (CLI-shape) and `plugins/claudemux/core/src/engines/<kind>/` (engine-flavored). |
+| **`plugins/claudemux/core/src/verbs.ts` (stale 0018 MCP-tool catalog)** | Deleted. No current code reads it; it is from a superseded decision (0018). |
+| **`plugins/claudemux/core/src/paths.ts` (claude + codex mixed)** | Split. Engine-agnostic path builders move to `plugins/claudemux/core/src/persistence/`; engine-specific ones move to `plugins/claudemux/core/src/engines/<kind>/persistence.ts`. |
 | **`--no-wait` flag on `send` and `spawn`** | Removed. Atomic round-trip is the only path. |
 | **Codex 1800 s default timeout** | Removed. `--timeout` remains optional; default is unbounded; long-task timeout policy is a future Codex engine decision, not an architecture rule. |
-| **Cross-engine name reuse** | Continues to be forbidden (carried from 0023 §4); enforced by `identity-store.ts`'s reserve step rejecting a name whose JSON already exists. |
-| **Hooks bundle** | Unchanged. `hooks/on-session-start.sh`, `hooks/on-busy.sh`, `hooks/on-stop.sh` continue to write the marker files they write today. They are upstream of the Node core, not part of it. |
+| **Cross-engine name reuse** | Continues to be forbidden (carried from 0023 §4); enforced by `plugins/claudemux/core/src/persistence/identity-store.ts`'s reserve step rejecting a name whose JSON already exists. |
+| **Hooks bundle** | Unchanged. `plugins/claudemux/hooks/on-session-start.sh`, `plugins/claudemux/hooks/on-busy.sh`, and `plugins/claudemux/hooks/on-stop.sh` continue to write the marker files they write today. They are upstream of the Node core, not part of it. |
 | **Shared Codex daemon** | Deferred. Triggers for reopening are listed in §"Codex daemon stays per-teammate". |
-| **Nested teammate names** | Enabled. `tm spawn flow/flow-1` works; the Claude engine's tmux-session-name builder encodes `/` losslessly inside `engines/claude/persistence.ts`. |
+| **Nested teammate names** | Enabled. `tm spawn flow/flow-1` works; the Claude engine's tmux-session-name builder encodes `/` losslessly inside `plugins/claudemux/core/src/engines/claude/persistence.ts`. |
 | **Integration tests** | Live-teammate harness ([0020](/.agents/decisions/0020-live-teammate-integration-harness.md)) continues to exercise the binary surface; the engine contract gets a shared test file that every concrete engine passes (`spawn → send → wait → kill` round trip against an in-memory transport). |
-| **Build / bundle** | Committed esbuild bundle ([0021](/.agents/decisions/0021-node-cli-committed-bundle.md)) continues. The bundler input is `main.ts`; the layered tree above bundles into one `dist/cli.mjs` exactly as today. |
+| **Build / bundle** | Committed esbuild bundle ([0021](/.agents/decisions/0021-node-cli-committed-bundle.md)) continues. The bundler input is `plugins/claudemux/core/src/main.ts`; the layered tree above bundles into one `plugins/claudemux/core/dist/cli.mjs` exactly as today. |
 | **Versioning** | This reshape is a behaviour-visible breaking change (verb flags removed, identity scheme changed) and lands as a `claudemux` **minor** changeset on the 0.x line; the brief authorises backwards-incompatibility because 0.8.x is locally unreleased. |
 
 ### Enforcement against silent regression
 
-- **Engine no-cross-imports rule.** `engines/codex/*.ts` may not
-  import from `engines/claude/*.ts` and vice versa. Enforced by an
+- **Engine no-cross-imports rule.**
+  `plugins/claudemux/core/src/engines/codex/*.ts` may not import from
+  `plugins/claudemux/core/src/engines/claude/*.ts` and vice versa.
+  Enforced by an
   ESLint `no-restricted-imports` rule (or a small custom check in
-  `scripts/check.sh`) added with this reshape.
-- **Layer dependency direction.** `persistence/`, `runtime/`,
-  `presentation/`, and `support/` do not import from `verbs/` or
-  `engines/`; `verbs/` do not import from `engines/<kind>/` directly,
-  only from `identity/router.ts`. Enforced the same way.
+  `.agents/scripts/check.sh`) added with this reshape.
+- **Layer dependency direction.** `plugins/claudemux/core/src/persistence/`,
+  `plugins/claudemux/core/src/runtime/`,
+  `plugins/claudemux/core/src/presentation/`, and
+  `plugins/claudemux/core/src/support/` do not import from
+  `plugins/claudemux/core/src/verbs/` or
+  `plugins/claudemux/core/src/engines/`;
+  `plugins/claudemux/core/src/verbs/` does not import from
+  `plugins/claudemux/core/src/engines/<kind>/` directly, only from
+  `plugins/claudemux/core/src/identity/router.ts`. Enforced the same
+  way.
 - **Engine completeness.** The `Engine` interface has no optional
   methods; TypeScript's structural-type checker rejects an engine
   implementation that omits one. No additional check needed.
@@ -602,10 +698,11 @@ hand-edited.
   (`TurnResult`, `CompactResult`, …) is a discriminated union; the
   verb formatter must exhaustively match on `kind`. TypeScript's
   `never`-tail pattern enforces this at compile time.
-- **Identity-by-JSON.** `identity-store.ts` is the only file in the
-  codebase that writes or reads `/tmp/teammate-<name>.json`; a unit
-  test in `test/persistence/identity-store.test.ts` covers the
-  reserve/commit/rollback semantics.
+- **Identity-by-JSON.** `plugins/claudemux/core/src/persistence/identity-store.ts`
+  is the only file in the codebase that writes or reads
+  `/tmp/teammate-<name>.json`; a unit test in
+  `plugins/claudemux/core/test/persistence/identity-store.test.ts`
+  covers the reserve/commit/rollback semantics.
 
 ## References
 
@@ -613,10 +710,10 @@ hand-edited.
 - [Decision 0021](/.agents/decisions/0021-node-cli-committed-bundle.md) — the committed-bundle rule the `dist/` output continues to honour.
 - [Decision 0022](/.agents/decisions/0022-codex-driver.md) — the Codex driver record. The `codex-` name-prefix routing inherited from this decision is dropped (see §"Engine identity is the JSON's `engine` field").
 - [Decision 0023](/.agents/decisions/0023-codex-engine-flag.md) — the `--engine` flag record. §1 and §4 carry forward; §2 (registry-presence inference) and §3 (one-minor deprecation window) are retired by this decision.
-- [Decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md) — the path-builder discipline `persistence/` and `engines/<kind>/persistence.ts` continue to honour.
-- [Decision 0018](/.agents/decisions/0018-mcp-native-orchestration-core.md) — the superseded MCP-tool catalog whose stale `verbs.ts` this reshape deletes.
+- [Decision 0004](/.agents/decisions/0004-cross-process-cross-platform-invariants.md) — the path-builder discipline `plugins/claudemux/core/src/persistence/` and `plugins/claudemux/core/src/engines/<kind>/persistence.ts` continue to honour.
+- [Decision 0018](/.agents/decisions/0018-mcp-native-orchestration-core.md) — the superseded MCP-tool catalog whose stale `plugins/claudemux/core/src/verbs.ts` this reshape deletes.
 - [Claude-side draft (0024)](/.agents/proposals/0024-architecture-claude-draft.md) — one of the two input drafts cross-read into this record.
 - [Codex-side draft (0024)](/.agents/proposals/0024-architecture-codex-draft.md) — the other input draft.
 - [Phase 1 bug audit](/.agents/proposals/phase-1-bug-audit.md) — the bug list that produced the appetite for this rework.
-- `claudemux/plugins/claudemux/hooks/on-session-start.sh`, `claudemux/plugins/claudemux/hooks/on-busy.sh`, `claudemux/plugins/claudemux/hooks/on-stop.sh` — the hooks-managed file set inventoried in the TeammateRecord table.
+- `plugins/claudemux/hooks/on-session-start.sh`, `plugins/claudemux/hooks/on-busy.sh`, `plugins/claudemux/hooks/on-stop.sh` — the hooks-managed file set inventoried in the TeammateRecord table.
 - `codex-rs/app-server/src/lib.rs:629–631,868` — upstream Codex source confirming the `stdio` transport is single-client (the connection-drop termination), cited in §"Codex daemon stays per-teammate" as evidence that a manager-fronted shared-daemon scheme would require non-trivial multiplexing work.

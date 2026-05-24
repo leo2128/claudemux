@@ -81,7 +81,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 |---|---|
 | Anything that reads or writes a `/tmp` protocol file, or a `tm`↔hook seam | [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) |
 | The Feishu Worker-scoped subscription design — holder/endpoint split, the `routes/`+`inbox/` protocol | [domains/feishu-worker-routing.md](/.agents/domains/feishu-worker-routing.md) |
-| The Node CLI orchestrator that replaces `tm` on the `next` branch (`1.0.0-beta.0`) — the CLI model, the Claude and Codex teammate drivers, the migration roadmap | [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) |
+| The Node CLI orchestrator that replaces `tm` on the `next` branch (`1.0.0`) — the CLI model, the Claude and Codex teammate drivers, the migration roadmap | [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) |
 
 **Decisions** — why the system is shaped the way it is:
 

@@ -1,8 +1,8 @@
 # Domain: the Node CLI orchestrator (the `next` line)
 
-> **Status:** architecture spec — partly implemented. **Target:** the `next`
-> branch, version line **`1.0.0-beta.0`** (a 1.0 line developed in parallel
-> with `main`'s 0.x). **Decision record:**
+> **Status:** architecture spec for the `next` 1.0 line. **Target:** the
+> `next` branch, version line **`1.0.0`** (developed in parallel with
+> `main`'s 0.x). **Decision record:**
 > [0019](/.agents/decisions/0019-node-cli-orchestrator.md), which supersedes the
 > MCP-native design of [0018](/.agents/decisions/0018-mcp-native-orchestration-core.md).
 >
@@ -10,9 +10,12 @@
 > the resident MCP-native core was dropped; this document is the contract for
 > *what replaces it*.
 >
-> **Versioning:** this is a pure-docs change — the manifest `version` field is
-> not edited here; the `1.0.0-beta.0` number is realized by the release flow
-> when implementation lands ([decision 0014](/.agents/decisions/0014-changeset-release-versioning.md)).
+> **Versioning:** installed plugin metadata comes from
+> [`plugins/claudemux/.claude-plugin/plugin.json`](/plugins/claudemux/.claude-plugin/plugin.json);
+> core package metadata comes from
+> [`plugins/claudemux/core/package.json`](/plugins/claudemux/core/package.json).
+> Feature-class changes still carry changeset fragments as described in
+> [decision 0014](/.agents/decisions/0014-changeset-release-versioning.md).
 
 ---
 

@@ -1,7 +1,7 @@
 # Component: the orchestration core (the `next` line)
 
 The `core/` directory holds the TypeScript codebase of claudemux's **`next`**
-line — the `1.0.0-beta.0` line developed in parallel with `main`'s 0.x. It
+line — the `1.0.0` line developed in parallel with `main`'s 0.x. It
 lives at [`/plugins/claudemux/core/`](/plugins/claudemux/core), alongside the
 Bash plugin, and runs on **Node** (the test suite uses `vitest`).
 

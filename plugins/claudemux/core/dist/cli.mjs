@@ -6897,7 +6897,7 @@ async function runTurn(client, threadId, prompt, options) {
 var CODEX_CLIENT_INFO = {
   name: "claudemux",
   title: null,
-  version: "1.0.0-beta.0"
+  version: "1.0.0"
 };
 var COMPACT_REASON = "codex compacts its own context automatically when the 252k window fills";
 function notSupported(reason) {

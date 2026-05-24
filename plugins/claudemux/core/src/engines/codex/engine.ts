@@ -77,7 +77,7 @@ import { validateTeammateName } from '../../identity/name.js'
 export const CODEX_CLIENT_INFO: ClientInfo = {
   name: 'claudemux',
   title: null,
-  version: '1.0.0-beta.0',
+  version: '1.0.0',
 }
 
 const COMPACT_REASON =

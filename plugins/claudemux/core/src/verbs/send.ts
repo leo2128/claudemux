@@ -6,25 +6,31 @@
  * transport.
  */
 
-import { formatTurn, teammateNotFound } from './format'
+import { formatTurn } from './format'
 import type { SendRequest, TeammateName } from '../engines/types'
 import type { TmResult } from '../tm'
 import type { VerbContext } from './context'
+import { resolveTargetEngine } from './resolve'
 
 export interface SendArgs {
   readonly name: TeammateName
   readonly prompt: string
   readonly timeoutMs: number | null
+  readonly paneQuiet: boolean
 }
 
 export async function sendVerb(args: SendArgs, ctx: VerbContext): Promise<TmResult> {
-  const resolved = await ctx.router.resolve(args.name)
-  if (resolved === null) return teammateNotFound(args.name)
+  const engine = await resolveTargetEngine(args.name, ctx)
+  if ('code' in engine) return engine
+  if (args.paneQuiet && engine.kind !== 'claude') {
+    return { code: 1, stdout: '', stderr: 'tm: tm send: --pane-quiet is not supported for codex teammates\n' }
+  }
 
   const req: SendRequest = {
     name: args.name,
     prompt: args.prompt,
     timeoutMs: args.timeoutMs,
+    paneQuiet: args.paneQuiet,
   }
-  return formatTurn(await resolved.engine.send(req, ctx.engineContext))
+  return formatTurn(await engine.send(req, ctx.engineContext))
 }

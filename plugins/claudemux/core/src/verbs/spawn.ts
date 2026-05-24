@@ -25,6 +25,7 @@ export interface SpawnArgs {
   readonly name: TeammateName
   readonly engine: EngineKind
   readonly cwd: string
+  readonly resumeCheckpoint: string | null
   readonly prompt: string | null
   readonly timeoutMs: number | null
   readonly displayName: string | null
@@ -33,15 +34,31 @@ export interface SpawnArgs {
 export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmResult> {
   const engine = ctx.engines.get(args.engine)
   if (engine === undefined) return noEngineRegistered()
+  if (engine.kind !== 'claude' && args.resumeCheckpoint !== null) {
+    return {
+      code: 1,
+      stdout: '',
+      stderr: 'tm: tm spawn: --resume is not supported for codex teammates\n',
+    }
+  }
+  if (engine.kind !== 'claude' && args.displayName !== null) {
+    return {
+      code: 1,
+      stdout: '',
+      stderr: 'tm: tm spawn: --task is not supported for codex teammates\n',
+    }
+  }
 
   const req: SpawnRequest = {
     name: args.name,
     cwd: args.cwd,
+    resumeCheckpoint: args.resumeCheckpoint,
     prompt: args.prompt,
     timeoutMs: args.timeoutMs,
     displayName: args.displayName,
   }
   const result: SpawnResult = await engine.spawn(req, ctx.engineContext)
+  if (result.tmResult !== undefined) return result.tmResult
 
   switch (result.kind) {
     case 'spawned':

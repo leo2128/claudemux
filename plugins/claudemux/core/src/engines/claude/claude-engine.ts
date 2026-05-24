@@ -3,18 +3,10 @@
  * makes this the layer the verb dispatcher routes to; every method is
  * present, every result is a discriminated union.
  *
- * Phase 2a-1 split: the fleet-visibility methods (`list`, `status`,
- * `kill`) are implemented natively here — they are what `tm ls` /
- * `tm states` / `tm status` / `tm kill` route through after the cli
- * dispatcher gains its `EngineRegistry` wiring. The remaining twelve
- * hot-path / session-shape / diagnostic methods delegate to the
- * existing `NATIVE_VERBS` table in `native.ts` through a thin adapter
- * that converts the structured `EngineXxxRequest` into the positional
- * argv the native verb expects and the resulting `TmResult` back into
- * the discriminated engine result. Phase 2a-2 (follow-up PR) physically
- * moves that code into `engines/claude/*.ts` files and deletes
- * `native.ts`; the verb dispatch contract stays unchanged across that
- * cut.
+ * The fleet-visibility methods (`list`, `status`, `kill`) and every
+ * teammate-targeted hot path are implemented here or in
+ * `engines/claude/<verb>.ts`; `cli.ts` reaches them only through
+ * `verbs/<verb>.ts` and the Engine registry.
  *
  * The capabilities record below is what verbs branch on. `atomicSend`
  * is the type literal `true` (decision 0024 §"Capabilities are
@@ -59,7 +51,7 @@ import type {
 import type { Engine } from '../engine'
 import type { NativeEnv } from '../../env'
 import { claudeCompact } from './compact'
-import { claudeCtxUsage } from './ctx'
+import { claudeCtxLine, claudeCtxUsage } from './ctx'
 import { claudeDoctor } from './doctor'
 import { claudeHistory } from './history'
 import { claudeLast } from './last'
@@ -146,12 +138,10 @@ export class ClaudeEngine implements Engine {
   readonly kind: EngineKind = 'claude'
   readonly capabilities = CLAUDE_CAPABILITIES
 
-  /** The Claude engine carries the `NativeEnv` only because Phase 2a-1 still
-   *  delegates 12 of its 16 methods to `NATIVE_VERBS`. Phase 2a-2 inlines
-   *  the implementations and shrinks the constructor accordingly. */
+  /** Runtime adapters (`tmux`, `column`, dispatcher paths) are injected per CLI invocation. */
   constructor(private readonly env: NativeEnv) {}
 
-  // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
+  // ─── Fleet visibility ──────────────────────────────────────────────
 
   async list(ctx: EngineContext): Promise<readonly TeammateListing[]> {
     let listing = ''
@@ -279,52 +269,63 @@ export class ClaudeEngine implements Engine {
 
   async spawn(req: SpawnRequest, _ctx: EngineContext): Promise<SpawnResult> {
     const argv: string[] = [req.name]
+    if (req.resumeCheckpoint !== null) argv.push('--resume', req.resumeCheckpoint)
     if (req.displayName !== null) argv.push('--task', req.displayName)
     if (req.prompt !== null) argv.push('--prompt', req.prompt)
     const result = await claudeSpawn(argv, this.env)
     if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
     }
     return {
       kind: 'spawned',
       name: req.name,
+      tmResult: result,
       firstTurn:
         req.prompt === null
           ? null
-          : { kind: 'completed', text: result.stdout, items: [], context: null },
+          : { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result },
     }
   }
 
   async send(req: SendRequest, _ctx: EngineContext): Promise<TurnResult> {
     const argv = [req.name, '--prompt', req.prompt]
     if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
+    if (req.paneQuiet) argv.push('--pane-quiet')
     const result = await claudeSend(argv, this.env)
     if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: false }
+      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: false, tmResult: result }
     }
-    return { kind: 'completed', text: result.stdout, items: [], context: null }
+    return { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result }
   }
 
   async wait(req: WaitRequest, _ctx: EngineContext): Promise<TurnResult> {
     const argv = [req.name]
     if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
+    if (req.fresh) argv.push('--fresh')
+    if (req.paneQuiet) argv.push('--pane-quiet')
     const result = await claudeWait(argv, this.env)
     if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: true }
+      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: true, tmResult: result }
     }
-    return { kind: 'completed', text: result.stdout, items: [], context: null }
+    return { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result }
   }
 
   async compact(req: CompactRequest, _ctx: EngineContext): Promise<CompactResult> {
-    const result = await claudeCompact([req.name], this.env)
-    if (result.code === 0) return { kind: 'compacted' }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    const argv = [req.name]
+    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
+    const result = await claudeCompact(argv, this.env)
+    if (result.code === 0) return { kind: 'compacted', tmResult: result }
+    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
   }
 
   async resume(req: ResumeRequest, _ctx: EngineContext): Promise<ResumeResult> {
-    const result = await claudeResume([req.name, req.checkpoint], this.env)
-    if (result.code === 0) return { kind: 'resumed', checkpoint: req.checkpoint }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    const argv = [req.name]
+    if (req.checkpoint !== null) argv.push(req.checkpoint)
+    if (req.displayName !== null) argv.push('--task', req.displayName)
+    if (req.prompt !== null) argv.push('--prompt', req.prompt)
+    const result = await claudeResume(argv, this.env)
+    if (result.code === 0) return { kind: 'resumed', checkpoint: req.checkpoint, tmResult: result }
+    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
   }
 
   async last(req: LastRequest, _ctx: EngineContext): Promise<TextResult> {
@@ -332,15 +333,23 @@ export class ClaudeEngine implements Engine {
   }
 
   async ctx(req: ContextRequest, _ctx: EngineContext): Promise<ContextResult> {
-    return claudeCtxUsage(req.name, {
+    const structured = claudeCtxUsage(req.name, {
       dispatcherDir: this.env.dispatcherDir,
       projectsDir: this.env.projectsDir,
     })
+    return {
+      ...structured,
+      tmResult: {
+        code: 0,
+        stdout: `${claudeCtxLine(req.name, req.windowOverride, this.env)}\n`,
+        stderr: '',
+      },
+    }
   }
 
   async history(req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
     const argv = [req.name]
-    if (req.index !== null) argv.push(String(req.index))
+    if (req.index !== null) argv.push(req.index)
     const result = await claudeHistory(argv, this.env)
     if (result.code === 0) {
       // Engine adapter still hands the raw text back via the `list` arm
@@ -348,10 +357,11 @@ export class ClaudeEngine implements Engine {
       // is a separate change.
       return {
         kind: 'list',
-        turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip(result.stdout) }],
+        turns: [{ index: Number(req.index ?? 0), startedAt: 0, summary: rstrip(result.stdout) }],
+        tmResult: result,
       }
     }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
   }
 
   async mem(req: MemoryRequest, _ctx: EngineContext): Promise<TextResult> {
@@ -363,8 +373,8 @@ export class ClaudeEngine implements Engine {
 
   async reload(req: ReloadRequest, _ctx: EngineContext): Promise<ReloadResult> {
     const result = await claudeReload([req.name], this.env)
-    if (result.code === 0) return { kind: 'reloaded' }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    if (result.code === 0) return { kind: 'reloaded', tmResult: result }
+    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
   }
 
   // ─── Diagnostic ─────────────────────────────────────────────────────

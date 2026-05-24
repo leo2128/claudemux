@@ -234,6 +234,9 @@ export class CodexEngine implements Engine {
   async spawn(req: SpawnRequest, ctx: EngineContext): Promise<SpawnResult> {
     const invalidName = codexNameFailure(req.name)
     if (invalidName !== null) return { kind: 'failed', message: invalidName }
+    if (req.resumeCheckpoint !== null) {
+      return { kind: 'failed', message: '--resume is not supported for codex teammates' }
+    }
 
     const existing = readBaseRecord(req.name)
     if (existing !== null) {
@@ -276,10 +279,20 @@ export class CodexEngine implements Engine {
       await this.healthCheck(req.name)
 
       if (req.prompt === null) {
-        return { kind: 'spawned', name: req.name, firstTurn: null }
+        const state = readDaemonState(req.name)
+        const stderr =
+          state === null
+            ? `spawned: ${req.name}\n`
+            : `spawned: ${req.name} (pid=${state.pid}, socket=${state.socketPath})\n`
+        return {
+          kind: 'spawned',
+          name: req.name,
+          firstTurn: null,
+          tmResult: { code: 0, stdout: '', stderr },
+        }
       }
       const firstTurn = await this.send(
-        { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs },
+        { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs, paneQuiet: false },
         ctx,
       )
       return { kind: 'spawned', name: req.name, firstTurn }
@@ -302,6 +315,13 @@ export class CodexEngine implements Engine {
     const invalidName = codexNameFailure(req.name)
     if (invalidName !== null) {
       return { kind: 'failed', message: invalidName, recoverable: false }
+    }
+    if (req.paneQuiet) {
+      return {
+        kind: 'failed',
+        message: 'tm send: --pane-quiet is not supported for codex teammates',
+        recoverable: false,
+      }
     }
     if (!daemonAlive(req.name)) {
       return {
@@ -359,6 +379,20 @@ export class CodexEngine implements Engine {
     const invalidName = codexNameFailure(req.name)
     if (invalidName !== null) {
       return { kind: 'failed', message: invalidName, recoverable: false }
+    }
+    if (req.fresh) {
+      return {
+        kind: 'failed',
+        message: 'tm wait: --fresh is not supported for codex teammates',
+        recoverable: false,
+      }
+    }
+    if (req.paneQuiet) {
+      return {
+        kind: 'failed',
+        message: 'tm wait: --pane-quiet is not supported for codex teammates',
+        recoverable: false,
+      }
     }
     if (!daemonAlive(req.name)) {
       return { kind: 'failed', message: `codex teammate '${req.name}' is not alive`, recoverable: false }

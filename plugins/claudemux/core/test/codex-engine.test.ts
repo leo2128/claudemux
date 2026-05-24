@@ -84,7 +84,14 @@ describe('CodexEngine — core lifecycle', () => {
     spawned.push(name)
 
     const spawn = await engine.spawn(
-      { name, cwd, prompt: null, timeoutMs: null, displayName: 'engine test' },
+      {
+        name,
+        cwd,
+        resumeCheckpoint: null,
+        prompt: null,
+        timeoutMs: null,
+        displayName: 'engine test',
+      },
       ctx(),
     )
     expect(spawn).toMatchObject({ kind: 'spawned', name })
@@ -99,7 +106,10 @@ describe('CodexEngine — core lifecycle', () => {
     const routed = await new ProductionTeammateRouter(registry).resolve(name)
     expect(routed).toMatchObject({ name, engine })
 
-    const send = await engine.send({ name, prompt: 'pong from codex', timeoutMs: 5000 }, ctx())
+    const send = await engine.send(
+      { name, prompt: 'pong from codex', timeoutMs: 5000, paneQuiet: false },
+      ctx(),
+    )
     expect(send.kind).toBe('completed')
     if (send.kind === 'completed') {
       expect(send.text).toContain('fake reply: pong from codex')
@@ -123,7 +133,10 @@ describe('CodexEngine — core lifecycle', () => {
     expect(status).toMatchObject({ kind: 'present', name, engine: 'codex', state: 'busy', cwd })
     rmSync(codexBorrowLockFile(name), { force: true })
 
-    const wait = await engine.wait({ name, recoverFor: null, timeoutMs: 10 }, ctx())
+    const wait = await engine.wait(
+      { name, recoverFor: null, timeoutMs: 10, fresh: false, paneQuiet: false },
+      ctx(),
+    )
     expect(wait).toMatchObject({ kind: 'timed-out' })
 
     const killed = await engine.kill({ name }, ctx())
@@ -134,10 +147,13 @@ describe('CodexEngine — core lifecycle', () => {
   test('duplicate spawn is rejected while the daemon is alive', async () => {
     const name = nameUnder()
     spawned.push(name)
-    await engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, ctx())
+    await engine.spawn(
+      { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      ctx(),
+    )
 
     const duplicate = await engine.spawn(
-      { name, cwd, prompt: null, timeoutMs: null, displayName: null },
+      { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
       ctx(),
     )
     expect(duplicate).toEqual({ kind: 'already-exists', existingEngine: 'codex' })
@@ -149,8 +165,14 @@ describe('CodexEngine — core lifecycle', () => {
     const slowCtx = ctxWithEnv({ ...process.env, CODEX_FAKE_BIND_DELAY_MS: '250' })
 
     const [first, second] = await Promise.all([
-      engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, slowCtx),
-      engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, slowCtx),
+      engine.spawn(
+        { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+        slowCtx,
+      ),
+      engine.spawn(
+        { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+        slowCtx,
+      ),
     ])
 
     const results = [first, second]
@@ -168,7 +190,10 @@ describe('CodexEngine — core lifecycle', () => {
   test('doctor reaps a crashed daemon registry entry', async () => {
     const name = nameUnder()
     spawned.push(name)
-    await engine.spawn({ name, cwd, prompt: null, timeoutMs: null, displayName: null }, ctx())
+    await engine.spawn(
+      { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      ctx(),
+    )
     const state = readDaemonState(name)
     expect(state).not.toBeNull()
     process.kill(state!.pid, 'SIGKILL')

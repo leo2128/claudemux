@@ -114,8 +114,11 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
     // `tm send --no-wait` and collected it with a bare `tm wait`. With
     // `--no-wait` gone, the CLI has no first-class fire-and-forget
     // primitive — the test needs a redesign (detached subprocess, or a
-    // helper that pushes keys directly through tmux). Skip until that
-    // ships.
+    // helper that pushes keys directly through tmux).
+    //
+    // Follow-up strategy: add an integration-harness-only external actor
+    // helper that writes to the teammate pane without calling `tm send`, then
+    // keep this assertion scoped to `tm wait` observing that independent turn.
   })
 
   test('compact — runs /compact and verifies it completed', async () => {

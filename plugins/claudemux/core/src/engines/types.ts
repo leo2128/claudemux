@@ -24,6 +24,8 @@
  * touching it.
  */
 
+import type { TmResult } from '../tm'
+
 /** The closed set of engine kinds. New kinds extend this union here. */
 export type EngineKind = 'claude' | 'codex'
 
@@ -83,6 +85,8 @@ export interface SpawnRequest {
   readonly name: TeammateName
   /** Absolute working directory the engine launches the teammate in. */
   readonly cwd: string
+  /** Optional engine-specific resume checkpoint. */
+  readonly resumeCheckpoint: string | null
   /** Optional first-turn prompt — when present, spawn is an atomic round-trip. */
   readonly prompt: string | null
   /** Optional caller-supplied wall-clock cap; `null` means unbounded. */
@@ -91,10 +95,20 @@ export interface SpawnRequest {
   readonly displayName: string | null
 }
 
+/**
+ * Temporary compatibility carrier for migrated Claude verbs whose public
+ * stdout/stderr contract is already pinned by conformance goldens. The
+ * structured fields stay authoritative for engine-neutral verbs; CLI
+ * formatters can return `tmResult` verbatim when it is present.
+ */
+export interface RawTmResult {
+  readonly tmResult?: TmResult
+}
+
 export type SpawnResult =
-  | { kind: 'spawned'; name: TeammateName; firstTurn: TurnResult | null }
-  | { kind: 'already-exists'; existingEngine: EngineKind }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'spawned'; name: TeammateName; firstTurn: TurnResult | null } & RawTmResult)
+  | ({ kind: 'already-exists'; existingEngine: EngineKind } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 // ─── Send / Wait ────────────────────────────────────────────────────────
 
@@ -102,6 +116,7 @@ export interface SendRequest {
   readonly name: TeammateName
   readonly prompt: string
   readonly timeoutMs: number | null
+  readonly paneQuiet: boolean
 }
 
 export interface WaitRequest {
@@ -109,19 +124,21 @@ export interface WaitRequest {
   /** A previous turn-id to recover from, when send/spawn aborted before reading. */
   readonly recoverFor: string | null
   readonly timeoutMs: number | null
+  readonly fresh: boolean
+  readonly paneQuiet: boolean
 }
 
 export type TurnResult =
-  | {
+  | ({
       kind: 'completed'
       text: string
       items: readonly InteractionItem[]
       context: ContextResult | null
-    }
-  | { kind: 'failed'; message: string; recoverable: boolean }
-  | { kind: 'timed-out'; elapsedMs: number }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'no-op'; reason: string }
+    } & RawTmResult)
+  | ({ kind: 'failed'; message: string; recoverable: boolean } & RawTmResult)
+  | ({ kind: 'timed-out'; elapsedMs: number } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'no-op'; reason: string } & RawTmResult)
 
 // ─── Kill ───────────────────────────────────────────────────────────────
 
@@ -138,34 +155,39 @@ export type KillResult =
 
 export interface CompactRequest {
   readonly name: TeammateName
+  readonly timeoutMs: number | null
 }
 
 export type CompactResult =
-  | { kind: 'compacted' }
-  | { kind: 'not-needed'; reason: string }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'compacted' } & RawTmResult)
+  | ({ kind: 'not-needed'; reason: string } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 export interface ResumeRequest {
   readonly name: TeammateName
-  /** Engine-specific identifier (Claude sid / Codex thread id). */
-  readonly checkpoint: string
+  /** Engine-specific identifier (Claude sid / Codex thread id); null lets the engine auto-pick when supported. */
+  readonly checkpoint: string | null
+  /** Optional first-turn prompt after the resumed teammate is relaunched. */
+  readonly prompt: string | null
+  /** Optional display relabel for engines that expose one. */
+  readonly displayName: string | null
 }
 
 export type ResumeResult =
-  | { kind: 'resumed'; checkpoint: string }
-  | { kind: 'not-found'; reason: string }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'resumed'; checkpoint: string | null } & RawTmResult)
+  | ({ kind: 'not-found'; reason: string } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 export interface ReloadRequest {
   readonly name: TeammateName
 }
 
 export type ReloadResult =
-  | { kind: 'reloaded' }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'reloaded' } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 // ─── Last / Ctx / History / Mem ────────────────────────────────────────
 
@@ -175,24 +197,25 @@ export interface LastRequest {
 
 export interface ContextRequest {
   readonly name: TeammateName
+  readonly windowOverride: '' | '200k' | '1m'
 }
 
 export type ContextResult =
-  | { kind: 'usage'; tokensUsed: number; tokensTotal: number; pct: number }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'usage'; tokensUsed: number; tokensTotal: number; pct: number } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 export interface HistoryRequest {
   readonly name: TeammateName
-  /** `null` = list view; non-null = detail of the given turn index. */
-  readonly index: number | null
+  /** `null` = list view; non-null = engine-specific detail selector. */
+  readonly index: string | null
 }
 
 export type HistoryResult =
-  | { kind: 'list'; turns: readonly HistoryTurn[] }
-  | { kind: 'detail'; turn: HistoryTurn; items: readonly InteractionItem[] }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'list'; turns: readonly HistoryTurn[] } & RawTmResult)
+  | ({ kind: 'detail'; turn: HistoryTurn; items: readonly InteractionItem[] } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 export interface HistoryTurn {
   readonly index: number
@@ -209,9 +232,9 @@ export interface MemoryRequest {
  * engine result is "here are some bytes, render them as-is".
  */
 export type TextResult =
-  | { kind: 'text'; text: string }
-  | { kind: 'not-supported'; reason: string }
-  | { kind: 'failed'; message: string }
+  | ({ kind: 'text'; text: string } & RawTmResult)
+  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
+  | ({ kind: 'failed'; message: string } & RawTmResult)
 
 // ─── Fleet visibility (list / status) ──────────────────────────────────
 

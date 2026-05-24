@@ -14,7 +14,7 @@
  * drive a single invocation in-process with controlled inputs.
  */
 
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,29 +42,25 @@ import { lsVerb } from './verbs/ls'
 import { statesVerb } from './verbs/states'
 import { statusVerb } from './verbs/status'
 import { killVerb } from './verbs/kill'
-
-import {
-  codexNameValidationError,
-  codexSend,
-  codexSpawn,
-  codexWait,
-  isCodexPrefixName,
-  isCodexTarget,
-} from './engines/codex/verbs'
-import { isDirectory } from './engines/claude/idle'
+import { spawnVerb } from './verbs/spawn'
+import { sendVerb } from './verbs/send'
+import { waitVerb } from './verbs/wait'
+import { compactVerb } from './verbs/compact'
+import { resumeVerb } from './verbs/resume'
+import { lastVerb } from './verbs/last'
+import { ctxVerb } from './verbs/ctx'
+import { historyVerb } from './verbs/history'
+import { memVerb } from './verbs/mem'
+import { reloadVerb } from './verbs/reload'
 import { isNonNegativeInteger } from './engines/claude/clock'
-import { claudeCompact } from './engines/claude/compact'
-import { claudeCtxLine } from './engines/claude/ctx'
+import { parseCompactArgs } from './engines/claude/compact'
 import { claudeDoctor } from './engines/claude/doctor'
-import { claudeHistory } from './engines/claude/history'
-import { claudeLast } from './engines/claude/last'
-import { claudeMem } from './engines/claude/mem'
-import { claudeReload } from './engines/claude/reload'
-import { claudeResume } from './engines/claude/resume'
-import { claudeSend, parseSendArgs } from './engines/claude/send'
-import { claudeSpawn, parseSpawnArgs } from './engines/claude/spawn'
-import { claudeWait, parseWaitArgs } from './engines/claude/wait'
+import { parseResumeArgs } from './engines/claude/resume'
+import { parseSendArgs } from './engines/claude/send'
+import { parseSpawnArgs } from './engines/claude/spawn'
+import { parseWaitArgs } from './engines/claude/wait'
 import { iterTeammates } from './engines/claude/tmux'
+import type { EngineKind } from './engines/types'
 
 /**
  * The verb-side context the engine-routed verbs (`ls`, `states`,
@@ -160,14 +156,105 @@ function runHelpVerb(rest: readonly string[]): TmResult {
   }
 }
 
-// ─── Engine-routed verbs (fleet visibility + kill) ────────────────────────
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
 
-const ENGINE_VERBS: ReadonlySet<string> = new Set(['ls', 'states', 'status', 'kill'])
+function secondsToMs(value: string | null): number | null {
+  return value === null ? null : Number(value) * 1000
+}
+
+function parseTimeoutMs(label: string, value: string | null): number | null | { error: TmResult } {
+  if (value === null) return null
+  if (!isNonNegativeInteger(value)) {
+    return { error: die(`${label}: --timeout must be a non-negative integer (got: '${value}')`) }
+  }
+  return secondsToMs(value)
+}
+
+function isCodexPrefixName(name: string): boolean {
+  return name.startsWith('codex-') || name.startsWith('codex/')
+}
+
+async function inferSpawnEngine(
+  name: string,
+  requested: EngineKind | null,
+  ctx: VerbContext,
+): Promise<EngineKind> {
+  if (requested !== null) return requested
+  const resolved = await ctx.router.resolve(name)
+  if (resolved !== null) return resolved.engine.kind
+  return isCodexPrefixName(name) ? 'codex' : 'claude'
+}
+
+function spawnCwd(name: string, engine: EngineKind, env: NativeEnv): string {
+  if (engine === 'codex') {
+    const repoPath = join(env.dispatcherDir, name)
+    return isDirectory(repoPath) ? realpathSync(repoPath) : realpathSync(env.dispatcherDir)
+  }
+  return join(env.dispatcherDir, name)
+}
+
+async function combineResults(results: readonly Promise<TmResult>[]): Promise<TmResult> {
+  let code = 0
+  let stdout = ''
+  let stderr = ''
+  for (const result of await Promise.all(results)) {
+    if (code === 0 && result.code !== 0) code = result.code
+    stdout += result.stdout
+    stderr += result.stderr
+  }
+  return { code, stdout, stderr }
+}
+
+async function reloadTargets(rest: readonly string[], env: NativeEnv): Promise<TmResult | string[]> {
+  let all = false
+  const repos: string[] = []
+  for (const arg of rest) {
+    if (arg === '--all') all = true
+    else if (arg === '-h' || arg === '--help') return die('usage: tm reload <repo>... | --all')
+    else if (arg.startsWith('-')) return die(`tm reload: unknown flag: ${arg}`)
+    else repos.push(arg)
+  }
+
+  if (all) {
+    if (repos.length > 0) return die('tm reload: --all conflicts with explicit repos')
+    repos.push(...(await iterTeammates(env.runTmux)))
+    if (repos.length === 0) return { code: 0, stdout: '(no teammate sessions to reload)\n', stderr: '' }
+  } else if (repos.length === 0) {
+    return die('usage: tm reload <repo>... | --all')
+  }
+  return repos
+}
+
+// ─── Engine-routed teammate verbs ─────────────────────────────────────────
+
+const ENGINE_VERBS: ReadonlySet<string> = new Set([
+  'ls',
+  'states',
+  'status',
+  'kill',
+  'spawn',
+  'send',
+  'wait',
+  'compact',
+  'resume',
+  'last',
+  'ctx',
+  'history',
+  'mem',
+  'reload',
+])
 
 async function dispatchEngineVerb(
   verb: string,
   rest: readonly string[],
   ctx: VerbContext,
+  env: NativeEnv,
 ): Promise<TmResult> {
   switch (verb) {
     case 'ls':
@@ -186,26 +273,155 @@ async function dispatchEngineVerb(
     case 'kill':
       if (rest.length === 0) return { code: 1, stdout: '', stderr: 'tm: usage: tm kill <repo>\n' }
       return killVerb(rest[0]!, ctx)
+    case 'spawn': {
+      const name = rest[0] ?? ''
+      if (name.length === 0) {
+        return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]')
+      }
+      const parsed = parseSpawnArgs(rest.slice(1))
+      if ('error' in parsed) return parsed.error
+      const timeoutMs = parseTimeoutMs('tm spawn', parsed.timeout)
+      if (timeoutMs !== null && typeof timeoutMs === 'object') return timeoutMs.error
+      const engine = await inferSpawnEngine(name, parsed.engine, ctx)
+      return spawnVerb(
+        {
+          name,
+          engine,
+          cwd: spawnCwd(name, engine, env),
+          resumeCheckpoint: parsed.resumeSid.length === 0 ? null : parsed.resumeSid,
+          prompt: parsed.hasPrompt ? parsed.prompt : null,
+          timeoutMs,
+          displayName: parsed.task.length === 0 ? null : parsed.task,
+        },
+        ctx,
+      )
+    }
+    case 'send': {
+      const parsed = parseSendArgs(rest)
+      if ('error' in parsed) return parsed.error
+      if (parsed.repo === '') {
+        return die(
+          'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." ' +
+            '[--pane-quiet] [--timeout N]',
+        )
+      }
+      if (!parsed.hasPrompt) {
+        return die(
+          'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." ' +
+            '[--pane-quiet] [--timeout N]',
+        )
+      }
+      const timeoutMs = parseTimeoutMs('tm send', parsed.timeout)
+      if (timeoutMs !== null && typeof timeoutMs === 'object') return timeoutMs.error
+      return sendVerb(
+        {
+          name: parsed.repo,
+          prompt: parsed.prompt,
+          timeoutMs,
+          paneQuiet: parsed.paneQuiet,
+        },
+        ctx,
+      )
+    }
+    case 'wait': {
+      const parsed = parseWaitArgs(rest)
+      if ('error' in parsed) return parsed.error
+      if (parsed.repo === '') {
+        return die('usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]')
+      }
+      const timeoutMs = parseTimeoutMs('tm wait', parsed.timeout)
+      if (timeoutMs !== null && typeof timeoutMs === 'object') return timeoutMs.error
+      return waitVerb(
+        {
+          name: parsed.repo,
+          recoverFor: null,
+          timeoutMs,
+          fresh: parsed.fresh,
+          paneQuiet: parsed.paneQuiet,
+        },
+        ctx,
+      )
+    }
+    case 'compact': {
+      const parsed = parseCompactArgs(rest)
+      if ('error' in parsed) return parsed.error
+      const timeoutMs = parseTimeoutMs('tm compact', parsed.timeout)
+      if (timeoutMs !== null && typeof timeoutMs === 'object') return timeoutMs.error
+      return compactVerb(parsed.repo, ctx, { timeoutMs })
+    }
+    case 'resume': {
+      const parsed = parseResumeArgs(rest)
+      if ('error' in parsed) return parsed.error
+      if (parsed.repo === '') {
+        return die(
+          'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]  ' +
+            '(sid from ledger preferred; auto-pick on omit; --task relabels the ' +
+            'resumed conversation)',
+        )
+      }
+      return resumeVerb(
+        {
+          name: parsed.repo,
+          checkpoint: parsed.sid.length === 0 ? null : parsed.sid,
+          prompt: parsed.hasPrompt ? parsed.prompt : null,
+          displayName: parsed.task.length === 0 ? null : parsed.task,
+        },
+        ctx,
+      )
+    }
+    case 'last': {
+      const name = rest[0] ?? ''
+      if (name.length === 0) return die('usage: tm last <repo>')
+      return lastVerb(name, ctx)
+    }
+    case 'ctx': {
+      const parsed = parseCtxArgs(rest)
+      if ('error' in parsed) return parsed.error
+      const repos = [...parsed.repos]
+      if (parsed.all) repos.push(...(await iterTeammates(env.runTmux)))
+      if (repos.length === 0) {
+        return die('usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]')
+      }
+      return combineResults(
+        repos.map((name) => ctxVerb(name, ctx, { windowOverride: parsed.windowOverride })),
+      )
+    }
+    case 'history': {
+      const name = rest[0] ?? ''
+      if (name.length === 0) return die('usage: tm history <repo> [<sid-or-prefix>]')
+      return historyVerb({ name, index: rest[1] ?? null }, ctx)
+    }
+    case 'mem': {
+      const name = rest[0] ?? ''
+      if (name.length === 0) return die('usage: tm mem <repo>')
+      return memVerb(name, ctx)
+    }
+    case 'reload': {
+      const targets = await reloadTargets(rest, env)
+      if (!Array.isArray(targets)) return targets
+      let stdout = ''
+      let stderr = ''
+      for (const target of targets) {
+        const result = await reloadVerb(target, ctx)
+        stdout += result.stdout
+        stderr += result.stderr
+        if (result.code !== 0) return { code: result.code, stdout, stderr }
+      }
+      return { code: 0, stdout, stderr }
+    }
     default:
       return { code: 1, stdout: '', stderr: `tm: unsupported engine verb: ${verb}\n` }
   }
 }
 
-// ─── Claude-only verb handlers ────────────────────────────────────────────
-
-function lastDispatch(args: readonly string[]): TmResult {
-  const repo = args[0] ?? ''
-  if (repo.length === 0) return die('usage: tm last <repo>')
-  const result = claudeLast(repo)
-  if (result.kind === 'text') return { code: 0, stdout: result.text, stderr: '' }
-  return die(result.kind === 'failed' ? result.message : `unexpected last result: ${result.kind}`)
-}
-
-type CtxArgs = { repos: string[]; windowOverride: string; all: boolean } | { error: TmResult }
+type CtxWindowOverride = '' | '200k' | '1m'
+type CtxArgs =
+  | { repos: string[]; windowOverride: CtxWindowOverride; all: boolean }
+  | { error: TmResult }
 
 function parseCtxArgs(args: readonly string[]): CtxArgs {
   const repos: string[] = []
-  let windowOverride = ''
+  let windowOverride: CtxWindowOverride | string = ''
   let all = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
@@ -226,33 +442,7 @@ function parseCtxArgs(args: readonly string[]): CtxArgs {
   if (windowOverride !== '' && windowOverride !== '200k' && windowOverride !== '1m') {
     return { error: die('tm ctx: --window must be 200k or 1m') }
   }
-  return { repos, windowOverride, all }
-}
-
-async function ctxDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  const parsed = parseCtxArgs(args)
-  if ('error' in parsed) return parsed.error
-  const repos = [...parsed.repos]
-  if (parsed.all) repos.push(...(await iterTeammates(env.runTmux)))
-  if (repos.length === 0) {
-    return die('usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]')
-  }
-  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env))
-  return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
-}
-
-function memDispatch(args: readonly string[], env: NativeEnv): TmResult {
-  const repo = args[0] ?? ''
-  if (repo.length === 0) return die('usage: tm mem <repo>')
-  const result = claudeMem(repo, env)
-  switch (result.kind) {
-    case 'text':
-      return { code: 0, stdout: result.text, stderr: '' }
-    case 'failed':
-      return die(result.message)
-    case 'not-supported':
-      return { code: 0, stdout: '', stderr: `${result.reason}\n` }
-  }
+  return { repos, windowOverride: windowOverride as CtxWindowOverride, all }
 }
 
 async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
@@ -260,89 +450,6 @@ async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<
     tmWrapper: tmWrapperPath(),
     pluginJson: pluginJsonPath(),
   })
-}
-
-// ─── spawn / send / wait — codex fork at the dispatcher layer ─────────────
-
-async function spawnDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  const repo = args[0] ?? ''
-  if (repo.length === 0) {
-    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]')
-  }
-  const parsed = parseSpawnArgs(args.slice(1))
-  if ('error' in parsed) return parsed.error
-  const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed
-  const codexByPrefix = engine === null && isCodexPrefixName(repo)
-  if (engine === 'codex' || codexByPrefix || (engine === null && isCodexTarget(repo))) {
-    const invalidName = codexNameValidationError(repo)
-    if (invalidName !== null) return die(invalidName)
-    if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
-    if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`)
-    }
-    const repoPath = join(env.dispatcherDir, repo)
-    const cwdPhys = isDirectory(repoPath) ? realpathSync(repoPath) : realpathSync(env.dispatcherDir)
-    return codexSpawn(repo, {
-      cwd: cwdPhys,
-      prompt: hasPrompt ? prompt : null,
-      timeoutSec: timeout === null ? null : Number(timeout),
-      displayName: null,
-      engine: env.engines?.get('codex'),
-    })
-  }
-  return claudeSpawn(args, env)
-}
-
-async function sendDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  const parsed = parseSendArgs(args)
-  if ('error' in parsed) return parsed.error
-  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed
-  const codexByPrefix = isCodexPrefixName(repo)
-  if (codexByPrefix) {
-    const invalidName = codexNameValidationError(repo)
-    if (invalidName !== null) return die(invalidName)
-  }
-  if (repo !== '' && isCodexTarget(repo)) {
-    if (!hasPrompt) {
-      return die(
-        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." ' +
-          '[--pane-quiet] [--timeout N]',
-      )
-    }
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
-    }
-    if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
-    return codexSend(repo, prompt, {
-      timeoutSec: timeout === null ? null : Number(timeout),
-      engine: env.engines?.get('codex'),
-    })
-  }
-  return claudeSend(args, env)
-}
-
-async function waitDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  const parsed = parseWaitArgs(args)
-  if ('error' in parsed) return parsed.error
-  const { repo, timeout, fresh, paneQuiet } = parsed
-  const codexByPrefix = isCodexPrefixName(repo)
-  if (codexByPrefix) {
-    const invalidName = codexNameValidationError(repo)
-    if (invalidName !== null) return die(invalidName)
-  }
-  if (repo !== '' && isCodexTarget(repo)) {
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
-    }
-    if (fresh) return die('tm wait: --fresh is not supported for codex teammates')
-    if (paneQuiet) return die('tm wait: --pane-quiet is not supported for codex teammates')
-    return codexWait(repo, {
-      timeoutSec: timeout === null ? null : Number(timeout),
-      engine: env.engines?.get('codex'),
-    })
-  }
-  return claudeWait(args, env)
 }
 
 // ─── status (legacy compat) — exclusively for non-engine-verb fallback ─────
@@ -359,8 +466,8 @@ async function waitDispatch(args: readonly string[], env: NativeEnv): Promise<Tm
  *   2. `tm help [<verb>]`           → per-verb or overview, exit 0/1
  *   3. Help pre-scan on `rest`      → per-verb (if HELP_TEXTS) or overview, exit 0
  *   4. Removed verb                 → migration message, exit 2
- *   5. Engine-routed verbs          → router → engine method
- *   6. Verb-specific dispatch        → claude module / codex fork / dispatcher-only
+ *   5. Engine-routed teammate verbs → verbs/<v>.ts → router/registry → engine
+ *   6. Dispatcher-only / diagnostic  → local verb
  *   7. Unknown verb                  → stderr + overview, exit 1
  */
 export async function runCli(
@@ -394,41 +501,21 @@ export async function runCli(
     return removedVerb(REMOVED_VERB_MESSAGES[verb]!)
   }
 
-  // 5. Engine-routed verbs — fleet visibility and kill go through
-  //    `verbs/<v>.ts` → `EngineRegistry` → concrete Engine methods.
+  // 5. Engine-routed teammate verbs — parse at the CLI boundary, then
+  //    `verbs/<v>.ts` → `EngineRegistry` / router → concrete Engine methods.
   if (ENGINE_VERBS.has(verb)) {
-    return dispatchEngineVerb(verb, rest, productionVerbContext(env))
+    return dispatchEngineVerb(verb, rest, productionVerbContext(env), env)
   }
 
-  // 6. Per-verb dispatch — claude module / codex fork / dispatcher-only.
+  // 6. Dispatcher-only / diagnostic verbs.
   switch (verb) {
     case 'archive':
       return archiveVerb(rest, stdin, {
         dispatcherDir: env.dispatcherDir,
         projectsDir: env.projectsDir,
       })
-    case 'last':
-      return lastDispatch(rest)
-    case 'ctx':
-      return ctxDispatch(rest, env)
-    case 'mem':
-      return memDispatch(rest, env)
-    case 'history':
-      return claudeHistory(rest, env)
     case 'doctor':
       return doctorDispatch(rest, env)
-    case 'reload':
-      return claudeReload(rest, env)
-    case 'compact':
-      return claudeCompact(rest, env)
-    case 'resume':
-      return claudeResume(rest, env)
-    case 'spawn':
-      return spawnDispatch(rest, env)
-    case 'send':
-      return sendDispatch(rest, env)
-    case 'wait':
-      return waitDispatch(rest, env)
     case 'poll':
       return pollVerb(rest, env)
     case 'ask':

@@ -90,6 +90,7 @@ export async function codexSpawn(
     {
       name,
       cwd: opts.cwd ?? process.cwd(),
+      resumeCheckpoint: null,
       prompt: opts.prompt ?? null,
       timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
       displayName: opts.displayName ?? null,
@@ -132,6 +133,7 @@ export async function codexSend(
       name,
       prompt,
       timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
+      paneQuiet: false,
     },
     engineContext(),
   )
@@ -146,7 +148,13 @@ export async function codexWait(
   const invalidName = validateCodexName(name)
   if (invalidName !== null) return invalidName
   const result = await resolveEngine(opts.engine).wait(
-    { name, recoverFor: null, timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null) },
+    {
+      name,
+      recoverFor: null,
+      timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
+      fresh: false,
+      paneQuiet: false,
+    },
     engineContext(),
   )
   return formatTurn(result)

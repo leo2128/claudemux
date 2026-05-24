@@ -13,8 +13,12 @@
 
 import type {
   CompactResult,
+  ContextResult,
   HistoryResult,
   KillResult,
+  RawTmResult,
+  ReloadResult,
+  ResumeResult,
   TeammateListing,
   TeammateName,
   TeammateStatus,
@@ -22,6 +26,10 @@ import type {
   TurnResult,
 } from '../engines/types'
 import type { TmResult } from '../tm'
+
+function rawTmResult(result: RawTmResult): TmResult | null {
+  return result.tmResult ?? null
+}
 
 /**
  * The "no teammate by this name" verb outcome. Exit code 1 follows the
@@ -83,6 +91,8 @@ export function formatKill(name: TeammateName, result: KillResult): TmResult {
 }
 
 export function formatTurn(turn: TurnResult): TmResult {
+  const raw = rawTmResult(turn)
+  if (raw !== null) return raw
   switch (turn.kind) {
     case 'completed':
       return { code: 0, stdout: turn.text.endsWith('\n') ? turn.text : `${turn.text}\n`, stderr: '' }
@@ -98,6 +108,8 @@ export function formatTurn(turn: TurnResult): TmResult {
 }
 
 export function formatCompact(result: CompactResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
   switch (result.kind) {
     case 'compacted':
       return { code: 0, stdout: 'compacted\n', stderr: '' }
@@ -111,6 +123,8 @@ export function formatCompact(result: CompactResult): TmResult {
 }
 
 export function formatHistory(result: HistoryResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
   switch (result.kind) {
     case 'list': {
       const lines = result.turns.map((t) => `#${t.index}\t${t.summary}`)
@@ -126,6 +140,8 @@ export function formatHistory(result: HistoryResult): TmResult {
 }
 
 export function formatText(label: string, result: TextResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
   switch (result.kind) {
     case 'text':
       return { code: 0, stdout: result.text.endsWith('\n') ? result.text : `${result.text}\n`, stderr: '' }
@@ -133,5 +149,50 @@ export function formatText(label: string, result: TextResult): TmResult {
       return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
     case 'failed':
       return { code: 1, stdout: '', stderr: `tm: ${label}: ${result.message}\n` }
+  }
+}
+
+export function formatContext(result: ContextResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
+  switch (result.kind) {
+    case 'usage':
+      return {
+        code: 0,
+        stdout: `${result.tokensUsed} tokens · ${result.pct}% of ${result.tokensTotal}\n`,
+        stderr: '',
+      }
+    case 'not-supported':
+      return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
+    case 'failed':
+      return { code: 1, stdout: '', stderr: `tm: ctx: ${result.message}\n` }
+  }
+}
+
+export function formatResume(result: ResumeResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
+  switch (result.kind) {
+    case 'resumed':
+      return { code: 0, stdout: `resumed: ${result.checkpoint ?? ''}\n`, stderr: '' }
+    case 'not-found':
+      return { code: 1, stdout: '', stderr: `tm: resume: ${result.reason}\n` }
+    case 'not-supported':
+      return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
+    case 'failed':
+      return { code: 1, stdout: '', stderr: `tm: resume: ${result.message}\n` }
+  }
+}
+
+export function formatReload(result: ReloadResult): TmResult {
+  const raw = rawTmResult(result)
+  if (raw !== null) return raw
+  switch (result.kind) {
+    case 'reloaded':
+      return { code: 0, stdout: 'reloaded\n', stderr: '' }
+    case 'not-supported':
+      return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
+    case 'failed':
+      return { code: 1, stdout: '', stderr: `tm: reload: ${result.message}\n` }
   }
 }

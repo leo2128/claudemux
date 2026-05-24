@@ -371,6 +371,35 @@ describe('native dispatch', () => {
     expect(seenSend).toEqual([null, 7000])
     expect(seenWait).toEqual([null, 7000])
   })
+
+  test.each([
+    ['compact', (name: string) => ['compact', name], 'codex compacts its own context automatically'],
+    ['resume', (name: string) => ['resume', name], 'codex thread resume is internal'],
+    ['last', (name: string) => ['last', name], 'codex app-server does not expose last-turn text'],
+    ['ctx', (name: string) => ['ctx', name], 'codex context usage is not exposed'],
+    ['history', (name: string) => ['history', name], 'codex thread history enumeration is not exposed'],
+    ['mem', (name: string) => ['mem', name], 'codex does not use Claude project memory files'],
+    ['reload', (name: string) => ['reload', name], 'codex has no reload prompt command'],
+  ])('%s routes an existing codex teammate through CodexEngine not-supported', async (_verb, argvFor, reason) => {
+    const name = `codex-dispatch-${_verb}-${Date.now()}`
+    writeBaseRecord(new CodexTeammateRecord({
+      name,
+      cwd: '/tmp',
+      createdAt: 1,
+      displayName: null,
+    }))
+    const registry = new EngineRegistry()
+    registry.register(new CodexEngine())
+
+    try {
+      const result = await runCli(argvFor(name), fakeEnv({ engines: registry }))
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain(reason)
+    } finally {
+      removeBaseRecord(name)
+    }
+  })
 })
 
 describe('engine-routed verbs (Phase 2a-1 fleet visibility)', () => {

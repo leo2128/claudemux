@@ -3712,7 +3712,7 @@ var require_websocket_server = __commonJS({
 });
 
 // src/cli.ts
-import { realpathSync as realpathSync4 } from "node:fs";
+import { realpathSync as realpathSync4, statSync as statSync14 } from "node:fs";
 import { homedir } from "node:os";
 import { join as join12 } from "node:path";
 
@@ -6424,15 +6424,13 @@ function deriveState(name) {
   return "unknown";
 }
 var ClaudeEngine = class {
-  /** The Claude engine carries the `NativeEnv` only because Phase 2a-1 still
-   *  delegates 12 of its 16 methods to `NATIVE_VERBS`. Phase 2a-2 inlines
-   *  the implementations and shrinks the constructor accordingly. */
+  /** Runtime adapters (`tmux`, `column`, dispatcher paths) are injected per CLI invocation. */
   constructor(env) {
     this.env = env;
   }
   kind = "claude";
   capabilities = CLAUDE_CAPABILITIES;
-  // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
+  // ─── Fleet visibility ──────────────────────────────────────────────
   async list(ctx) {
     let listing = "";
     try {
@@ -6538,66 +6536,87 @@ var ClaudeEngine = class {
   // ─── Hot path / session-shape — real bodies in engines/claude/<verb>.ts
   async spawn(req, _ctx) {
     const argv = [req.name];
+    if (req.resumeCheckpoint !== null) argv.push("--resume", req.resumeCheckpoint);
     if (req.displayName !== null) argv.push("--task", req.displayName);
     if (req.prompt !== null) argv.push("--prompt", req.prompt);
     const result = await claudeSpawn(argv, this.env);
     if (result.code !== 0) {
-      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), tmResult: result };
     }
     return {
       kind: "spawned",
       name: req.name,
-      firstTurn: req.prompt === null ? null : { kind: "completed", text: result.stdout, items: [], context: null }
+      tmResult: result,
+      firstTurn: req.prompt === null ? null : { kind: "completed", text: result.stdout, items: [], context: null, tmResult: result }
     };
   }
   async send(req, _ctx) {
     const argv = [req.name, "--prompt", req.prompt];
     if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    if (req.paneQuiet) argv.push("--pane-quiet");
     const result = await claudeSend(argv, this.env);
     if (result.code !== 0) {
-      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: false };
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: false, tmResult: result };
     }
-    return { kind: "completed", text: result.stdout, items: [], context: null };
+    return { kind: "completed", text: result.stdout, items: [], context: null, tmResult: result };
   }
   async wait(req, _ctx) {
     const argv = [req.name];
     if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    if (req.fresh) argv.push("--fresh");
+    if (req.paneQuiet) argv.push("--pane-quiet");
     const result = await claudeWait(argv, this.env);
     if (result.code !== 0) {
-      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: true };
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: true, tmResult: result };
     }
-    return { kind: "completed", text: result.stdout, items: [], context: null };
+    return { kind: "completed", text: result.stdout, items: [], context: null, tmResult: result };
   }
   async compact(req, _ctx) {
-    const result = await claudeCompact([req.name], this.env);
-    if (result.code === 0) return { kind: "compacted" };
-    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+    const argv = [req.name];
+    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    const result = await claudeCompact(argv, this.env);
+    if (result.code === 0) return { kind: "compacted", tmResult: result };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), tmResult: result };
   }
   async resume(req, _ctx) {
-    const result = await claudeResume([req.name, req.checkpoint], this.env);
-    if (result.code === 0) return { kind: "resumed", checkpoint: req.checkpoint };
-    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+    const argv = [req.name];
+    if (req.checkpoint !== null) argv.push(req.checkpoint);
+    if (req.displayName !== null) argv.push("--task", req.displayName);
+    if (req.prompt !== null) argv.push("--prompt", req.prompt);
+    const result = await claudeResume(argv, this.env);
+    if (result.code === 0) return { kind: "resumed", checkpoint: req.checkpoint, tmResult: result };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), tmResult: result };
   }
   async last(req, _ctx) {
     return claudeLast(req.name);
   }
   async ctx(req, _ctx) {
-    return claudeCtxUsage(req.name, {
+    const structured = claudeCtxUsage(req.name, {
       dispatcherDir: this.env.dispatcherDir,
       projectsDir: this.env.projectsDir
     });
+    return {
+      ...structured,
+      tmResult: {
+        code: 0,
+        stdout: `${claudeCtxLine(req.name, req.windowOverride, this.env)}
+`,
+        stderr: ""
+      }
+    };
   }
   async history(req, _ctx) {
     const argv = [req.name];
-    if (req.index !== null) argv.push(String(req.index));
+    if (req.index !== null) argv.push(req.index);
     const result = await claudeHistory(argv, this.env);
     if (result.code === 0) {
       return {
         kind: "list",
-        turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip3(result.stdout) }]
+        turns: [{ index: Number(req.index ?? 0), startedAt: 0, summary: rstrip3(result.stdout) }],
+        tmResult: result
       };
     }
-    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), tmResult: result };
   }
   async mem(req, _ctx) {
     return claudeMem(req.name, {
@@ -6607,8 +6626,8 @@ var ClaudeEngine = class {
   }
   async reload(req, _ctx) {
     const result = await claudeReload([req.name], this.env);
-    if (result.code === 0) return { kind: "reloaded" };
-    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+    if (result.code === 0) return { kind: "reloaded", tmResult: result };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), tmResult: result };
   }
   // ─── Diagnostic ─────────────────────────────────────────────────────
   async inspect(req, _ctx) {
@@ -7000,6 +7019,9 @@ var CodexEngine = class {
   async spawn(req, ctx) {
     const invalidName = codexNameFailure(req.name);
     if (invalidName !== null) return { kind: "failed", message: invalidName };
+    if (req.resumeCheckpoint !== null) {
+      return { kind: "failed", message: "--resume is not supported for codex teammates" };
+    }
     const existing = readBaseRecord(req.name);
     if (existing !== null) {
       if (existing.engine !== "codex") return { kind: "already-exists", existingEngine: existing.engine };
@@ -7037,10 +7059,19 @@ var CodexEngine = class {
       });
       await this.healthCheck(req.name);
       if (req.prompt === null) {
-        return { kind: "spawned", name: req.name, firstTurn: null };
+        const state = readDaemonState(req.name);
+        const stderr = state === null ? `spawned: ${req.name}
+` : `spawned: ${req.name} (pid=${state.pid}, socket=${state.socketPath})
+`;
+        return {
+          kind: "spawned",
+          name: req.name,
+          firstTurn: null,
+          tmResult: { code: 0, stdout: "", stderr }
+        };
       }
       const firstTurn = await this.send(
-        { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs },
+        { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs, paneQuiet: false },
         ctx
       );
       return { kind: "spawned", name: req.name, firstTurn };
@@ -7062,6 +7093,13 @@ var CodexEngine = class {
     const invalidName = codexNameFailure(req.name);
     if (invalidName !== null) {
       return { kind: "failed", message: invalidName, recoverable: false };
+    }
+    if (req.paneQuiet) {
+      return {
+        kind: "failed",
+        message: "tm send: --pane-quiet is not supported for codex teammates",
+        recoverable: false
+      };
     }
     if (!daemonAlive(req.name)) {
       return {
@@ -7116,6 +7154,20 @@ var CodexEngine = class {
     const invalidName = codexNameFailure(req.name);
     if (invalidName !== null) {
       return { kind: "failed", message: invalidName, recoverable: false };
+    }
+    if (req.fresh) {
+      return {
+        kind: "failed",
+        message: "tm wait: --fresh is not supported for codex teammates",
+        recoverable: false
+      };
+    }
+    if (req.paneQuiet) {
+      return {
+        kind: "failed",
+        message: "tm wait: --pane-quiet is not supported for codex teammates",
+        recoverable: false
+      };
     }
     if (!daemonAlive(req.name)) {
       return { kind: "failed", message: `codex teammate '${req.name}' is not alive`, recoverable: false };
@@ -7475,6 +7527,9 @@ ${entry}
 }
 
 // src/verbs/format.ts
+function rawTmResult(result) {
+  return result.tmResult ?? null;
+}
 function teammateNotFound(name) {
   return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
 ` };
@@ -7520,6 +7575,8 @@ function formatKill(name, result) {
   }
 }
 function formatTurn(turn) {
+  const raw = rawTmResult(turn);
+  if (raw !== null) return raw;
   switch (turn.kind) {
     case "completed":
       return { code: 0, stdout: turn.text.endsWith("\n") ? turn.text : `${turn.text}
@@ -7538,94 +7595,99 @@ function formatTurn(turn) {
 ` };
   }
 }
+function formatCompact(result) {
+  const raw = rawTmResult(result);
+  if (raw !== null) return raw;
+  switch (result.kind) {
+    case "compacted":
+      return { code: 0, stdout: "compacted\n", stderr: "" };
+    case "not-needed":
+      return { code: 0, stdout: "", stderr: `  not needed: ${result.reason}
+` };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: compact: ${result.message}
+` };
+  }
+}
+function formatHistory(result) {
+  const raw = rawTmResult(result);
+  if (raw !== null) return raw;
+  switch (result.kind) {
+    case "list": {
+      const lines = result.turns.map((t) => `#${t.index}	${t.summary}`);
+      return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+    }
+    case "detail":
+      return { code: 0, stdout: `#${result.turn.index}	${result.turn.summary}
+`, stderr: "" };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: history: ${result.message}
+` };
+  }
+}
+function formatContext(result) {
+  const raw = rawTmResult(result);
+  if (raw !== null) return raw;
+  switch (result.kind) {
+    case "usage":
+      return {
+        code: 0,
+        stdout: `${result.tokensUsed} tokens \xB7 ${result.pct}% of ${result.tokensTotal}
+`,
+        stderr: ""
+      };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: ctx: ${result.message}
+` };
+  }
+}
+function formatResume(result) {
+  const raw = rawTmResult(result);
+  if (raw !== null) return raw;
+  switch (result.kind) {
+    case "resumed":
+      return { code: 0, stdout: `resumed: ${result.checkpoint ?? ""}
+`, stderr: "" };
+    case "not-found":
+      return { code: 1, stdout: "", stderr: `tm: resume: ${result.reason}
+` };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: resume: ${result.message}
+` };
+  }
+}
+function formatReload(result) {
+  const raw = rawTmResult(result);
+  if (raw !== null) return raw;
+  switch (result.kind) {
+    case "reloaded":
+      return { code: 0, stdout: "reloaded\n", stderr: "" };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: reload: ${result.message}
+` };
+  }
+}
 
 // src/engines/codex/verbs.ts
 function die3(message) {
   return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
-}
-function engineContext() {
-  return { now: () => Date.now(), env: process.env };
-}
-function resolveEngine(engine) {
-  return engine ?? new CodexEngine();
-}
-function timeoutMsFromSeconds(timeoutSec) {
-  return timeoutSec === null ? null : timeoutSec * 1e3;
-}
-function isCodexPrefixName(name) {
-  return name.startsWith("codex-") || name.startsWith("codex/");
-}
-function codexNameValidationError(name) {
-  const validation = validateTeammateName(name);
-  return validation.kind === "ok" ? null : `invalid codex teammate name '${name}': ${validation.reason}`;
-}
-function validateCodexName(name) {
-  const message = codexNameValidationError(name);
-  return message === null ? null : die3(message);
-}
-function isCodexTarget(name) {
-  if (codexNameValidationError(name) !== null) return false;
-  if (isCodexPrefixName(name)) return true;
-  const base = readBaseRecord(name);
-  if (base?.engine === "codex") return true;
-  return false;
-}
-async function codexSpawn(name, opts = {}) {
-  const invalidName = validateCodexName(name);
-  if (invalidName !== null) return invalidName;
-  const engine = resolveEngine(opts.engine);
-  const result = await engine.spawn(
-    {
-      name,
-      cwd: opts.cwd ?? process.cwd(),
-      prompt: opts.prompt ?? null,
-      timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
-      displayName: opts.displayName ?? null
-    },
-    engineContext()
-  );
-  switch (result.kind) {
-    case "spawned": {
-      const state = readDaemonState(name);
-      let stderr = state === null ? `spawned: ${name}
-` : `spawned: ${name} (pid=${state.pid}, socket=${state.socketPath})
-`;
-      if (result.firstTurn === null) return { code: 0, stdout: "", stderr };
-      const turn = formatTurn(result.firstTurn);
-      return {
-        code: turn.code,
-        stdout: turn.stdout,
-        stderr: stderr + turn.stderr
-      };
-    }
-    case "already-exists":
-      return die3(`codex teammate '${name}' already exists (engine=${result.existingEngine})`);
-    case "failed":
-      return die3(result.message);
-  }
-}
-async function codexSend(name, prompt, opts = {}) {
-  const invalidName = validateCodexName(name);
-  if (invalidName !== null) return invalidName;
-  const result = await resolveEngine(opts.engine).send(
-    {
-      name,
-      prompt,
-      timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null)
-    },
-    engineContext()
-  );
-  return formatTurn(result);
-}
-async function codexWait(name, opts = {}) {
-  const invalidName = validateCodexName(name);
-  if (invalidName !== null) return invalidName;
-  const result = await resolveEngine(opts.engine).wait(
-    { name, recoverFor: null, timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null) },
-    engineContext()
-  );
-  return formatTurn(result);
 }
 async function codexAsk(prompt) {
   if (prompt.length === 0) return die3('usage: tm ask "<prompt>"');
@@ -7827,6 +7889,202 @@ async function killVerb(name, ctx) {
   return formatKill(name, result);
 }
 
+// src/verbs/spawn.ts
+async function spawnVerb(args, ctx) {
+  const engine = ctx.engines.get(args.engine);
+  if (engine === void 0) return noEngineRegistered();
+  if (engine.kind !== "claude" && args.resumeCheckpoint !== null) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "tm: tm spawn: --resume is not supported for codex teammates\n"
+    };
+  }
+  if (engine.kind !== "claude" && args.displayName !== null) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "tm: tm spawn: --task is not supported for codex teammates\n"
+    };
+  }
+  const req = {
+    name: args.name,
+    cwd: args.cwd,
+    resumeCheckpoint: args.resumeCheckpoint,
+    prompt: args.prompt,
+    timeoutMs: args.timeoutMs,
+    displayName: args.displayName
+  };
+  const result = await engine.spawn(req, ctx.engineContext);
+  if (result.tmResult !== void 0) return result.tmResult;
+  switch (result.kind) {
+    case "spawned":
+      return { code: 0, stdout: `spawned: ${result.name}
+`, stderr: "" };
+    case "already-exists":
+      return {
+        code: 1,
+        stdout: "",
+        stderr: `tm: spawn: '${args.name}' already exists as a ${result.existingEngine} teammate
+`
+      };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: spawn: ${result.message}
+` };
+  }
+}
+
+// src/verbs/resolve.ts
+function isCodexPrefixName(name) {
+  return name.startsWith("codex-") || name.startsWith("codex/");
+}
+async function resolveTargetEngine(name, ctx) {
+  const validation = validateTeammateName(name);
+  if (validation.kind !== "ok" && isCodexPrefixName(name)) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `tm: invalid codex teammate name '${name}': ${validation.reason}
+`
+    };
+  }
+  const resolved = await ctx.router.resolve(name);
+  if (resolved !== null) return resolved.engine;
+  if (isCodexPrefixName(name)) {
+    const codex = ctx.engines.get("codex");
+    if (codex !== void 0) return codex;
+  }
+  return ctx.engines.get("claude") ?? noEngineRegistered();
+}
+
+// src/verbs/send.ts
+async function sendVerb(args, ctx) {
+  const engine = await resolveTargetEngine(args.name, ctx);
+  if ("code" in engine) return engine;
+  if (args.paneQuiet && engine.kind !== "claude") {
+    return { code: 1, stdout: "", stderr: "tm: tm send: --pane-quiet is not supported for codex teammates\n" };
+  }
+  const req = {
+    name: args.name,
+    prompt: args.prompt,
+    timeoutMs: args.timeoutMs,
+    paneQuiet: args.paneQuiet
+  };
+  return formatTurn(await engine.send(req, ctx.engineContext));
+}
+
+// src/verbs/wait.ts
+async function waitVerb(args, ctx) {
+  const engine = await resolveTargetEngine(args.name, ctx);
+  if ("code" in engine) return engine;
+  if (args.fresh && engine.kind !== "claude") {
+    return { code: 1, stdout: "", stderr: "tm: tm wait: --fresh is not supported for codex teammates\n" };
+  }
+  if (args.paneQuiet && engine.kind !== "claude") {
+    return { code: 1, stdout: "", stderr: "tm: tm wait: --pane-quiet is not supported for codex teammates\n" };
+  }
+  const req = {
+    name: args.name,
+    recoverFor: args.recoverFor,
+    timeoutMs: args.timeoutMs,
+    fresh: args.fresh,
+    paneQuiet: args.paneQuiet
+  };
+  return formatTurn(await engine.wait(req, ctx.engineContext));
+}
+
+// src/verbs/compact.ts
+async function compactVerb(name, ctx, opts = { timeoutMs: null }) {
+  const engine = await resolveTargetEngine(name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name, timeoutMs: opts.timeoutMs };
+  return formatCompact(await engine.compact(req, ctx.engineContext));
+}
+
+// src/verbs/resume.ts
+async function resumeVerb(args, ctx) {
+  const engine = await resolveTargetEngine(args.name, ctx);
+  if ("code" in engine) return engine;
+  const req = {
+    name: args.name,
+    checkpoint: args.checkpoint,
+    prompt: args.prompt,
+    displayName: args.displayName
+  };
+  return formatResume(await engine.resume(req, ctx.engineContext));
+}
+
+// src/verbs/last.ts
+function formatLast(result) {
+  if (result.tmResult !== void 0) return result.tmResult;
+  switch (result.kind) {
+    case "text":
+      return { code: 0, stdout: result.text, stderr: "" };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${result.reason}
+` };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: ${result.message}
+` };
+  }
+}
+async function lastVerb(name, ctx) {
+  const engine = await resolveTargetEngine(name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name };
+  return formatLast(await engine.last(req, ctx.engineContext));
+}
+
+// src/verbs/ctx.ts
+async function ctxVerb(name, ctx, opts) {
+  const engine = await resolveTargetEngine(name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name, windowOverride: opts.windowOverride };
+  return formatContext(await engine.ctx(req, ctx.engineContext));
+}
+
+// src/verbs/history.ts
+async function historyVerb(args, ctx) {
+  const engine = await resolveTargetEngine(args.name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name: args.name, index: args.index };
+  return formatHistory(await engine.history(req, ctx.engineContext));
+}
+
+// src/verbs/mem.ts
+function formatMem(engineKind, result) {
+  if (result.tmResult !== void 0) return result.tmResult;
+  switch (result.kind) {
+    case "text":
+      return { code: 0, stdout: result.text, stderr: "" };
+    case "not-supported":
+      return {
+        code: 0,
+        stdout: "",
+        stderr: engineKind === "claude" ? `${result.reason}
+` : `  not supported: ${result.reason}
+`
+      };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: ${result.message}
+` };
+  }
+}
+async function memVerb(name, ctx) {
+  const engine = await resolveTargetEngine(name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name };
+  return formatMem(engine.kind, await engine.mem(req, ctx.engineContext));
+}
+
+// src/verbs/reload.ts
+async function reloadVerb(name, ctx) {
+  const engine = await resolveTargetEngine(name, ctx);
+  if ("code" in engine) return engine;
+  const req = { name };
+  return formatReload(await engine.reload(req, ctx.engineContext));
+}
+
 // src/cli.ts
 function productionVerbContext(env) {
   const registry = env.engines ?? productionRegistry(env);
@@ -7840,11 +8098,11 @@ function productionVerbContext(env) {
       }
     })
   ]);
-  const engineContext2 = { now: () => Date.now(), env: process.env };
+  const engineContext = { now: () => Date.now(), env: process.env };
   return {
     engines: registry,
     router,
-    engineContext: engineContext2,
+    engineContext,
     identity: new ProductionIdentityStore(),
     runColumn: env.runColumn
   };
@@ -7884,8 +8142,85 @@ function runHelpVerb(rest) {
 `
   };
 }
-var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status", "kill"]);
-async function dispatchEngineVerb(verb, rest, ctx) {
+function isDirectory3(path) {
+  try {
+    return statSync14(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function secondsToMs(value) {
+  return value === null ? null : Number(value) * 1e3;
+}
+function parseTimeoutMs(label, value) {
+  if (value === null) return null;
+  if (!isNonNegativeInteger(value)) {
+    return { error: die5(`${label}: --timeout must be a non-negative integer (got: '${value}')`) };
+  }
+  return secondsToMs(value);
+}
+function isCodexPrefixName2(name) {
+  return name.startsWith("codex-") || name.startsWith("codex/");
+}
+async function inferSpawnEngine(name, requested, ctx) {
+  if (requested !== null) return requested;
+  const resolved = await ctx.router.resolve(name);
+  if (resolved !== null) return resolved.engine.kind;
+  return isCodexPrefixName2(name) ? "codex" : "claude";
+}
+function spawnCwd(name, engine, env) {
+  if (engine === "codex") {
+    const repoPath = join12(env.dispatcherDir, name);
+    return isDirectory3(repoPath) ? realpathSync4(repoPath) : realpathSync4(env.dispatcherDir);
+  }
+  return join12(env.dispatcherDir, name);
+}
+async function combineResults(results) {
+  let code = 0;
+  let stdout = "";
+  let stderr = "";
+  for (const result of await Promise.all(results)) {
+    if (code === 0 && result.code !== 0) code = result.code;
+    stdout += result.stdout;
+    stderr += result.stderr;
+  }
+  return { code, stdout, stderr };
+}
+async function reloadTargets(rest, env) {
+  let all = false;
+  const repos = [];
+  for (const arg of rest) {
+    if (arg === "--all") all = true;
+    else if (arg === "-h" || arg === "--help") return die5("usage: tm reload <repo>... | --all");
+    else if (arg.startsWith("-")) return die5(`tm reload: unknown flag: ${arg}`);
+    else repos.push(arg);
+  }
+  if (all) {
+    if (repos.length > 0) return die5("tm reload: --all conflicts with explicit repos");
+    repos.push(...await iterTeammates(env.runTmux));
+    if (repos.length === 0) return { code: 0, stdout: "(no teammate sessions to reload)\n", stderr: "" };
+  } else if (repos.length === 0) {
+    return die5("usage: tm reload <repo>... | --all");
+  }
+  return repos;
+}
+var ENGINE_VERBS = /* @__PURE__ */ new Set([
+  "ls",
+  "states",
+  "status",
+  "kill",
+  "spawn",
+  "send",
+  "wait",
+  "compact",
+  "resume",
+  "last",
+  "ctx",
+  "history",
+  "mem",
+  "reload"
+]);
+async function dispatchEngineVerb(verb, rest, ctx, env) {
   switch (verb) {
     case "ls":
       return lsVerb(ctx);
@@ -7903,17 +8238,142 @@ async function dispatchEngineVerb(verb, rest, ctx) {
     case "kill":
       if (rest.length === 0) return { code: 1, stdout: "", stderr: "tm: usage: tm kill <repo>\n" };
       return killVerb(rest[0], ctx);
+    case "spawn": {
+      const name = rest[0] ?? "";
+      if (name.length === 0) {
+        return die5('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]');
+      }
+      const parsed = parseSpawnArgs(rest.slice(1));
+      if ("error" in parsed) return parsed.error;
+      const timeoutMs = parseTimeoutMs("tm spawn", parsed.timeout);
+      if (timeoutMs !== null && typeof timeoutMs === "object") return timeoutMs.error;
+      const engine = await inferSpawnEngine(name, parsed.engine, ctx);
+      return spawnVerb(
+        {
+          name,
+          engine,
+          cwd: spawnCwd(name, engine, env),
+          resumeCheckpoint: parsed.resumeSid.length === 0 ? null : parsed.resumeSid,
+          prompt: parsed.hasPrompt ? parsed.prompt : null,
+          timeoutMs,
+          displayName: parsed.task.length === 0 ? null : parsed.task
+        },
+        ctx
+      );
+    }
+    case "send": {
+      const parsed = parseSendArgs(rest);
+      if ("error" in parsed) return parsed.error;
+      if (parsed.repo === "") {
+        return die5(
+          'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
+        );
+      }
+      if (!parsed.hasPrompt) {
+        return die5(
+          'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
+        );
+      }
+      const timeoutMs = parseTimeoutMs("tm send", parsed.timeout);
+      if (timeoutMs !== null && typeof timeoutMs === "object") return timeoutMs.error;
+      return sendVerb(
+        {
+          name: parsed.repo,
+          prompt: parsed.prompt,
+          timeoutMs,
+          paneQuiet: parsed.paneQuiet
+        },
+        ctx
+      );
+    }
+    case "wait": {
+      const parsed = parseWaitArgs(rest);
+      if ("error" in parsed) return parsed.error;
+      if (parsed.repo === "") {
+        return die5("usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]");
+      }
+      const timeoutMs = parseTimeoutMs("tm wait", parsed.timeout);
+      if (timeoutMs !== null && typeof timeoutMs === "object") return timeoutMs.error;
+      return waitVerb(
+        {
+          name: parsed.repo,
+          recoverFor: null,
+          timeoutMs,
+          fresh: parsed.fresh,
+          paneQuiet: parsed.paneQuiet
+        },
+        ctx
+      );
+    }
+    case "compact": {
+      const parsed = parseCompactArgs(rest);
+      if ("error" in parsed) return parsed.error;
+      const timeoutMs = parseTimeoutMs("tm compact", parsed.timeout);
+      if (timeoutMs !== null && typeof timeoutMs === "object") return timeoutMs.error;
+      return compactVerb(parsed.repo, ctx, { timeoutMs });
+    }
+    case "resume": {
+      const parsed = parseResumeArgs(rest);
+      if ("error" in parsed) return parsed.error;
+      if (parsed.repo === "") {
+        return die5(
+          'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation)'
+        );
+      }
+      return resumeVerb(
+        {
+          name: parsed.repo,
+          checkpoint: parsed.sid.length === 0 ? null : parsed.sid,
+          prompt: parsed.hasPrompt ? parsed.prompt : null,
+          displayName: parsed.task.length === 0 ? null : parsed.task
+        },
+        ctx
+      );
+    }
+    case "last": {
+      const name = rest[0] ?? "";
+      if (name.length === 0) return die5("usage: tm last <repo>");
+      return lastVerb(name, ctx);
+    }
+    case "ctx": {
+      const parsed = parseCtxArgs(rest);
+      if ("error" in parsed) return parsed.error;
+      const repos = [...parsed.repos];
+      if (parsed.all) repos.push(...await iterTeammates(env.runTmux));
+      if (repos.length === 0) {
+        return die5("usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]");
+      }
+      return combineResults(
+        repos.map((name) => ctxVerb(name, ctx, { windowOverride: parsed.windowOverride }))
+      );
+    }
+    case "history": {
+      const name = rest[0] ?? "";
+      if (name.length === 0) return die5("usage: tm history <repo> [<sid-or-prefix>]");
+      return historyVerb({ name, index: rest[1] ?? null }, ctx);
+    }
+    case "mem": {
+      const name = rest[0] ?? "";
+      if (name.length === 0) return die5("usage: tm mem <repo>");
+      return memVerb(name, ctx);
+    }
+    case "reload": {
+      const targets = await reloadTargets(rest, env);
+      if (!Array.isArray(targets)) return targets;
+      let stdout = "";
+      let stderr = "";
+      for (const target of targets) {
+        const result = await reloadVerb(target, ctx);
+        stdout += result.stdout;
+        stderr += result.stderr;
+        if (result.code !== 0) return { code: result.code, stdout, stderr };
+      }
+      return { code: 0, stdout, stderr };
+    }
     default:
       return { code: 1, stdout: "", stderr: `tm: unsupported engine verb: ${verb}
 ` };
   }
-}
-function lastDispatch(args) {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die5("usage: tm last <repo>");
-  const result = claudeLast(repo);
-  if (result.kind === "text") return { code: 0, stdout: result.text, stderr: "" };
-  return die5(result.kind === "failed" ? result.message : `unexpected last result: ${result.kind}`);
 }
 function parseCtxArgs(args) {
   const repos = [];
@@ -7940,114 +8400,11 @@ function parseCtxArgs(args) {
   }
   return { repos, windowOverride, all };
 }
-async function ctxDispatch(args, env) {
-  const parsed = parseCtxArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const repos = [...parsed.repos];
-  if (parsed.all) repos.push(...await iterTeammates(env.runTmux));
-  if (repos.length === 0) {
-    return die5("usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]");
-  }
-  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env));
-  return { code: 0, stdout: `${lines.join("\n")}
-`, stderr: "" };
-}
-function memDispatch(args, env) {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die5("usage: tm mem <repo>");
-  const result = claudeMem(repo, env);
-  switch (result.kind) {
-    case "text":
-      return { code: 0, stdout: result.text, stderr: "" };
-    case "failed":
-      return die5(result.message);
-    case "not-supported":
-      return { code: 0, stdout: "", stderr: `${result.reason}
-` };
-  }
-}
 async function doctorDispatch(args, env) {
   return claudeDoctor(args, env, {
     tmWrapper: tmWrapperPath(),
     pluginJson: pluginJsonPath()
   });
-}
-async function spawnDispatch(args, env) {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) {
-    return die5('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]');
-  }
-  const parsed = parseSpawnArgs(args.slice(1));
-  if ("error" in parsed) return parsed.error;
-  const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed;
-  const codexByPrefix = engine === null && isCodexPrefixName(repo);
-  if (engine === "codex" || codexByPrefix || engine === null && isCodexTarget(repo)) {
-    const invalidName = codexNameValidationError(repo);
-    if (invalidName !== null) return die5(invalidName);
-    if (resumeSid.length > 0) return die5("tm spawn: --resume is not supported for codex teammates");
-    if (task.length > 0) return die5("tm spawn: --task is not supported for codex teammates");
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die5(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`);
-    }
-    const repoPath = join12(env.dispatcherDir, repo);
-    const cwdPhys = isDirectory(repoPath) ? realpathSync4(repoPath) : realpathSync4(env.dispatcherDir);
-    return codexSpawn(repo, {
-      cwd: cwdPhys,
-      prompt: hasPrompt ? prompt : null,
-      timeoutSec: timeout === null ? null : Number(timeout),
-      displayName: null,
-      engine: env.engines?.get("codex")
-    });
-  }
-  return claudeSpawn(args, env);
-}
-async function sendDispatch(args, env) {
-  const parsed = parseSendArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed;
-  const codexByPrefix = isCodexPrefixName(repo);
-  if (codexByPrefix) {
-    const invalidName = codexNameValidationError(repo);
-    if (invalidName !== null) return die5(invalidName);
-  }
-  if (repo !== "" && isCodexTarget(repo)) {
-    if (!hasPrompt) {
-      return die5(
-        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
-      );
-    }
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die5(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
-    }
-    if (paneQuiet) return die5("tm send: --pane-quiet is not supported for codex teammates");
-    return codexSend(repo, prompt, {
-      timeoutSec: timeout === null ? null : Number(timeout),
-      engine: env.engines?.get("codex")
-    });
-  }
-  return claudeSend(args, env);
-}
-async function waitDispatch(args, env) {
-  const parsed = parseWaitArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { repo, timeout, fresh, paneQuiet } = parsed;
-  const codexByPrefix = isCodexPrefixName(repo);
-  if (codexByPrefix) {
-    const invalidName = codexNameValidationError(repo);
-    if (invalidName !== null) return die5(invalidName);
-  }
-  if (repo !== "" && isCodexTarget(repo)) {
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die5(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
-    }
-    if (fresh) return die5("tm wait: --fresh is not supported for codex teammates");
-    if (paneQuiet) return die5("tm wait: --pane-quiet is not supported for codex teammates");
-    return codexWait(repo, {
-      timeoutSec: timeout === null ? null : Number(timeout),
-      engine: env.engines?.get("codex")
-    });
-  }
-  return claudeWait(args, env);
 }
 async function runCli(argv, env, stdin) {
   const [verb, ...rest] = argv;
@@ -8065,7 +8422,7 @@ async function runCli(argv, env, stdin) {
     return removedVerb(REMOVED_VERB_MESSAGES[verb]);
   }
   if (ENGINE_VERBS.has(verb)) {
-    return dispatchEngineVerb(verb, rest, productionVerbContext(env));
+    return dispatchEngineVerb(verb, rest, productionVerbContext(env), env);
   }
   switch (verb) {
     case "archive":
@@ -8073,28 +8430,8 @@ async function runCli(argv, env, stdin) {
         dispatcherDir: env.dispatcherDir,
         projectsDir: env.projectsDir
       });
-    case "last":
-      return lastDispatch(rest);
-    case "ctx":
-      return ctxDispatch(rest, env);
-    case "mem":
-      return memDispatch(rest, env);
-    case "history":
-      return claudeHistory(rest, env);
     case "doctor":
       return doctorDispatch(rest, env);
-    case "reload":
-      return claudeReload(rest, env);
-    case "compact":
-      return claudeCompact(rest, env);
-    case "resume":
-      return claudeResume(rest, env);
-    case "spawn":
-      return spawnDispatch(rest, env);
-    case "send":
-      return sendDispatch(rest, env);
-    case "wait":
-      return waitDispatch(rest, env);
     case "poll":
       return pollVerb(rest, env);
     case "ask":

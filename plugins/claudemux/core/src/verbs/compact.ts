@@ -6,15 +6,20 @@
  * prints the one-line reason at exit 0.
  */
 
-import { formatCompact, teammateNotFound } from './format'
+import { formatCompact } from './format'
 import type { CompactRequest, TeammateName } from '../engines/types'
 import type { TmResult } from '../tm'
 import type { VerbContext } from './context'
+import { resolveTargetEngine } from './resolve'
 
-export async function compactVerb(name: TeammateName, ctx: VerbContext): Promise<TmResult> {
-  const resolved = await ctx.router.resolve(name)
-  if (resolved === null) return teammateNotFound(name)
+export async function compactVerb(
+  name: TeammateName,
+  ctx: VerbContext,
+  opts: { readonly timeoutMs: number | null } = { timeoutMs: null },
+): Promise<TmResult> {
+  const engine = await resolveTargetEngine(name, ctx)
+  if ('code' in engine) return engine
 
-  const req: CompactRequest = { name }
-  return formatCompact(await resolved.engine.compact(req, ctx.engineContext))
+  const req: CompactRequest = { name, timeoutMs: opts.timeoutMs }
+  return formatCompact(await engine.compact(req, ctx.engineContext))
 }

@@ -2,34 +2,34 @@
  * The CLI front end — `tm <verb> [args...]`, as a library.
  *
  * `tm` is invoked once per command and exits; the dispatcher reads its
- * stdout, stderr, and exit code. This module is the per-invocation router:
- * parse the argument vector, route to the right handler — native verb, help
- * print, removed-verb error, or unknown-verb error — and produce a
- * `TmResult`. No state is held between invocations: it lives in tmux, the
- * `/tmp` protocol files, and the Claude Code projects directory.
- *
- * On the `next` line the Bash `bin/tm` is retired, so every routing decision
- * that used to live in `bin/tm`'s `main` lives here — the help pre-scan, the
- * `help <verb>` form, the removed-verb migration messages, and the
- * unknown-verb error. The help text itself lives in [`help.ts`](./help.ts).
+ * stdout, stderr, and exit code. This module is the per-invocation
+ * router: parse the argument vector, route to the right handler, and
+ * produce a `TmResult`. No state is held between invocations: it lives
+ * in tmux, the `/tmp` protocol files, and the Claude Code projects
+ * directory.
  *
  * The process entrypoint that wires `process.argv` / `process.stdin` /
- * `process.exitCode` to `runCli` is [`main.ts`](./main.ts); this module
- * exports `runCli` and `productionEnv` so a test or harness can drive a
- * single invocation in-process with controlled inputs.
+ * `process.exitCode` to `runCli` is [`main.ts`](./main.ts); this
+ * module exports `runCli` and `productionEnv` so a test or harness can
+ * drive a single invocation in-process with controlled inputs.
  */
+
+import { realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { runColumn } from './column'
 import { runGrep } from './grep'
 import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from './help'
-import { NATIVE_VERBS, type NativeEnv } from './native'
-import { type TmResult, type TmRunOptions } from './tm'
+import type { TmResult } from './tm'
 import { runTmux } from './tmux'
 import { productionRegistry } from './engines/production'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import type { NativeEnv } from './env'
 
 import { archiveVerb } from './verbs/archive'
+import { askVerb } from './verbs/ask'
+import { pollVerb } from './verbs/poll'
 import type { EngineContext } from './engines/types'
 import {
   CompositeTeammateRouter,
@@ -43,19 +43,32 @@ import { statesVerb } from './verbs/states'
 import { statusVerb } from './verbs/status'
 import { killVerb } from './verbs/kill'
 
+import {
+  codexSend,
+  codexSpawn,
+  codexWait,
+  isCodexTarget,
+} from './engines/codex/verbs'
+import { isDirectory } from './engines/claude/idle'
+import { isNonNegativeInteger } from './engines/claude/clock'
+import { claudeCompact } from './engines/claude/compact'
+import { claudeCtxLine } from './engines/claude/ctx'
+import { claudeDoctor } from './engines/claude/doctor'
+import { claudeHistory } from './engines/claude/history'
+import { claudeLast } from './engines/claude/last'
+import { claudeMem } from './engines/claude/mem'
+import { claudeReload } from './engines/claude/reload'
+import { claudeResume } from './engines/claude/resume'
+import { claudeSend, parseSendArgs } from './engines/claude/send'
+import { claudeSpawn, parseSpawnArgs } from './engines/claude/spawn'
+import { claudeWait, parseWaitArgs } from './engines/claude/wait'
+import { iterTeammates } from './engines/claude/tmux'
+
 /**
- * The Phase 2a-1 verb-side wiring. Decision 0024 §"Verb is the
- * abstraction" lets the verb layer fan out across engines through this
- * context; `cli.ts` builds one per invocation, hands the fleet-
- * visibility verbs the context, and lets the remaining 13 verbs keep
- * the legacy `NATIVE_VERBS` path until Phase 2a-2 moves their bodies
- * into `engines/claude/`.
- *
- * `ProductionTeammateRouter` reads `/tmp/teammate-<name>.json`; Phase
- * 2a-2 makes that the only path. While `tm spawn` still lives in
- * `native.ts` and does not write that JSON, `LegacyClaudeTmuxRouter`
- * runs a tmux session probe as a fallback so `tm status` / `tm kill`
- * keep finding existing teammates.
+ * The verb-side context the engine-routed verbs (`ls`, `states`,
+ * `status`, `kill`) consume. The router falls back to the Claude tmux
+ * probe so a name registered by a legacy `tm spawn` (no JSON marker)
+ * still resolves to its engine.
  */
 function productionVerbContext(env: NativeEnv): VerbContext {
   const registry = env.engines ?? productionRegistry(env)
@@ -81,16 +94,74 @@ function productionVerbContext(env: NativeEnv): VerbContext {
   }
 }
 
+/** A `tm: <message>` error result, exit 1. */
+function die(message: string): TmResult {
+  return { code: 1, stdout: '', stderr: `tm: ${message}\n` }
+}
+
 /**
- * Verbs that route through the Engine layer in Phase 2a-1.
+ * Whether `tm`'s help pre-scan would intercept these verb arguments.
+ * The scan walks left to right: a `-h`/`--help` triggers help; a
+ * `--prompt` value or the first non-flag positional stops it (help
+ * text must not swallow prompt data that happens to contain `--help`).
  *
- * Phase 2a-1 routed `ls` / `states` / `status` through the Engine layer.
- * Phase 2b registers `CodexEngine`, so `kill` can join the same path and
- * stop relying on the legacy `NATIVE_VERBS.kill` codex fork.
+ * Exported because `main.ts` needs it too: a verb that reads stdin
+ * (only `archive`) must not slurp stdin when the invocation is going
+ * to print help, since the help dispatch never reaches the reader and
+ * a pipe held open by an upstream producer would block the launcher
+ * forever.
  */
+export function triggersHelp(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '-h' || arg === '--help') return true
+    if (arg === '--prompt' || arg.startsWith('--prompt=')) return false
+    if (!arg.startsWith('-')) return false
+  }
+  return false
+}
+
+/** A removed verb's migration message + exit 2. */
+function removedVerb(message: string): TmResult {
+  return { code: 2, stdout: '', stderr: message }
+}
+
+/** The unknown-subcommand error: stderr line + overview on stdout + exit 1. */
+function unknownVerb(verb: string): TmResult {
+  return { code: 1, stdout: OVERVIEW_HELP, stderr: `tm: unknown subcommand: ${verb}\n` }
+}
+
+/**
+ * Route a `tm help <name>` invocation. Known verb (including `help`
+ * itself) prints that verb's detail page; unknown verb prints a
+ * stderr line + the overview + exits 1; no argument prints the
+ * overview + exits 0.
+ *
+ * Every table lookup goes through `Object.hasOwn` — a bare
+ * `HELP_TEXTS[verb]` walks the prototype chain, so a verb named
+ * `toString` / `constructor` / `hasOwnProperty` would yield a function
+ * from `Object.prototype` and crash the writer when the result's
+ * `stdout` is shoved at `process.stdout.write`.
+ */
+function runHelpVerb(rest: readonly string[]): TmResult {
+  const target = rest[0]
+  if (target === undefined) return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  if (target === 'help' || target === '-h' || target === '--help') {
+    return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+  }
+  if (Object.hasOwn(HELP_TEXTS, target)) {
+    return { code: 0, stdout: HELP_TEXTS[target]!, stderr: '' }
+  }
+  return {
+    code: 1,
+    stdout: OVERVIEW_HELP,
+    stderr: `tm: no help for unknown verb: ${target}\n`,
+  }
+}
+
+// ─── Engine-routed verbs (fleet visibility + kill) ────────────────────────
+
 const ENGINE_VERBS: ReadonlySet<string> = new Set(['ls', 'states', 'status', 'kill'])
 
-/** Dispatch one of the fleet-visibility verbs through the verb context. */
 async function dispatchEngineVerb(
   verb: string,
   rest: readonly string[],
@@ -118,79 +189,169 @@ async function dispatchEngineVerb(
   }
 }
 
+// ─── Claude-only verb handlers ────────────────────────────────────────────
+
+function lastDispatch(args: readonly string[]): TmResult {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) return die('usage: tm last <repo>')
+  const result = claudeLast(repo)
+  if (result.kind === 'text') return { code: 0, stdout: result.text, stderr: '' }
+  return die(result.kind === 'failed' ? result.message : `unexpected last result: ${result.kind}`)
+}
+
+type CtxArgs = { repos: string[]; windowOverride: string; all: boolean } | { error: TmResult }
+
+function parseCtxArgs(args: readonly string[]): CtxArgs {
+  const repos: string[] = []
+  let windowOverride = ''
+  let all = false
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--all') {
+      all = true
+    } else if (arg === '--window') {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: '', stderr: '' } }
+      windowOverride = args[i + 1]!
+      i++
+    } else if (arg.startsWith('--window=')) {
+      windowOverride = arg.slice('--window='.length)
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm ctx: unknown flag: ${arg}`) }
+    } else {
+      repos.push(arg)
+    }
+  }
+  if (windowOverride !== '' && windowOverride !== '200k' && windowOverride !== '1m') {
+    return { error: die('tm ctx: --window must be 200k or 1m') }
+  }
+  return { repos, windowOverride, all }
+}
+
+async function ctxDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
+  const parsed = parseCtxArgs(args)
+  if ('error' in parsed) return parsed.error
+  const repos = [...parsed.repos]
+  if (parsed.all) repos.push(...(await iterTeammates(env.runTmux)))
+  if (repos.length === 0) {
+    return die('usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]')
+  }
+  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env))
+  return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
+}
+
+function memDispatch(args: readonly string[], env: NativeEnv): TmResult {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) return die('usage: tm mem <repo>')
+  const result = claudeMem(repo, env)
+  switch (result.kind) {
+    case 'text':
+      return { code: 0, stdout: result.text, stderr: '' }
+    case 'failed':
+      return die(result.message)
+    case 'not-supported':
+      return { code: 0, stdout: '', stderr: `${result.reason}\n` }
+  }
+}
+
 /**
- * Whether `tm`'s help pre-scan would intercept these verb arguments. The
- * scan walks left to right: a `-h`/`--help` triggers help; a `--prompt` value
- * or the first non-flag positional stops it (help text must not swallow
- * prompt data that happens to contain `--help`). Mirrors the bash `main`
- * pre-scan that this layer replaces.
- *
- * Exported because `main.ts` needs it too: a verb that reads stdin (only
- * `archive`) must not slurp stdin when the invocation is going to print
- * help, since the help dispatch never reaches the reader and a pipe held
- * open by an upstream producer would block the launcher forever.
+ * `tm doctor` — compute the plugin-root paths here (this module lives
+ * at `core/src/cli.ts`, which is two directories below the plugin
+ * root, same as the bundled `core/dist/cli.mjs`), then hand off to
+ * `claudeDoctor`.
  */
-export function triggersHelp(args: readonly string[]): boolean {
-  for (const arg of args) {
-    if (arg === '-h' || arg === '--help') return true
-    if (arg === '--prompt' || arg.startsWith('--prompt=')) return false
-    if (!arg.startsWith('-')) return false
-  }
-  return false
+async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const tmWrapper = join(moduleDir, '..', '..', 'bin', 'tm')
+  const pluginJson = join(moduleDir, '..', '..', '.claude-plugin', 'plugin.json')
+  return claudeDoctor(args, env, { tmWrapper, pluginJson })
 }
 
-/** A removed verb's migration message + exit 2 — bash `main`'s `ask)` / `wait-idle)` / `wait-quiet)` arms. */
-function removedVerb(message: string): TmResult {
-  return { code: 2, stdout: '', stderr: message }
+// ─── spawn / send / wait — codex fork at the dispatcher layer ─────────────
+
+async function spawnDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
+  const repo = args[0] ?? ''
+  if (repo.length === 0) {
+    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
+  }
+  const parsed = parseSpawnArgs(args.slice(1))
+  if ('error' in parsed) return parsed.error
+  const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed
+  if (engine === 'codex' || (engine === null && isCodexTarget(repo))) {
+    if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
+    if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
+    if (noWait) return die('tm spawn: --no-wait is not supported for codex teammates')
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
+      return die(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
+    const repoPath = join(env.dispatcherDir, repo)
+    const cwdPhys = isDirectory(repoPath) ? realpathSync(repoPath) : realpathSync(env.dispatcherDir)
+    return codexSpawn(repo, {
+      cwd: cwdPhys,
+      prompt: hasPrompt ? prompt : null,
+      timeoutSec: timeout === null ? null : Number(timeout),
+      displayName: null,
+      engine: env.engines?.get('codex'),
+    })
+  }
+  return claudeSpawn(args, env)
 }
 
-/** The unknown-subcommand error: stderr line + overview on stdout + exit 1. */
-function unknownVerb(verb: string): TmResult {
-  return {
-    code: 1,
-    stdout: OVERVIEW_HELP,
-    stderr: `tm: unknown subcommand: ${verb}\n`,
+async function sendDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
+  const parsed = parseSendArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
+  if (repo !== '' && isCodexTarget(repo)) {
+    if (!hasPrompt) {
+      return die(
+        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+          '[--pane-quiet] [--timeout N]',
+      )
+    }
+    if (!isNonNegativeInteger(timeout)) {
+      return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
+    if (noWait) return die('tm send: --no-wait is not supported for codex teammates')
+    if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
+    return codexSend(repo, prompt, {
+      timeoutSec: Number(timeout),
+      engine: env.engines?.get('codex'),
+    })
   }
+  return claudeSend(args, env)
 }
 
-/**
- * Route a `tm help <name>` invocation. Mirrors bash `main`'s `help|-h|--help`
- * arm: known verb (including `help` itself, since bash's `help_help` calls
- * `cmd_help`) prints that verb's detail page; unknown verb prints a stderr
- * line + the overview + exits 1; no argument prints the overview + exits 0.
- *
- * Every table lookup goes through `Object.hasOwn` — a bare `HELP_TEXTS[verb]`
- * walks the prototype chain, so a verb named `toString` / `constructor` /
- * `hasOwnProperty` would yield a function from `Object.prototype` and crash
- * the writer when the result's `stdout` is shoved at `process.stdout.write`.
- */
-function runHelpVerb(rest: readonly string[]): TmResult {
-  const target = rest[0]
-  if (target === undefined) return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
-  if (target === 'help' || target === '-h' || target === '--help') {
-    return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
+async function waitDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
+  const parsed = parseWaitArgs(args)
+  if ('error' in parsed) return parsed.error
+  const { repo, timeout, fresh, paneQuiet } = parsed
+  if (repo !== '' && isCodexTarget(repo)) {
+    if (!isNonNegativeInteger(timeout)) {
+      return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
+    if (fresh) return die('tm wait: --fresh is not supported for codex teammates')
+    if (paneQuiet) return die('tm wait: --pane-quiet is not supported for codex teammates')
+    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
   }
-  if (Object.hasOwn(HELP_TEXTS, target)) {
-    return { code: 0, stdout: HELP_TEXTS[target]!, stderr: '' }
-  }
-  return {
-    code: 1,
-    stdout: OVERVIEW_HELP,
-    stderr: `tm: no help for unknown verb: ${target}\n`,
-  }
+  return claudeWait(args, env)
 }
+
+// ─── status (legacy compat) — exclusively for non-engine-verb fallback ─────
+// The Claude `tm status` body lives at the engine layer (verbs/status.ts via
+// ClaudeEngine.status). The codex fork is handled in ENGINE_VERBS dispatch
+// through the engine registry. This file does NOT define another status path.
 
 /**
  * Dispatch one CLI invocation. `argv` is the argument vector after the
  * program name (`process.argv.slice(2)`).
  *
- * Routing order — matches bash `main`:
+ * Routing order:
  *   1. Bare `tm`                    → overview, exit 0
  *   2. `tm help [<verb>]`           → per-verb or overview, exit 0/1
  *   3. Help pre-scan on `rest`      → per-verb (if HELP_TEXTS) or overview, exit 0
  *   4. Removed verb                 → migration message, exit 2
- *   5. Native verb                  → dispatch
- *   6. Unknown verb                 → stderr + overview, exit 1
+ *   5. Engine-routed verbs          → router → engine method
+ *   6. Verb-specific dispatch        → claude module / codex fork / dispatcher-only
+ *   7. Unknown verb                  → stderr + overview, exit 1
  */
 export async function runCli(
   argv: readonly string[],
@@ -198,8 +359,8 @@ export async function runCli(
   stdin?: string,
 ): Promise<TmResult> {
   const [verb, ...rest] = argv
-  // 1. Bare `tm` (or `tm ""`, mirroring bash `${1:-help}` which fires on
-  //    both unset and null/empty) — fall through to the overview.
+  // 1. Bare `tm` (or `tm ""`, mirroring bash `${1:-help}` which fires
+  //    on both unset and null/empty) — fall through to the overview.
   if (verb === undefined || verb === '') {
     return { code: 0, stdout: OVERVIEW_HELP, stderr: '' }
   }
@@ -209,15 +370,10 @@ export async function runCli(
     return runHelpVerb(rest)
   }
 
-  // 3. Help pre-scan — `tm <verb> --help` (with any leading flags before the
-  //    `--help`) prints that verb's detail. Unknown verb in this position
-  //    falls through to the overview, matching bash's `declare -F help_<verb>`
-  //    fallback to `cmd_help`.
-  //
-  //    Every dispatch-table lookup below uses `Object.hasOwn` so a verb name
-  //    that collides with an Object.prototype key (`toString`, `constructor`,
-  //    `hasOwnProperty`, `__proto__`) does not walk the prototype chain and
-  //    return a function the writer then crashes on.
+  // 3. Help pre-scan — `tm <verb> --help` prints that verb's detail.
+  //    Every dispatch-table lookup below uses `Object.hasOwn` so a verb
+  //    name that collides with an Object.prototype key does not walk
+  //    the prototype chain.
   if (triggersHelp(rest)) {
     const text = Object.hasOwn(HELP_TEXTS, verb) ? HELP_TEXTS[verb]! : OVERVIEW_HELP
     return { code: 0, stdout: text, stderr: '' }
@@ -228,33 +384,49 @@ export async function runCli(
     return removedVerb(REMOVED_VERB_MESSAGES[verb]!)
   }
 
-  // 5a. Engine-routed verbs — fleet visibility and kill go through
-  //     `verbs/<v>.ts` → `EngineRegistry` → concrete Engine methods.
+  // 5. Engine-routed verbs — fleet visibility and kill go through
+  //    `verbs/<v>.ts` → `EngineRegistry` → concrete Engine methods.
   if (ENGINE_VERBS.has(verb)) {
     return dispatchEngineVerb(verb, rest, productionVerbContext(env))
   }
 
-  // 5b. `archive` — a dispatcher-only verb (no engine). Phase 2a-1 moves
-  //     its body into `verbs/archive.ts`; the legacy `NATIVE_VERBS.archive`
-  //     stays in `native.ts` as a fallback the conformance harness still
-  //     pins until Phase 2a-2.
-  if (verb === 'archive') {
-    return archiveVerb(rest, stdin, {
-      dispatcherDir: env.dispatcherDir,
-      projectsDir: env.projectsDir,
-    })
+  // 6. Per-verb dispatch — claude module / codex fork / dispatcher-only.
+  switch (verb) {
+    case 'archive':
+      return archiveVerb(rest, stdin, {
+        dispatcherDir: env.dispatcherDir,
+        projectsDir: env.projectsDir,
+      })
+    case 'last':
+      return lastDispatch(rest)
+    case 'ctx':
+      return ctxDispatch(rest, env)
+    case 'mem':
+      return memDispatch(rest, env)
+    case 'history':
+      return claudeHistory(rest, env)
+    case 'doctor':
+      return doctorDispatch(rest, env)
+    case 'reload':
+      return claudeReload(rest, env)
+    case 'compact':
+      return claudeCompact(rest, env)
+    case 'resume':
+      return claudeResume(rest, env)
+    case 'spawn':
+      return spawnDispatch(rest, env)
+    case 'send':
+      return sendDispatch(rest, env)
+    case 'wait':
+      return waitDispatch(rest, env)
+    case 'poll':
+      return pollVerb(rest, env)
+    case 'ask':
+      return askVerb(rest)
+    default:
+      // 7. Unknown verb.
+      return unknownVerb(verb)
   }
-
-  // 5b. Native dispatch — the remaining 13 verbs still live in `native.ts`.
-  //     Phase 2a-2 follow-up PR moves them into `engines/claude/`.
-  if (Object.hasOwn(NATIVE_VERBS, verb)) {
-    const handler = NATIVE_VERBS[verb]!
-    const options: TmRunOptions | undefined = stdin != null ? { stdin } : undefined
-    return handler(rest, options, env)
-  }
-
-  // 6. Unknown verb.
-  return unknownVerb(verb)
 }
 
 /** The production `NativeEnv` — the real backends, resolved once per invocation. */
@@ -263,19 +435,18 @@ export function productionEnv(): NativeEnv {
     runTmux,
     runColumn,
     runGrep,
-    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or `$PWD`
-    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter here:
+    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or
+    // `$PWD` (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter:
     //   - `$PWD` is the *logical* cwd, preserving the symlink the user
     //     `cd`'d through; Node's `process.cwd()` would return the
-    //     symlink-resolved physical path, and `~/.claude/projects` lookups
-    //     would diverge between bash and native on a symlinked dispatcher
-    //     tree.
-    //   - bash `${VAR:-default}` triggers the default on *unset* OR *empty*,
-    //     so `||` (which treats empty strings as falsy) is the right
-    //     operator — `??` would let an accidentally-empty
+    //     symlink-resolved physical path, and `~/.claude/projects`
+    //     lookups would diverge between bash and native on a symlinked
+    //     dispatcher tree.
+    //   - bash `${VAR:-default}` triggers the default on *unset* OR
+    //     *empty*, so `||` (which treats empty strings as falsy) is the
+    //     right operator — `??` would let an accidentally-empty
     //     `TM_DISPATCHER_DIR` through and resolve `<repo>` paths against
-    //     `""`, while `tm doctor`'s own check treats empty as unset and
-    //     reports the opposite of what the verbs saw.
+    //     `""`.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
   }

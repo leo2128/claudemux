@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { ClaudeEngine } from '../../src/engines/claude/claude-engine'
-import type { NativeEnv } from '../../src/native'
+import type { NativeEnv } from '../../src/env'
 import type { TmuxRunner, TmuxResult } from '../../src/tmux'
 
 const noopColumn = async () => ({ code: 0, stdout: '', stderr: '' })

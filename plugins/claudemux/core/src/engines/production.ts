@@ -6,7 +6,7 @@
  * verb defaults see the full fleet.
  */
 
-import type { NativeEnv } from '../native'
+import type { NativeEnv } from '../env'
 import { ClaudeEngine } from './claude/claude-engine'
 import { CodexEngine } from './codex/engine'
 import { EngineRegistry } from './registry'

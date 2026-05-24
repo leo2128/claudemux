@@ -57,7 +57,7 @@ import type {
   WaitRequest,
 } from '../types'
 import type { Engine } from '../engine'
-import type { NativeEnv } from '../../native'
+import type { NativeEnv } from '../../env'
 import { claudeCompact } from './compact'
 import { claudeCtxUsage } from './ctx'
 import { claudeDoctor } from './doctor'

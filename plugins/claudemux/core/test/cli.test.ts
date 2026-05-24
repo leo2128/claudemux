@@ -17,7 +17,7 @@ import { runCli } from '../src/cli'
 import type { ColumnRunner } from '../src/column'
 import type { GrepRunner } from '../src/grep'
 import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from '../src/help'
-import type { NativeEnv } from '../src/native'
+import type { NativeEnv } from '../src/env'
 import {
   codexPidFile,
   codexStartedAtFile,

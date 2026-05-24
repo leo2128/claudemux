@@ -310,7 +310,6 @@ function codexLastTextCells(
 }
 
 function codexListExtras(
-  name: string,
   nowSec: number,
   state: ReturnType<typeof readDaemonState>,
   daemonState: 'idle' | 'busy' | 'unknown',
@@ -625,7 +624,7 @@ export class CodexEngine implements Engine {
         state: daemonState,
         cwd: base?.cwd ?? meta?.cwd ?? '',
         displayName: base?.displayName ?? meta?.displayName ?? null,
-        extras: codexListExtras(name, nowSec, state, daemonState, rollout, runtime),
+        extras: codexListExtras(nowSec, state, daemonState, rollout, runtime),
       }
     }))
   }

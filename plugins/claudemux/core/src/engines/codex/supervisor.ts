@@ -350,7 +350,7 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
     removeSelfRegistry(name)
     mkdirSync(dir, { recursive: true })
 
-    const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs)
+    const state = await spawnDaemonUnlocked(opts, socketPath, readyTimeoutMs)
     return state
   } finally {
     if (lockFd !== null) closeSync(lockFd)
@@ -360,7 +360,6 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
 
 async function spawnDaemonUnlocked(
   opts: SpawnDaemonOptions,
-  dir: string,
   socketPath: string,
   readyTimeoutMs: number,
 ): Promise<DaemonState> {

@@ -167,6 +167,9 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      - name: Dead-code lint
+        run: npm run lint:dead-code
+
       # The codex app-server protocol bindings under `src/codex-protocol/`
       # are emitted by `codex app-server generate-ts --experimental`. They
       # are vendored as ground truth: a codex upgrade that changes the

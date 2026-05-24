@@ -49,21 +49,11 @@ interface ErrResponseEnvelope {
 
 type ResponseEnvelope = OkResponseEnvelope | ErrResponseEnvelope
 
-interface NotificationEnvelope {
-  method: string
-  params: unknown
-}
-
 interface ServerRequestEnvelope {
   method: string
   id: number
   params: unknown
 }
-
-type IncomingEnvelope =
-  | ResponseEnvelope
-  | NotificationEnvelope
-  | ServerRequestEnvelope
 
 /** Extract the `params` shape of a vendored client request by its method. */
 type ParamsFor<M extends ClientRequest['method']> = Extract<

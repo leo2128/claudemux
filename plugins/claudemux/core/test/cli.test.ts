@@ -117,7 +117,7 @@ describe('tm <verb> --help pre-scan', () => {
   })
 
   test('flags before --help do not stop the pre-scan', async () => {
-    const result = await runCli(['send', '--no-wait', '--help'], fakeEnv())
+    const result = await runCli(['send', '--pane-quiet', '--help'], fakeEnv())
     expect(result).toEqual({ code: 0, stdout: HELP_TEXTS.send, stderr: '' })
   })
 

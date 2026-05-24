@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: tm send: missing <repo>. Usage: tm send <repo> --prompt \"...\" [--no-wait] [--pane-quiet] [--timeout N]\n"
+  "stderr": "tm: tm send: missing <repo>. Usage: tm send <repo> --prompt \"...\" [--pane-quiet] [--timeout N]\n"
 }

@@ -42,7 +42,6 @@ export interface SpawnArgs {
   task: string
   prompt: string
   hasPrompt: boolean
-  noWait: boolean
   timeout: string | null
 }
 
@@ -59,7 +58,6 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
   let task = ''
   let prompt = ''
   let hasPrompt = false
-  let noWait = false
   let timeout: string | null = null
   let engine: 'claude' | 'codex' | null = null
   for (let i = 0; i < rest.length; i++) {
@@ -102,13 +100,11 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
     } else if (arg.startsWith('--prompt=')) {
       prompt = arg.slice('--prompt='.length)
       hasPrompt = true
-    } else if (arg === '--no-wait') {
-      noWait = true
     } else {
       return { error: die(`unknown flag: ${arg}`) }
     }
   }
-  return { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout }
+  return { engine, resumeSid, task, prompt, hasPrompt, timeout }
 }
 
 /**
@@ -158,18 +154,11 @@ export async function claudeSpawn(
 ): Promise<TmResult> {
   const repo = args[0] ?? ''
   if (repo.length === 0) {
-    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
+    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]')
   }
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
-  const { resumeSid, task, prompt, hasPrompt, noWait } = parsed
-
-  if (noWait && !hasPrompt) {
-    return die(
-      'tm spawn: --no-wait is only valid with --prompt (a fresh spawn without ' +
-        'a prompt already returns as soon as the REPL is ready)',
-    )
-  }
+  const { resumeSid, task, prompt, hasPrompt } = parsed
 
   const path = join(env.dispatcherDir, repo)
   if (!isDirectory(path)) return dieRepoNotFound('spawn', repo, path, env.dispatcherDir)
@@ -315,9 +304,7 @@ export async function claudeSpawn(
   // stdout/stderr so the dispatcher sees one round-trip's worth of
   // output for the whole sequence.
   await sleepMs(3000)
-  const sendArgs: string[] = []
-  if (noWait) sendArgs.push('--no-wait')
-  sendArgs.push(repo, '--prompt', prompt)
+  const sendArgs: string[] = [repo, '--prompt', prompt]
   const sendResult = await claudeSend(sendArgs, env)
   return {
     code: sendResult.code,

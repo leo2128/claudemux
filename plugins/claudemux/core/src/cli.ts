@@ -271,15 +271,14 @@ async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<
 async function spawnDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
   const repo = args[0] ?? ''
   if (repo.length === 0) {
-    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]')
+    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]')
   }
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
-  const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed
+  const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed
   if (engine === 'codex' || (engine === null && isCodexTarget(repo))) {
     if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
     if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
-    if (noWait) return die('tm spawn: --no-wait is not supported for codex teammates')
     if (timeout !== null && !isNonNegativeInteger(timeout)) {
       return die(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`)
     }
@@ -299,18 +298,17 @@ async function spawnDispatch(args: readonly string[], env: NativeEnv): Promise<T
 async function sendDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
-  const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
+  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed
   if (repo !== '' && isCodexTarget(repo)) {
     if (!hasPrompt) {
       return die(
-        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." ' +
           '[--pane-quiet] [--timeout N]',
       )
     }
     if (!isNonNegativeInteger(timeout)) {
       return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
     }
-    if (noWait) return die('tm send: --no-wait is not supported for codex teammates')
     if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
     return codexSend(repo, prompt, {
       timeoutSec: Number(timeout),

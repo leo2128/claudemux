@@ -20,7 +20,7 @@ Run `tm spawn --help` / `tm send --help` for the full flag/output contract. The 
 
 `tm spawn --prompt` and `tm send` (default mode) both block until the teammate's next Stop hook fires (`--timeout 600` cap). That is potentially minutes. **Every such call MUST run with `run_in_background: true` on the Bash tool** so the dispatcher stays free to handle other work; the harness fires a task-notification when the verb returns, with the reply text already in stdout. Foreground waits block the dispatcher end-to-end for nothing — there is no upside.
 
-Fire-and-forget: `--no-wait` on either verb returns as soon as the keys are sent. Use for `/clear` before a `tm kill`, or anywhere the reply doesn't matter.
+Fire-and-forget is no longer a CLI option — every `tm send` and every `tm spawn --prompt` is an atomic round-trip. Operations that used to need `/clear` before `tm kill` can call `tm kill` directly; the kill clears the on-disk markers and tears down the tmux session in one step.
 
 ## What `tm spawn` sets up under the hood
 

@@ -26,7 +26,6 @@ export interface SendArgs {
   repo: string
   prompt: string
   hasPrompt: boolean
-  noWait: boolean
   paneQuiet: boolean
   timeout: string
 }
@@ -46,7 +45,6 @@ function shellSingleQuote(value: string): string {
  * swallowing the trailing positionals as a confusing "unknown arg".
  */
 export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } {
-  let noWait = false
   let paneQuiet = false
   let timeout = '1800'
   let repo = ''
@@ -55,10 +53,7 @@ export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmRe
   let i = 0
   while (i < args.length) {
     const arg = args[i]!
-    if (arg === '--no-wait') {
-      noWait = true
-      i++
-    } else if (arg === '--pane-quiet') {
+    if (arg === '--pane-quiet') {
       paneQuiet = true
       i++
     } else if (arg === '--timeout') {
@@ -100,7 +95,7 @@ export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmRe
       }
     }
   }
-  return { repo, prompt, hasPrompt, noWait, paneQuiet, timeout }
+  return { repo, prompt, hasPrompt, paneQuiet, timeout }
 }
 
 /**
@@ -110,16 +105,16 @@ export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmRe
 export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): Promise<TmResult> {
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
-  const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
+  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed
   if (repo === '') {
     return die(
-      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." ' +
         '[--pane-quiet] [--timeout N]',
     )
   }
   if (!hasPrompt) {
     return die(
-      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." ' +
         '[--pane-quiet] [--timeout N]',
     )
   }
@@ -129,8 +124,6 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
 
   const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env)
   if (sentResult.code !== 0) return sentResult
-
-  if (noWait) return sentResult
 
   const timeoutSec = Number(timeout)
   const verdict = paneQuiet

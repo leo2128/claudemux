@@ -94,9 +94,9 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 |---|---|
 | `tm ls` | 列出在跑的 teammate session。 |
 | `tm states` | 一行一个的整体快照:repo、sid、忙不忙、上次回复多大多久前、首 50 字。 |
-| `tm spawn <repo> [--task <slug>] [--prompt "…"] [--no-wait]` | 起 teammate。带 `--prompt` 即原子 bootstrap:spawn + send + 等 Stop + 把首轮回话打到 stdout。`--task <slug>` 给会话起个可读名字(`<repo>-<slug>`;ASCII 字母数字 + 中文汉字都可以);不传就是 `<repo>-<rand4>`。`--no-wait` 配 `--prompt` 做 fire-and-forget。 |
-| `tm resume <repo> [<sid>] [--task <slug>] [--prompt "…"] [--no-wait]` | 恢复旧会话。优先从台账拿 `sid`;不传则按 mtime 选最新 jsonl。`--prompt` 在 3s settle 后派 prompt(行为同 `spawn --prompt`)。 |
-| `tm send <repo> --prompt "…" [--no-wait] [--pane-quiet] [--timeout N]` | **默认就是原子 round-trip**:发 prompt + 等 Stop + 把回话打到 stdout。Stop-hook 路径还把当前 ctx 顺手打到 stderr(`ctx: N tokens · …`),消灭 send 完再单独 `tm ctx` 的高频模式;`--pane-quiet` / `--no-wait` 不打。`--prompt` 和 `tm spawn --prompt` / `tm resume --prompt` 一套写法(三动词一个 API);flag / `<repo>` 顺序自由。`--no-wait` 老 fire-and-forget。`--pane-quiet` 给 TUI-only(`/help` / `/effort` / 权限弹窗)兜底,这些路径不触发 hook。 |
+| `tm spawn <repo> [--task <slug>] [--prompt "…"]` | 起 teammate。带 `--prompt` 即原子 bootstrap:spawn + send + 等 Stop + 把首轮回话打到 stdout。`--task <slug>` 给会话起个可读名字(`<repo>-<slug>`;ASCII 字母数字 + 中文汉字都可以);不传就是 `<repo>-<rand4>`。 |
+| `tm resume <repo> [<sid>] [--task <slug>] [--prompt "…"]` | 恢复旧会话。优先从台账拿 `sid`;不传则按 mtime 选最新 jsonl。`--prompt` 在 3s settle 后派 prompt(行为同 `spawn --prompt`)。 |
+| `tm send <repo> --prompt "…" [--pane-quiet] [--timeout N]` | **原子 round-trip**:发 prompt + 等 Stop + 把回话打到 stdout。Stop-hook 路径还把当前 ctx 顺手打到 stderr(`ctx: N tokens · …`),消灭 send 完再单独 `tm ctx` 的高频模式;`--pane-quiet` 不打。`--prompt` 和 `tm spawn --prompt` / `tm resume --prompt` 一套写法(三动词一个 API);flag / `<repo>` 顺序自由。`--pane-quiet` 给 TUI-only(`/help` / `/effort` / 权限弹窗)兜底,这些路径不触发 hook。 |
 | `tm wait <repo> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | 阻塞到 teammate 下一次 Stop,打回话到 stdout(ctx 走 stderr,行为同 `tm send`)。外部驱动(Remote Control / 移动端 / cron)推动的 turn 用这个收。`--fresh` 等下一次 Stop 而不是被已有 marker 立即满足(`--pane-quiet` 模式下 `--fresh` 不生效)。`--timeout N` 等价位置参数 `[timeout]`。 |
 | `tm compact <repo> [timeout=600] [--timeout N]` | 发 `/compact` + 等 PostCompact;成功 stdout 一行 `compacted`。不读 ctx(单独跑 `tm ctx`,或者下次 `tm send` 顺手就有)。对 Claude Code 的 "Not enough messages to compact" 错误路径(不触发任何 hook)主动扫 pane,命中立即 exit 1 而不是死等到 timeout。默认 600s 是因为大上下文(~300k+)实测要 3-4 分钟。 |
 | `tm last <repo>` | 打印 teammate 上一轮回复的完整正文。fresh spawn 之后还没派活时,die 报 "no reply yet"。 |

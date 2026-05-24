@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt \"...\"] [--no-wait]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation; --no-wait only with --prompt)\n"
+  "stderr": "tm: usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt \"...\"]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation)\n"
 }

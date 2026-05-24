@@ -26,7 +26,6 @@ export interface ResumeArgs {
   task: string
   prompt: string
   hasPrompt: boolean
-  noWait: boolean
 }
 
 /**
@@ -41,7 +40,6 @@ export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: 
   let task = ''
   let prompt = ''
   let hasPrompt = false
-  let noWait = false
   let i = 0
   while (i < args.length) {
     const arg = args[i]!
@@ -60,9 +58,6 @@ export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: 
       i += 2
     } else if (arg.startsWith('--task=')) {
       task = arg.slice('--task='.length)
-      i++
-    } else if (arg === '--no-wait') {
-      noWait = true
       i++
     } else if (arg === '--') {
       i++
@@ -84,23 +79,20 @@ export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: 
       }
     }
   }
-  return { repo, sid, task, prompt, hasPrompt, noWait }
+  return { repo, sid, task, prompt, hasPrompt }
 }
 
 export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv): Promise<TmResult> {
   const parsed = parseResumeArgs(args)
   if ('error' in parsed) return parsed.error
   let { sid } = parsed
-  const { repo, task, prompt, hasPrompt, noWait } = parsed
+  const { repo, task, prompt, hasPrompt } = parsed
   if (repo === '') {
     return die(
-      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]  ' +
-        '(sid from ledger preferred; auto-pick on omit; --task relabels the resumed ' +
-        'conversation; --no-wait only with --prompt)',
+      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]  ' +
+        '(sid from ledger preferred; auto-pick on omit; --task relabels the ' +
+        'resumed conversation)',
     )
-  }
-  if (noWait && !hasPrompt) {
-    return die('tm resume: --no-wait is only valid with --prompt')
   }
 
   const path = join(env.dispatcherDir, repo)
@@ -169,7 +161,6 @@ export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv):
     spawnArgs.push('--task', task)
   }
   if (hasPrompt) {
-    if (noWait) spawnArgs.push('--no-wait')
     spawnArgs.push('--prompt', prompt)
   }
   const result = await claudeSpawn(spawnArgs, env)

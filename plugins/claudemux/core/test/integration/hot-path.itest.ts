@@ -109,21 +109,13 @@ describe.skipIf(!probe.ok)('hot-path verbs drive a live Claude teammate', () => 
     expect(repliedOrSentinel(sent.stdout, 'ROGER'), tmDetail('tm send', sent)).toBe(true)
   })
 
-  test('wait — collects a turn driven without a waiting send', async () => {
-    // Drive a turn fire-and-forget, then collect it with a bare `tm wait` —
-    // the path an external actor (web UI, cron) + the dispatcher take.
-    const fired = await dispatcher.tm([
-      'send',
-      repo,
-      '--no-wait',
-      '--prompt',
-      'Reply with the word ECHO.',
-    ])
-    expect(fired.code, tmDetail('tm send --no-wait', fired)).toBe(0)
-
-    const waited = await dispatcher.tm(['wait', repo, '--timeout', '120'])
-    expect(waited.code, tmDetail('tm wait', waited)).toBe(0)
-    expect(repliedOrSentinel(waited.stdout, 'ECHO'), tmDetail('tm wait', waited)).toBe(true)
+  test.skip('wait — collects a turn driven by an external actor (post --no-wait removal)', async () => {
+    // The pre-removal version drove a fire-and-forget turn via
+    // `tm send --no-wait` and collected it with a bare `tm wait`. With
+    // `--no-wait` gone, the CLI has no first-class fire-and-forget
+    // primitive — the test needs a redesign (detached subprocess, or a
+    // helper that pushes keys directly through tmux). Skip until that
+    // ships.
   })
 
   test('compact — runs /compact and verifies it completed', async () => {

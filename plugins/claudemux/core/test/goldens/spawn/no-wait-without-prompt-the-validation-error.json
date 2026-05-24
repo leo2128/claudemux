@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm spawn: --no-wait is only valid with --prompt (a fresh spawn without a prompt already returns as soon as the REPL is ready)\n"
-}

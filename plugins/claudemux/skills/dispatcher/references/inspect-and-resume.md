@@ -42,7 +42,7 @@ Two ways to call it:
 
 Either way fails if a teammate session for `<repo>` already exists (would conflict with the live tmux session). `tm kill <repo>` first if you really want to start over.
 
-`--prompt "..."` sends a follow-up after a 3 s settle (atomic, same shape as `tm spawn --prompt`). `--task <slug>` relabels the resumed conversation. `--no-wait` (only with `--prompt`) fires without waiting.
+`--prompt "..."` sends a follow-up after a 3 s settle (atomic, same shape as `tm spawn --prompt`). `--task <slug>` relabels the resumed conversation.
 
 ## Picking up "that thing from yesterday"
 

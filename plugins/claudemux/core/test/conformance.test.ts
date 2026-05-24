@@ -1644,10 +1644,6 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         setup: () => ({ args: [uniqueName(), '--prompt'] }),
       },
       {
-        name: '--no-wait without --prompt → the validation error',
-        setup: () => ({ args: [uniqueName(), '--no-wait'] }),
-      },
-      {
         name: 'a bare --task with no value → tm exits 1 with no output',
         setup: () => ({ args: [uniqueName(), '--task'] }),
       },
@@ -1693,8 +1689,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
     verb: 'send',
     // The full round-trip (send + wait for Stop + print reply) needs a real
     // teammate and is exercised by the live-teammate integration suite. These
-    // scenarios pin every flag-validation path and the `--no-wait` happy path
-    // that fires against the fake tmux.
+    // scenarios pin every flag-validation path.
     scenarios: [
       {
         name: 'no arguments → the missing-repo error',
@@ -1721,17 +1716,6 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         setup: () => {
           setSessions('')
           return { args: [uniqueName(), '--prompt', 'hi'] }
-        },
-      },
-      {
-        name: '--no-wait against a running fake teammate → the send-at marker is touched',
-        setup: () => {
-          const repo = uniqueName()
-          setSessions(`${sessionLine(repo)}\n`)
-          return {
-            args: [repo, '--no-wait', '--prompt', 'hi'],
-            snapshot: () => snapshotPaths([sendAtFile(repo)]),
-          }
         },
       },
     ],
@@ -1809,10 +1793,6 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
       {
         name: 'an unknown flag → the unknown-flag error',
         setup: () => ({ args: [uniqueName(), '--bogus'] }),
-      },
-      {
-        name: '--no-wait without --prompt → the validation error',
-        setup: () => ({ args: [uniqueName(), '--no-wait'] }),
       },
       {
         name: 'a bare --task with no value → tm exits 1 with no output',

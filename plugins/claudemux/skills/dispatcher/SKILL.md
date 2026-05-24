@@ -65,7 +65,7 @@ For any verb's flag/output contract: `tm <verb> --help`. Don't reason about `tm`
 
 A foreground wait blocks the dispatcher end-to-end: it cannot receive or dispatch any other task while it sits there. There is no upside.
 
-The only `tm` calls safe to run foreground (sub-second): `tm ls`, `tm states`, `tm status`, `tm last`, `tm ctx`, `tm history`, `tm archive`, `tm reload`, `tm kill`, `tm doctor`, `tm send --no-wait`, `tm resume` without `--prompt`, fresh `tm spawn` without `--prompt`. Anything with an implicit or explicit wait phase goes background.
+The only `tm` calls safe to run foreground (sub-second): `tm ls`, `tm states`, `tm status`, `tm last`, `tm ctx`, `tm history`, `tm archive`, `tm reload`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, fresh `tm spawn` without `--prompt`. Anything with an implicit or explicit wait phase goes background.
 
 Long `sleep` chains are blocked by the harness sandbox. For "wait until X", use `until <check>; do sleep 4; done` with a time-bounded outer loop — and that loop, like every wait, MUST run with `run_in_background: true`.
 

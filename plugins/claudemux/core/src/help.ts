@@ -69,7 +69,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       (size + age of <sid>.last), PREVIEW (first 50 chars of last
       reply). Use to see what every teammate is doing at a glance.
 `,
-  spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]
+  spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."]
 
       Launch a claude teammate in <dispatcher-dir>/<repo>, where the
       dispatcher dir comes from TM_DISPATCHER_DIR (or $PWD fallback);
@@ -79,7 +79,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       (typically 2-4s on a warm Mac). With --prompt "...", sleeps 3s
       after ready, sends the prompt, waits for Stop, and prints the
       teammate's first-turn reply on stdout — atomic bootstrap, one
-      call. --no-wait combined with --prompt sends without waiting.
+      call.
       --task <slug> names the conversation <repo>-<slug>. Allowlist:
       ASCII letters/digits + CJK Unified Ideographs (中日韩汉字).
       Without --task a fresh spawn auto-names <repo>-<rand4>.
@@ -90,8 +90,8 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       after the first-turn Stop.
       Codex teammates can be spawned with the legacy codex-<n> /
       codex/<name> target shape or by passing --engine codex. Their
-      daemon is not a tmux session; --task, --resume, and --no-wait
-      are rejected on that path.
+      daemon is not a tmux session; --task and --resume are rejected
+      on that path.
       Every teammate launches with the AskUserQuestion tool disabled
       (this applies to 'tm resume' too). A teammate runs with no
       human at its terminal, and that tool's modal holds the turn
@@ -100,7 +100,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       questions by ending its turn with text, which 'tm send' /
       'tm spawn --prompt' relays straight back to the dispatcher.
 `,
-  send: `tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]
+  send: `tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]
 
       Atomic round-trip by default: send prompt + wait for the Stop
       hook + print the teammate's reply text on stdout. The
@@ -111,10 +111,6 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
         as 'tm spawn --prompt' / 'tm resume --prompt'. Flag order is
         free: 'tm send <repo> --prompt "..."' and 'tm send --prompt
         "..." <repo>' both work.
-      --no-wait fire-and-forget; return as soon as the keys are
-        sent. Use for /clear before kill, or any case where the
-        reply doesn't matter. (--pane-quiet has no effect with
-        --no-wait, since nothing waits.)
       --pane-quiet falls back to pane-quiet detection. Use for
         TUI-only commands that fire no hook: /help, /effort,
         /agents, permission prompts. /compact and /clear do NOT
@@ -128,16 +124,15 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       On the default (Stop-hook) path, also echoes the teammate's
       post-turn ctx to stderr as "ctx: N tokens · ~M next turn · X%
       of W (note)" — same data as 'tm ctx <repo>' inline with the
-      reply. Skipped on --pane-quiet (no fresh usage block in jsonl)
-      and --no-wait (nothing waited).
+      reply. Skipped on --pane-quiet (no fresh usage block in jsonl).
       On timeout: stderr warning, partial .last to stdout if any,
       exit 1.
 
       When <repo> is a codex teammate (name starts with 'codex-'),
       this verb routes into the codex driver instead: --prompt is
       required, --timeout is accepted, the reply on stdout is the raw
-      Turn JSON, and --no-wait / --pane-quiet are rejected explicitly
-      rather than silently ignored.
+      Turn JSON, and --pane-quiet is rejected explicitly rather than
+      silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
@@ -178,7 +173,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
         - PostCompact never fires within timeout. Compaction is
           hung or the Stop hook is misconfigured.
 `,
-  resume: `tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]
+  resume: `tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]
 
       Resume a prior conversation. PREFER passing <sid> from the
       dispatcher's task ledger (active-dispatcher-tasks.md records
@@ -189,8 +184,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       already exists.
       --prompt sends a follow-up after a 3s settle, atomic like
       'tm spawn --prompt' (inherits 'tm send''s stderr ctx echo on
-      the sync path). --no-wait (with --prompt) fires without
-      waiting. --task relabels the resumed conversation.
+      the sync path). --task relabels the resumed conversation.
       Like every teammate launch, the resumed REPL starts with the
       AskUserQuestion tool disabled (see 'tm help spawn' for why): a
       resumed teammate raises questions by ending its turn with

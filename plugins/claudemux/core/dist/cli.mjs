@@ -2280,7 +2280,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes2, createHash } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2818,7 +2818,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes2(16).toString("base64");
+      const key = randomBytes3(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -3068,7 +3068,7 @@ var require_websocket = __commonJS({
       websocket._closeCode = code;
       if (websocket._socket[kWebSocket] === void 0) return;
       websocket._socket.removeListener("data", socketOnData);
-      process.nextTick(resume2, websocket._socket);
+      process.nextTick(resume, websocket._socket);
       if (code === 1005) websocket.close();
       else websocket.close(code, reason);
     }
@@ -3080,7 +3080,7 @@ var require_websocket = __commonJS({
       const websocket = this[kWebSocket];
       if (websocket._socket[kWebSocket] !== void 0) {
         websocket._socket.removeListener("data", socketOnData);
-        process.nextTick(resume2, websocket._socket);
+        process.nextTick(resume, websocket._socket);
         websocket.close(err[kStatusCode]);
       }
       if (!websocket._errorEmitted) {
@@ -3102,7 +3102,7 @@ var require_websocket = __commonJS({
     function receiverOnPong(data) {
       this[kWebSocket].emit("pong", data);
     }
-    function resume2(stream) {
+    function resume(stream) {
       stream.resume();
     }
     function senderOnError(err) {
@@ -3711,6 +3711,12 @@ var require_websocket_server = __commonJS({
   }
 });
 
+// src/cli.ts
+import { realpathSync as realpathSync4 } from "node:fs";
+import { homedir } from "node:os";
+import { dirname as dirname8, join as join12 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
 // src/proc.ts
 import { spawn } from "node:child_process";
 function spawnCapture(argv, options) {
@@ -3810,7 +3816,7 @@ var HELP_TEXTS = {
       (size + age of <sid>.last), PREVIEW (first 50 chars of last
       reply). Use to see what every teammate is doing at a glance.
 `,
-  spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]
+  spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."]
 
       Launch a claude teammate in <dispatcher-dir>/<repo>, where the
       dispatcher dir comes from TM_DISPATCHER_DIR (or $PWD fallback);
@@ -3820,7 +3826,7 @@ var HELP_TEXTS = {
       (typically 2-4s on a warm Mac). With --prompt "...", sleeps 3s
       after ready, sends the prompt, waits for Stop, and prints the
       teammate's first-turn reply on stdout \u2014 atomic bootstrap, one
-      call. --no-wait combined with --prompt sends without waiting.
+      call.
       --task <slug> names the conversation <repo>-<slug>. Allowlist:
       ASCII letters/digits + CJK Unified Ideographs (\u4E2D\u65E5\u97E9\u6C49\u5B57).
       Without --task a fresh spawn auto-names <repo>-<rand4>.
@@ -3831,8 +3837,8 @@ var HELP_TEXTS = {
       after the first-turn Stop.
       Codex teammates can be spawned with the legacy codex-<n> /
       codex/<name> target shape or by passing --engine codex. Their
-      daemon is not a tmux session; --task, --resume, and --no-wait
-      are rejected on that path.
+      daemon is not a tmux session; --task and --resume are rejected
+      on that path.
       Every teammate launches with the AskUserQuestion tool disabled
       (this applies to 'tm resume' too). A teammate runs with no
       human at its terminal, and that tool's modal holds the turn
@@ -3841,7 +3847,7 @@ var HELP_TEXTS = {
       questions by ending its turn with text, which 'tm send' /
       'tm spawn --prompt' relays straight back to the dispatcher.
 `,
-  send: `tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]
+  send: `tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]
 
       Atomic round-trip by default: send prompt + wait for the Stop
       hook + print the teammate's reply text on stdout. The
@@ -3852,10 +3858,6 @@ var HELP_TEXTS = {
         as 'tm spawn --prompt' / 'tm resume --prompt'. Flag order is
         free: 'tm send <repo> --prompt "..."' and 'tm send --prompt
         "..." <repo>' both work.
-      --no-wait fire-and-forget; return as soon as the keys are
-        sent. Use for /clear before kill, or any case where the
-        reply doesn't matter. (--pane-quiet has no effect with
-        --no-wait, since nothing waits.)
       --pane-quiet falls back to pane-quiet detection. Use for
         TUI-only commands that fire no hook: /help, /effort,
         /agents, permission prompts. /compact and /clear do NOT
@@ -3869,16 +3871,15 @@ var HELP_TEXTS = {
       On the default (Stop-hook) path, also echoes the teammate's
       post-turn ctx to stderr as "ctx: N tokens \xB7 ~M next turn \xB7 X%
       of W (note)" \u2014 same data as 'tm ctx <repo>' inline with the
-      reply. Skipped on --pane-quiet (no fresh usage block in jsonl)
-      and --no-wait (nothing waited).
+      reply. Skipped on --pane-quiet (no fresh usage block in jsonl).
       On timeout: stderr warning, partial .last to stdout if any,
       exit 1.
 
       When <repo> is a codex teammate (name starts with 'codex-'),
       this verb routes into the codex driver instead: --prompt is
       required, --timeout is accepted, the reply on stdout is the raw
-      Turn JSON, and --no-wait / --pane-quiet are rejected explicitly
-      rather than silently ignored.
+      Turn JSON, and --pane-quiet is rejected explicitly rather than
+      silently ignored.
 `,
   wait: `tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
@@ -3919,7 +3920,7 @@ var HELP_TEXTS = {
         - PostCompact never fires within timeout. Compaction is
           hung or the Stop hook is misconfigured.
 `,
-  resume: `tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]
+  resume: `tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]
 
       Resume a prior conversation. PREFER passing <sid> from the
       dispatcher's task ledger (active-dispatcher-tasks.md records
@@ -3930,8 +3931,7 @@ var HELP_TEXTS = {
       already exists.
       --prompt sends a follow-up after a 3s settle, atomic like
       'tm spawn --prompt' (inherits 'tm send''s stderr ctx echo on
-      the sync path). --no-wait (with --prompt) fires without
-      waiting. --task relabels the resumed conversation.
+      the sync path). --task relabels the resumed conversation.
       Like every teammate launch, the resumed REPL starts with the
       AskUserQuestion tool disabled (see 'tm help spawn' for why): a
       resumed teammate raises questions by ending its turn with
@@ -4070,23 +4070,79 @@ var REMOVED_VERB_MESSAGES = {
 `
 };
 
-// src/native.ts
-import {
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync3,
-  readdirSync as readdirSync2,
-  readFileSync as readFileSync7,
-  realpathSync as realpathSync2,
-  rmSync as rmSync4,
-  statSync as statSync6,
-  writeFileSync as writeFileSync3
-} from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { dirname as dirname4, join as join7 } from "node:path";
+// src/tmux.ts
+function resolveTmuxBinary() {
+  const override = process.env.CLAUDEMUX_TMUX;
+  if (override && override.length > 0) return override;
+  return "tmux";
+}
+var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], options);
 
-// src/paths.ts
+// src/engines/claude/claude-engine.ts
+import { existsSync as existsSync5, readFileSync as readFileSync10, rmSync as rmSync5, statSync as statSync11 } from "node:fs";
+
+// src/engines/claude/compact.ts
+import { existsSync } from "node:fs";
+
+// src/engines/claude/keys.ts
+import { mkdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { dirname } from "node:path";
+
+// src/engines/claude/idle.ts
+import { rmSync, statSync, readFileSync } from "node:fs";
+
+// src/engines/claude/persistence.ts
 import { join } from "node:path";
+
+// src/engines/teammate-record.ts
+var TEAMMATE_RECORD_SCHEMA = 1;
+var TeammateRecord = class {
+  schema = TEAMMATE_RECORD_SCHEMA;
+  name;
+  cwd;
+  createdAt;
+  displayName;
+  constructor(args) {
+    this.name = args.name;
+    this.cwd = args.cwd;
+    this.createdAt = args.createdAt;
+    this.displayName = args.displayName;
+  }
+  /**
+   * Absolute path of the base JSON file for this teammate. The single
+   * builder so the file shape changes in one place.
+   */
+  static markerPath(name) {
+    return `/tmp/teammate-${name}.json`;
+  }
+  /** Serialise this record's base fields to the on-disk JSON shape. */
+  toJson() {
+    return {
+      schema: this.schema,
+      name: this.name,
+      engine: this.engine,
+      cwd: this.cwd,
+      createdAt: this.createdAt,
+      displayName: this.displayName
+    };
+  }
+};
+
+// src/engines/claude/persistence.ts
+var TEAMMATE_ROOT = "/tmp";
+function cwdFile(name) {
+  return join(TEAMMATE_ROOT, `teammate-${name}.cwd`);
+}
+function sidFile(name) {
+  return join(TEAMMATE_ROOT, `teammate-${name}.sid`);
+}
+function readyFile(name) {
+  return join(TEAMMATE_ROOT, `teammate-${name}.ready`);
+}
+function sendAtFile(name) {
+  return join(TEAMMATE_ROOT, `teammate-${name}.send-at`);
+}
 function idleDir() {
   return "/tmp/claude-idle";
 }
@@ -4099,89 +4155,2327 @@ function busyMarkerFor(sid) {
 function lastFileFor(sid) {
   return join(idleDir(), `${sid}.last`);
 }
-function sidFile(repo) {
-  return `/tmp/teammate-${repo}.sid`;
+var TMUX_SESSION_PREFIX = "teammate-";
+function tmuxSessionName(name) {
+  return `${TMUX_SESSION_PREFIX}${name.replace(/\//g, "__")}`;
 }
-function cwdFile(repo) {
-  return `/tmp/teammate-${repo}.cwd`;
+
+// src/engines/claude/tmux.ts
+function die(message) {
+  return { code: 1, stdout: "", stderr: `tm: ${message}
+` };
 }
-function sendAtFile(repo) {
-  return `/tmp/teammate-${repo}.send-at`;
+async function sessionExists(session, runTmux2) {
+  try {
+    return (await runTmux2(["has-session", "-t", `=${session}`])).code === 0;
+  } catch {
+    return false;
+  }
 }
-function readyFile(repo) {
-  return `/tmp/teammate-${repo}.ready`;
+async function requireSession(name, runTmux2) {
+  const session = tmuxSessionName(name);
+  if (await sessionExists(session, runTmux2)) return null;
+  return die(`no such teammate session: ${name} (tmux=${session}; try 'tm ls')`);
+}
+async function resolvePaneTarget(name, runTmux2) {
+  const session = tmuxSessionName(name);
+  let listing = "";
+  try {
+    listing = (await runTmux2(["list-sessions", "-F", "#{session_id} #{session_name}"])).stdout;
+  } catch {
+    listing = "";
+  }
+  for (const line of listing.split("\n")) {
+    const space = line.indexOf(" ");
+    if (space >= 0 && line.slice(space + 1) === session) return line.slice(0, space);
+  }
+  return "";
+}
+function sessionField(line) {
+  const colon = line.indexOf(":");
+  return colon >= 0 ? line.slice(0, colon) : line;
+}
+function teammateNamesFromTmuxLs(listing) {
+  const out = [];
+  for (const line of listing.split("\n")) {
+    const field = sessionField(line);
+    if (field.startsWith(TMUX_SESSION_PREFIX)) {
+      out.push(field.slice(TMUX_SESSION_PREFIX.length));
+    }
+  }
+  return out;
+}
+async function iterTeammates(runTmux2) {
+  let listing = "";
+  try {
+    listing = (await runTmux2(["ls"])).stdout;
+  } catch {
+    listing = "";
+  }
+  return teammateNamesFromTmuxLs(listing);
+}
+
+// src/engines/claude/idle.ts
+function readIfNonEmpty(file) {
+  try {
+    if (statSync(file).size === 0) return null;
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+function isRegularFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function isDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function rstrip(text) {
+  return text.replace(/\n+$/, "");
+}
+function resolveSid(name) {
+  const raw = readIfNonEmpty(sidFile(name));
+  return raw === null ? null : rstrip(raw);
+}
+function resolveSidOrDie(name) {
+  const sid = resolveSid(name);
+  if (sid === null) {
+    return {
+      error: die(
+        `no sid file for ${name} at ${sidFile(name)} \u2014 was this teammate spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)`
+      )
+    };
+  }
+  return { sid };
+}
+function clearIdle(sid) {
+  if (sid === "") return;
+  for (const file of [idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid)]) {
+    rmSync(file, { force: true });
+  }
+}
+
+// src/engines/claude/clock.ts
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function nowSec() {
+  return Math.floor(Date.now() / 1e3);
+}
+function isNonNegativeInteger(value) {
+  return /^[0-9]+$/.test(value);
+}
+function fmtLocalDateTime(epochSec) {
+  const d = new Date(epochSec * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function fmtAge(age) {
+  if (age < 60) return `${age}s`;
+  if (age < 3600) return `${Math.floor(age / 60)}m`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h`;
+  return `${Math.floor(age / 86400)}d`;
+}
+
+// src/engines/claude/keys.ts
+function readSendKeysConfig(env) {
+  const inlineRaw = env.TM_SEND_INLINE_MAX ?? "";
+  const inlineMax = inlineRaw === "" ? 200 : Number(inlineRaw);
+  if (inlineRaw !== "" && !/^[0-9]+$/.test(inlineRaw)) {
+    return die(`TM_SEND_INLINE_MAX must be a non-negative integer (got: '${inlineRaw}')`);
+  }
+  const gapRaw = env.TM_SEND_GAP ?? "";
+  if (gapRaw !== "" && !/^[0-9]+(\.[0-9]+)?$/.test(gapRaw)) {
+    return die(`TM_SEND_GAP must be a non-negative number of seconds (got: '${gapRaw}')`);
+  }
+  return { inlineMax, gapOverride: gapRaw === "" ? null : gapRaw };
+}
+function defaultPasteGapSec(promptLength) {
+  if (promptLength <= 256) return 0.2;
+  if (promptLength <= 1024) return 0.5;
+  if (promptLength <= 4096) return 1;
+  if (promptLength <= 16384) return 2;
+  return 4;
+}
+async function sendKeys(name, prompt, runTmux2, processEnv) {
+  const sessionMissing = await requireSession(name, runTmux2);
+  if (sessionMissing !== null) return sessionMissing;
+  const pane = await resolvePaneTarget(name, runTmux2);
+  if (pane === "") return die(`could not resolve pane target for ${name}`);
+  const cfg = readSendKeysConfig(processEnv);
+  if ("code" in cfg) return cfg;
+  const sid = resolveSid(name);
+  if (sid !== null) clearIdle(sid);
+  const sa = sendAtFile(name);
+  mkdirSync(dirname(sa), { recursive: true });
+  writeFileSync(sa, "");
+  const n = prompt.length;
+  const inlinePath = n <= cfg.inlineMax && !prompt.includes("\n");
+  const session = tmuxSessionName(name);
+  let stderr = `sent to ${name} (tmux=${session})
+`;
+  if (sid !== null) stderr += `sid=${sid}
+`;
+  const tmuxOk = (result, what) => result.code === 0 ? null : die(`tmux ${what} failed: ${result.stderr.trim() || "non-zero exit"}`);
+  if (inlinePath) {
+    const sent = await runTmux2(["send-keys", "-t", pane, "-l", prompt]);
+    const sentErr = tmuxOk(sent, "send-keys");
+    if (sentErr !== null) return sentErr;
+    const enter = await runTmux2(["send-keys", "-t", pane, "Enter"]);
+    const enterErr = tmuxOk(enter, "send-keys Enter");
+    if (enterErr !== null) return enterErr;
+    return { code: 0, stdout: "", stderr };
+  }
+  const gap = cfg.gapOverride !== null ? Number(cfg.gapOverride) : defaultPasteGapSec(n);
+  const buf = `tm-send-${process.pid}-${randomBytes(2).toString("hex")}`;
+  let loaded = false;
+  try {
+    const loadResult = await runTmux2(["load-buffer", "-b", buf, "-"], { stdin: prompt });
+    const loadErr = tmuxOk(loadResult, "load-buffer");
+    if (loadErr !== null) return loadErr;
+    loaded = true;
+    const pasteResult = await runTmux2([
+      "paste-buffer",
+      "-p",
+      "-r",
+      "-d",
+      "-b",
+      buf,
+      "-t",
+      pane
+    ]);
+    const pasteErr = tmuxOk(pasteResult, "paste-buffer");
+    if (pasteErr !== null) return pasteErr;
+    loaded = false;
+    await sleepMs(Math.round(gap * 1e3));
+    const enter = await runTmux2(["send-keys", "-t", pane, "Enter"]);
+    const enterErr = tmuxOk(enter, "send-keys Enter");
+    if (enterErr !== null) return enterErr;
+  } finally {
+    if (loaded) {
+      try {
+        await runTmux2(["delete-buffer", "-b", buf]);
+      } catch {
+      }
+    }
+  }
+  return { code: 0, stdout: "", stderr };
+}
+
+// src/engines/claude/compact.ts
+function parseCompactArgs(args) {
+  const SILENT = { code: 1, stdout: "", stderr: "" };
+  let repo = "";
+  let timeout = "1800";
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--timeout") {
+      if (i + 1 >= args.length) return { error: SILENT };
+      timeout = args[i + 1];
+      i += 2;
+    } else if (arg.startsWith("--timeout=")) {
+      timeout = arg.slice("--timeout=".length);
+      i++;
+    } else if (arg.startsWith("-")) {
+      return { error: die(`tm compact: unknown flag: ${arg}`) };
+    } else if (repo === "") {
+      repo = arg;
+      i++;
+    } else {
+      timeout = arg;
+      i++;
+    }
+  }
+  return { repo, timeout };
+}
+var COMPACT_REFUSAL_MARK = "\u23BF  Error: Not enough messages to compact";
+async function claudeCompact(args, env) {
+  const parsed = parseCompactArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { repo, timeout } = parsed;
+  if (repo === "") return die("usage: tm compact <repo> [timeout=1800] [--timeout N]");
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm compact: --timeout must be a non-negative integer (got: '${timeout}')`);
+  }
+  const sessionMissing = await requireSession(repo, env.runTmux);
+  if (sessionMissing !== null) return sessionMissing;
+  const sidR = resolveSidOrDie(repo);
+  if ("error" in sidR) return sidR.error;
+  const sid = sidR.sid;
+  const pane = await resolvePaneTarget(repo, env.runTmux);
+  if (pane === "") return die(`could not resolve pane target for ${repo}`);
+  let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)
+`;
+  const sent = await sendKeys(repo, "/compact", env.runTmux, process.env);
+  stderr += sent.stderr;
+  if (sent.code !== 0) {
+    return { code: sent.code, stdout: sent.stdout, stderr };
+  }
+  const timeoutSec = Number(timeout);
+  const end = nowSec() + timeoutSec;
+  const marker = idleMarkerFor(sid);
+  while (nowSec() < end) {
+    if (existsSync(marker)) {
+      return { code: 0, stdout: "compacted\n", stderr };
+    }
+    if (pane.length > 0) {
+      try {
+        const captured = await env.runTmux(["capture-pane", "-t", pane, "-p"]);
+        if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: stderr + `tm compact: ${repo} refused /compact \u2014 Claude Code reported 'Not enough messages to compact' (transcript too short).
+`
+          };
+        }
+      } catch {
+      }
+    }
+    await sleepMs(3e3);
+  }
+  return {
+    code: 1,
+    stdout: "",
+    stderr: stderr + `tm compact: ${repo} did not signal PostCompact within ${timeout}s \u2014 compaction may still be running, or the Stop hook is misconfigured. Check 'tm status ${repo}' and ${marker}.
+`
+  };
+}
+
+// src/engines/claude/ctx.ts
+import { readFileSync as readFileSync3, statSync as statSync3 } from "node:fs";
+import { join as join2 } from "node:path";
+
+// src/paths.ts
+function idleDir2() {
+  return "/tmp/claude-idle";
 }
 function encodeProjectDir(cwd) {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 
-// src/engines/codex/verbs.ts
-import { closeSync as closeSync2, openSync as openSync2, rmSync as rmSync3, writeSync as writeSync2 } from "node:fs";
-
-// src/verbs/format.ts
-function teammateNotFound(name) {
-  return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
-` };
+// src/engines/claude/state.ts
+import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+function rstrip2(text) {
+  return text.replace(/\n+$/, "");
 }
-function noEngineRegistered() {
+function readIfNonEmpty2(path) {
+  try {
+    if (statSync2(path).size === 0) return null;
+    return readFileSync2(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+function readSid(name) {
+  const raw = readIfNonEmpty2(sidFile(name));
+  return raw === null ? null : rstrip2(raw);
+}
+function isRegularFile2(path) {
+  try {
+    return statSync2(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function fmtAge2(age) {
+  if (age < 60) return `${age}s`;
+  if (age < 3600) return `${Math.floor(age / 60)}m`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h`;
+  return `${Math.floor(age / 86400)}d`;
+}
+function lastPreview(lastPath) {
+  let content;
+  try {
+    content = readFileSync2(lastPath, "utf8");
+  } catch {
+    return "(no first line)";
+  }
+  const preview = [...content.split("\n")[0] ?? ""].filter((ch) => (ch.codePointAt(0) ?? 0) > 31).slice(0, 50).join("");
+  return preview.length > 0 ? preview : "(no first line)";
+}
+function listingExtras(name, now) {
+  const sid = readSid(name);
+  const sidShort = sid === null ? "?" : sid.slice(0, 8);
+  const busy = sid !== null && isRegularFile2(busyMarkerFor(sid)) ? "yes" : "no";
+  let last = "-";
+  let preview = "-";
+  if (sid !== null && sid.length > 0) {
+    const lf = lastFileFor(sid);
+    let stat;
+    try {
+      stat = statSync2(lf);
+    } catch {
+      stat = null;
+    }
+    if (stat !== null && stat.size > 0) {
+      const age = now - Math.floor(stat.mtimeMs / 1e3);
+      last = `${stat.size}B/${fmtAge2(age)}`;
+      preview = lastPreview(lf);
+    }
+  }
+  return { sidShort, busy, last, preview };
+}
+
+// src/engines/claude/ctx.ts
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function usageInput(usage) {
+  const num = (v) => typeof v === "number" ? v : 0;
+  return num(usage["input_tokens"]) + num(usage["cache_creation_input_tokens"]) + num(usage["cache_read_input_tokens"]);
+}
+function readIfNonEmpty3(file) {
+  try {
+    if (statSync3(file).size === 0) return null;
+    return readFileSync3(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+function isRegularFile3(path) {
+  try {
+    return statSync3(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function transcriptFile(projectsDir, cwd, sid) {
+  return join2(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
+}
+function readCtxUsage(jsonl) {
+  let content;
+  try {
+    content = readFileSync3(jsonl, "utf8");
+  } catch {
+    return null;
+  }
+  const inputs = [];
+  let lastOut = 0;
+  for (const line of content.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (entry === null) continue;
+    if (!isPlainObject(entry)) return null;
+    if (entry["type"] !== "assistant") continue;
+    const message = entry["message"];
+    if (message === null || message === void 0) continue;
+    if (!isPlainObject(message)) return null;
+    const usage = message["usage"];
+    if (usage === null || usage === void 0) continue;
+    if (!isPlainObject(usage)) return null;
+    inputs.push(usageInput(usage));
+    lastOut = typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : 0;
+  }
+  if (inputs.length === 0) return null;
+  let peak = inputs[0];
+  for (const value of inputs) if (value > peak) peak = value;
+  return { used: inputs[inputs.length - 1], out: lastOut, peak };
+}
+function claudeCtxLine(name, windowOverride, env) {
+  const sid = readSid(name);
+  if (sid === null) return `${name}: ? (no sid file)`;
+  const recordedCwd = readIfNonEmpty3(cwdFile(name));
+  const cwd = recordedCwd !== null ? recordedCwd.replace(/\n+$/, "") : `${env.dispatcherDir}/${name}`;
+  const jsonl = transcriptFile(env.projectsDir, cwd, sid);
+  if (!isRegularFile3(jsonl)) return `${name}: ? (no transcript at ${jsonl})`;
+  const usage = readCtxUsage(jsonl);
+  if (usage === null) return `${name}: ? (no assistant usage in transcript)`;
+  const next = usage.used + usage.out;
+  let window;
+  let note;
+  if (windowOverride === "1m") {
+    window = 1e6;
+    note = "flag";
+  } else if (windowOverride === "200k") {
+    window = 2e5;
+    note = "flag";
+  } else if (usage.peak > 21e4) {
+    window = 1e6;
+    note = "detected 1M";
+  } else {
+    window = 2e5;
+    note = "assumed 200k";
+  }
+  const pct = Math.floor(usage.used * 100 / window);
+  const wlabel = window >= 1e6 ? "1M" : "200k";
+  return `${name}: ${usage.used} tokens \xB7 ~${next} next turn \xB7 ${pct}% of ${wlabel} (${note})`;
+}
+function claudeCtxUsage(name, env) {
+  const sid = readSid(name);
+  if (sid === null) return { kind: "not-supported", reason: `no sid file for ${name}` };
+  const recordedCwd = readIfNonEmpty3(cwdFile(name));
+  const cwd = recordedCwd !== null ? recordedCwd.replace(/\n+$/, "") : `${env.dispatcherDir}/${name}`;
+  const jsonl = transcriptFile(env.projectsDir, cwd, sid);
+  if (!isRegularFile3(jsonl)) {
+    return { kind: "not-supported", reason: `no transcript at ${jsonl}` };
+  }
+  const usage = readCtxUsage(jsonl);
+  if (usage === null) {
+    return { kind: "not-supported", reason: `no assistant usage in transcript for ${name}` };
+  }
+  const window = usage.peak > 21e4 ? 1e6 : 2e5;
   return {
-    code: 1,
-    stdout: "",
-    stderr: "tm: no engine registered in this process (Phase 2 wiring pending)\n"
+    kind: "usage",
+    tokensUsed: usage.used,
+    tokensTotal: window,
+    pct: Math.floor(usage.used * 100 / window)
   };
 }
-function formatListing(rows) {
-  if (rows.length === 0) {
-    return { code: 0, stdout: "(no teammate sessions; use 'tm spawn <repo>')\n", stderr: "" };
-  }
-  const lines = rows.map((r) => `${r.name}	${r.engine}	${r.state}	${r.cwd}`);
-  return { code: 0, stdout: `${lines.join("\n")}
-`, stderr: "" };
+
+// src/engines/claude/doctor.ts
+import { readdirSync as readdirSync2, readFileSync as readFileSync6, statSync as statSync5 } from "node:fs";
+
+// src/engines/codex/supervisor.ts
+import {
+  spawn as spawnChild
+} from "node:child_process";
+import { dirname as dirname3, join as join4 } from "node:path";
+import {
+  closeSync,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync3,
+  openSync,
+  readFileSync as readFileSync5,
+  readdirSync,
+  renameSync as renameSync2,
+  rmdirSync,
+  rmSync as rmSync3,
+  statSync as statSync4,
+  writeFileSync as writeFileSync3,
+  writeSync
+} from "node:fs";
+
+// src/engines/codex/persistence.ts
+import {
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync4,
+  renameSync,
+  rmSync as rmSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
+function codexRegistryRoot() {
+  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
 }
-function formatStatus(status2) {
-  switch (status2.kind) {
-    case "present": {
-      return { code: 0, stdout: status2.pane ?? "", stderr: "" };
+function codexTeammateDir(name) {
+  return join3(codexRegistryRoot(), name);
+}
+function codexSocketPath(name) {
+  return join3(codexTeammateDir(name), "socket");
+}
+function codexPidFile(name) {
+  return join3(codexTeammateDir(name), "pid");
+}
+function codexStartedAtFile(name) {
+  return join3(codexTeammateDir(name), "started-at");
+}
+function codexThreadFile(name) {
+  return join3(codexTeammateDir(name), "thread");
+}
+function codexLastSeenFile(name) {
+  return join3(codexTeammateDir(name), "last-seen");
+}
+function codexStdoutLogFile(name) {
+  return join3(codexTeammateDir(name), "stdout.log");
+}
+function codexStderrLogFile(name) {
+  return join3(codexTeammateDir(name), "stderr.log");
+}
+function codexMetaFile(name) {
+  return join3(codexTeammateDir(name), "meta.json");
+}
+function codexBorrowLockFile(name) {
+  return join3(codexTeammateDir(name), "lock");
+}
+function codexExtension(name) {
+  const root = codexTeammateDir(name);
+  return {
+    root,
+    pid: codexPidFile(name),
+    socket: codexSocketPath(name),
+    thread: codexThreadFile(name),
+    startedAt: codexStartedAtFile(name),
+    lastSeen: codexLastSeenFile(name),
+    stdoutLog: codexStdoutLogFile(name),
+    stderrLog: codexStderrLogFile(name),
+    meta: codexMetaFile(name),
+    lock: codexBorrowLockFile(name)
+  };
+}
+function atomicWrite(path, content) {
+  mkdirSync2(dirname2(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync2(tmp, content, { mode: 384 });
+  renameSync(tmp, path);
+}
+function readBaseRecord(name) {
+  try {
+    const parsed = JSON.parse(readFileSync4(TeammateRecord.markerPath(name), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && (parsed.engine === "claude" || parsed.engine === "codex") && typeof parsed.cwd === "string" && typeof parsed.createdAt === "number") {
+      const displayName = parsed.displayName;
+      return {
+        schema: 1,
+        name: parsed.name,
+        engine: parsed.engine,
+        cwd: parsed.cwd,
+        createdAt: parsed.createdAt,
+        displayName: typeof displayName === "string" ? displayName : null
+      };
     }
-    case "not-found":
-      return { code: 1, stdout: "", stderr: "tm: status: not found\n" };
-    case "failed":
-      return { code: 1, stdout: "", stderr: `tm: status: ${status2.message}
-` };
+    return null;
+  } catch {
+    return null;
   }
 }
-function formatKill(name, result) {
-  switch (result.kind) {
-    case "killed":
-      return { code: 0, stdout: `killed: ${name}
-`, stderr: "" };
-    case "not-found":
-      return { code: 0, stdout: `not running: ${name}
-`, stderr: "" };
-    case "failed":
-      return { code: 1, stdout: "", stderr: `tm: kill: ${result.message}
-` };
+function writeBaseRecord(record) {
+  atomicWrite(
+    TeammateRecord.markerPath(record.name),
+    `${JSON.stringify(record.toJson(), null, 2)}
+`
+  );
+}
+function removeBaseRecord(name) {
+  rmSync2(TeammateRecord.markerPath(name), { force: true });
+}
+function readCodexMeta(name) {
+  try {
+    const parsed = JSON.parse(readFileSync4(codexMetaFile(name), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && typeof parsed.cwd === "string" && typeof parsed.spawnedAt === "number") {
+      const displayName = parsed.displayName;
+      return {
+        schema: 1,
+        name: parsed.name,
+        cwd: parsed.cwd,
+        displayName: typeof displayName === "string" ? displayName : null,
+        spawnedAt: parsed.spawnedAt
+      };
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
-function formatTurn(turn) {
-  switch (turn.kind) {
-    case "completed":
-      return { code: 0, stdout: turn.text.endsWith("\n") ? turn.text : `${turn.text}
-`, stderr: "" };
-    case "failed":
-      return { code: 1, stdout: "", stderr: `tm: turn failed: ${turn.message}
-` };
-    case "timed-out":
-      return { code: 1, stdout: "", stderr: `tm: turn timed out after ${turn.elapsedMs}ms
-` };
-    case "not-supported":
-      return { code: 0, stdout: "", stderr: `  not supported: ${turn.reason}
-` };
-    case "no-op":
-      return { code: 0, stdout: "", stderr: `  no-op: ${turn.reason}
-` };
+var CodexTeammateRecord = class extends TeammateRecord {
+  engine = "codex";
+  constructor(args) {
+    super(args);
+  }
+  extension() {
+    return codexExtension(this.name);
+  }
+  engineExtensionFiles() {
+    const ext = this.extension();
+    return [
+      ext.pid,
+      ext.socket,
+      ext.thread,
+      ext.startedAt,
+      ext.lastSeen,
+      ext.stdoutLog,
+      ext.stderrLog,
+      ext.meta,
+      ext.lock
+    ];
+  }
+};
+
+// src/engines/codex/supervisor.ts
+var CodexDaemonSpawnInProgressError = class extends Error {
+  constructor(name) {
+    super(`codex daemon '${name}' is already being spawned`);
+    this.name = "CodexDaemonSpawnInProgressError";
+  }
+};
+var CodexDaemonAlreadyAliveError = class extends Error {
+  constructor(name, pid) {
+    super(`codex daemon '${name}' is already alive (pid ${pid}); reap it first with tm doctor / tm kill`);
+    this.name = "CodexDaemonAlreadyAliveError";
+  }
+};
+function atomicWrite2(path, content) {
+  const tmpPath = `${path}.tmp`;
+  const fd = openSync(tmpPath, "w", 384);
+  try {
+    writeSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync2(tmpPath, path);
+}
+function readIntFile(path) {
+  try {
+    const txt = readFileSync5(path, "utf8").trim();
+    if (txt === "") return null;
+    const n = Number.parseInt(txt, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
   }
 }
+function readTextFile(path) {
+  try {
+    return readFileSync5(path, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function nowSec2() {
+  return Math.floor(Date.now() / 1e3);
+}
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    const errno = e.code;
+    if (errno === "EPERM") return true;
+    return false;
+  }
+}
+function killProcessGroup(pgid, signal) {
+  if (!Number.isFinite(pgid) || pgid <= 0) return;
+  try {
+    process.kill(-pgid, signal);
+  } catch (e) {
+    const errno = e.code;
+    if (errno === "ESRCH" || errno === "EPERM") return;
+    throw e;
+  }
+}
+function readDaemonState(name) {
+  const pid = readIntFile(codexPidFile(name));
+  const startedAt = readIntFile(codexStartedAtFile(name));
+  if (pid === null || startedAt === null) return null;
+  return {
+    name,
+    pid,
+    startedAt,
+    socketPath: codexSocketPath(name),
+    threadId: readTextFile(codexThreadFile(name)),
+    lastSeen: readIntFile(codexLastSeenFile(name))
+  };
+}
+function daemonAlive(name) {
+  const state = readDaemonState(name);
+  if (state === null) return false;
+  return isProcessAlive(state.pid);
+}
+function listDaemons() {
+  try {
+    const root = codexRegistryRoot();
+    const names = [];
+    const walk = (dir, prefix) => {
+      if (prefix.length > 0 && existsSync2(join4(dir, "pid"))) names.push(prefix);
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const childPrefix = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
+        walk(join4(dir, entry.name), childPrefix);
+      }
+    };
+    walk(root, "");
+    return names.sort();
+  } catch (e) {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  }
+}
+function removeSelfRegistry(name) {
+  for (const file of [
+    codexPidFile(name),
+    codexSocketPath(name),
+    codexStartedAtFile(name),
+    codexThreadFile(name),
+    codexLastSeenFile(name),
+    codexStdoutLogFile(name),
+    codexStderrLogFile(name),
+    codexMetaFile(name),
+    codexBorrowLockFile(name)
+  ]) {
+    rmSync3(file, { force: true });
+  }
+  try {
+    rmdirSync(codexTeammateDir(name));
+  } catch (e) {
+    const code = e.code;
+    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw e;
+  }
+}
+async function spawnDaemon(opts) {
+  const { name } = opts;
+  const dir = codexTeammateDir(name);
+  const socketPath = codexSocketPath(name);
+  const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
+  const spawnLock = `${dir}.spawn.lock`;
+  mkdirSync3(dirname3(spawnLock), { recursive: true });
+  let lockFd = null;
+  try {
+    lockFd = openSync(spawnLock, "wx", 384);
+    writeSync(lockFd, `${process.pid}
+`);
+  } catch {
+    throw new CodexDaemonSpawnInProgressError(name);
+  }
+  try {
+    if (daemonAlive(name)) {
+      throw new CodexDaemonAlreadyAliveError(name, readDaemonState(name)?.pid ?? "?");
+    }
+    removeSelfRegistry(name);
+    mkdirSync3(dir, { recursive: true });
+    const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs);
+    return state;
+  } finally {
+    if (lockFd !== null) closeSync(lockFd);
+    rmSync3(spawnLock, { force: true });
+  }
+}
+async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
+  const { name } = opts;
+  const binPath = opts.binPath ?? (process.env["CLAUDEMUX_CODEX_BIN"] || "codex");
+  const args = ["app-server", "--listen", `unix://${socketPath}`, ...opts.extraArgs ?? []];
+  const stdoutLog = codexStdoutLogFile(name);
+  const stderrLog = codexStderrLogFile(name);
+  const stdoutFd = openSync(stdoutLog, "a", 384);
+  const stderrFd = openSync(stderrLog, "a", 384);
+  const spawnOpts = {
+    cwd: opts.cwd ?? process.cwd(),
+    env: opts.env ?? process.env,
+    detached: true,
+    stdio: ["ignore", stdoutFd, stderrFd]
+  };
+  let child;
+  try {
+    child = await new Promise((resolve, reject) => {
+      let settled = false;
+      const c = spawnChild(binPath, args, spawnOpts);
+      c.once("error", (e) => {
+        if (settled) return;
+        settled = true;
+        reject(e instanceof Error ? e : new Error(String(e)));
+      });
+      c.once("spawn", () => {
+        if (settled) return;
+        settled = true;
+        resolve(c);
+      });
+    });
+  } catch (e) {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+    removeSelfRegistry(name);
+    throw new Error(
+      `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
+    );
+  }
+  closeSync(stdoutFd);
+  closeSync(stderrFd);
+  child.unref();
+  child.on("error", () => {
+  });
+  const pid = child.pid;
+  if (pid === void 0) {
+    removeSelfRegistry(name);
+    throw new Error(`codex daemon '${name}' spawned without a pid`);
+  }
+  const startedAt = nowSec2();
+  atomicWrite2(codexPidFile(name), `${pid}
+`);
+  atomicWrite2(codexStartedAtFile(name), `${startedAt}
+`);
+  if (opts.meta !== void 0 && opts.meta !== null) {
+    atomicWrite2(codexMetaFile(name), JSON.stringify(opts.meta, null, 2) + "\n");
+  }
+  try {
+    await waitForSocket(socketPath, pid, readyTimeoutMs);
+  } catch (e) {
+    killProcessGroup(pid, "SIGKILL");
+    removeSelfRegistry(name);
+    throw e;
+  }
+  return {
+    name,
+    pid,
+    startedAt,
+    socketPath,
+    threadId: null,
+    lastSeen: null
+  };
+}
+async function waitForSocket(path, pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync2(path)) {
+      try {
+        const st = statSync4(path);
+        if (st.isSocket()) return;
+      } catch {
+      }
+    }
+    if (!isProcessAlive(pid)) {
+      throw new Error(
+        `codex daemon (pid ${pid}) exited before binding ${path}`
+      );
+    }
+    await new Promise((res) => setTimeout(res, 25));
+  }
+  throw new Error(
+    `codex daemon (pid ${pid}) did not bind ${path} within ${timeoutMs}ms`
+  );
+}
+async function reapDaemon(name) {
+  const state = readDaemonState(name);
+  if (state !== null) {
+    if (isProcessAlive(state.pid)) {
+      killProcessGroup(state.pid, "SIGTERM");
+      const deadline = Date.now() + 1e3;
+      while (Date.now() < deadline) {
+        if (!isProcessAlive(state.pid)) break;
+        await new Promise((res) => setTimeout(res, 25));
+      }
+    }
+    killProcessGroup(state.pid, "SIGKILL");
+  }
+  removeSelfRegistry(name);
+}
+function touchLastSeen(name) {
+  writeFileSync3(codexLastSeenFile(name), `${nowSec2()}
+`);
+}
+function writeThreadId(name, threadId) {
+  atomicWrite2(codexThreadFile(name), `${threadId}
+`);
+}
+
+// src/engines/claude/doctor.ts
+async function claudeDoctor(args, env, paths) {
+  if (args.length > 0) {
+    return die(`tm doctor: takes no arguments (got: ${args.join(" ")})`);
+  }
+  const kv = (label, value) => {
+    const padded = `${label}:`.padEnd(20, " ");
+    return `  ${padded}${value}
+`;
+  };
+  let out = "";
+  const { tmWrapper, pluginJson } = paths;
+  let version = "unknown";
+  let pluginJsonPresent = false;
+  try {
+    if (statSync5(pluginJson).isFile()) {
+      pluginJsonPresent = true;
+      const parsed = JSON.parse(readFileSync6(pluginJson, "utf8"));
+      if (typeof parsed.version === "string" && parsed.version.length > 0) {
+        version = parsed.version;
+      }
+    }
+  } catch {
+    pluginJsonPresent = false;
+  }
+  out += "tm executable:\n";
+  out += kv("path", tmWrapper);
+  out += kv("version", version);
+  if (!pluginJsonPresent) out += kv("note", `plugin.json not found at ${pluginJson}`);
+  out += "\n";
+  out += "dispatcher dir:\n";
+  out += kv("resolved", env.dispatcherDir);
+  const envSet = process.env.TM_DISPATCHER_DIR;
+  if (envSet !== void 0 && envSet.length > 0) {
+    out += kv("TM_DISPATCHER_DIR", `set (= ${envSet})`);
+  } else {
+    out += kv(
+      "TM_DISPATCHER_DIR",
+      "unset \u2014 falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)"
+    );
+  }
+  const pwd = process.cwd();
+  out += kv("$PWD", pwd);
+  if (env.dispatcherDir !== pwd) {
+    out += kv(
+      "status",
+      "DIVERGED \u2014 dispatcher dir != $PWD; env override is currently keeping tm correct despite the drifted PWD"
+    );
+  } else {
+    out += kv("status", "matched");
+  }
+  if (!isDirectory(env.dispatcherDir)) {
+    out += kv("warning", `${env.dispatcherDir} does not exist as a directory`);
+  }
+  out += "\n";
+  out += "tmux:\n";
+  let tmuxVersionOk = false;
+  let tmuxVersionLine = "";
+  try {
+    const versionResult = await env.runTmux(["-V"]);
+    if (versionResult.code === 0) {
+      tmuxVersionOk = true;
+      tmuxVersionLine = versionResult.stdout.split("\n")[0] ?? "?";
+    }
+  } catch {
+    tmuxVersionOk = false;
+  }
+  if (!tmuxVersionOk) {
+    out += kv("installed", "no (tmux not on PATH \u2014 claudemux teammate workflow needs it)");
+  } else {
+    out += kv("installed", `yes (${tmuxVersionLine})`);
+    let serverRunning = false;
+    try {
+      serverRunning = (await env.runTmux(["info"])).code === 0;
+    } catch {
+      serverRunning = false;
+    }
+    if (serverRunning) out += kv("server", "running");
+    else out += kv("server", "not running (no sessions exist yet \u2014 that's fine pre-spawn)");
+    const insideTmux = process.env.TMUX ?? "";
+    if (insideTmux.length > 0) out += kv("in tmux", `yes (TMUX=${insideTmux})`);
+    else out += kv("in tmux", "no \u2014 tm is being run from outside a tmux session");
+  }
+  out += "\n";
+  out += `idle dir (${idleDir2()}):
+`;
+  if (isDirectory(idleDir2())) {
+    let count = 0;
+    try {
+      count = readdirSync2(idleDir2()).length;
+    } catch {
+      count = 0;
+    }
+    out += kv("exists", `yes (${count} file(s))`);
+  } else {
+    out += kv("exists", "no \u2014 gets created on first tm spawn / scripts/setup.sh");
+  }
+  out += "\n";
+  out += "active teammates:\n";
+  const sessionRows = (await iterTeammates(env.runTmux)).map(
+    (name) => `${TMUX_SESSION_PREFIX}${name}`
+  );
+  if (sessionRows.length === 0) {
+    out += "  (none \u2014 use 'tm spawn <repo>' to launch one)\n";
+  } else {
+    out += kv("count", String(sessionRows.length));
+    for (const name of sessionRows) out += `  ${name}
+`;
+  }
+  out += "\n";
+  out += "codex teammates:\n";
+  const codexNames = listDaemons();
+  if (codexNames.length === 0) {
+    out += "  (none \u2014 use 'tm spawn codex-<n>' to launch one)\n";
+  } else {
+    const reaped = [];
+    const live = [];
+    for (const name of codexNames) {
+      const state = readDaemonState(name);
+      if (state === null) {
+        reaped.push(name);
+        await reapDaemon(name);
+      } else if (!isProcessAlive(state.pid)) {
+        reaped.push(name);
+        await reapDaemon(name);
+      } else {
+        live.push({ name, pid: state.pid, startedAt: state.startedAt });
+      }
+    }
+    out += kv("count", String(live.length));
+    for (const t of live) {
+      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})
+`;
+    }
+    if (reaped.length > 0) {
+      out += kv("reaped orphans", String(reaped.length));
+      for (const name of reaped) out += `  ${name}
+`;
+    }
+  }
+  return { code: 0, stdout: out, stderr: "" };
+}
+
+// src/engines/claude/history.ts
+import { readdirSync as readdirSync3, readFileSync as readFileSync7, statSync as statSync6 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// src/engines/claude/repo-fs.ts
+import { realpathSync } from "node:fs";
+import { dirname as dirname4, join as join5 } from "node:path";
+function projectDirForRepo(name, env) {
+  const phys = realpathSync(join5(env.dispatcherDir, name));
+  return join5(env.projectsDir, encodeProjectDir(phys));
+}
+function dieRepoNotFound(verb, name, expected, dispatcherDir) {
+  if (isDirectory(join5(dispatcherDir, ".git"))) {
+    return die(
+      `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
+    The dispatcher dir should be the PARENT of your sibling repos.
+    Try:  cd "${dirname4(dispatcherDir)}" && tm ${verb} ${name}
+    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
+    \u2014 run /claudemux:setup to wire it up automatically.)`
+    );
+  }
+  return die(
+    `repo not found at ${expected} \u2014 <repo> must be a direct subdirectory of the dispatcher dir (${dispatcherDir}). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.`
+  );
+}
+
+// src/engines/claude/history.ts
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function toFixed1HalfEven(value) {
+  const tenths = value * 10;
+  const floor = Math.floor(tenths);
+  const frac = tenths - floor;
+  let rounded;
+  if (frac < 0.5) rounded = floor;
+  else if (frac > 0.5) rounded = floor + 1;
+  else rounded = floor % 2 === 0 ? floor : floor + 1;
+  return (rounded / 10).toFixed(1);
+}
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1048576) return `${Math.trunc(bytes / 1024)}K`;
+  if (bytes < 1073741824) return `${toFixed1HalfEven(bytes / 1048576)}M`;
+  return `${toFixed1HalfEven(bytes / 1073741824)}G`;
+}
+function mungeCreated(ts) {
+  return ts.replace("T", " ").replace(/\.[0-9]+Z?$/, "").replace(/Z$/, "");
+}
+function indent(text) {
+  return text.split("\n").map((line) => `  ${line}`).join("\n");
+}
+function bashNum(value) {
+  const n = Number(value);
+  return Number.isInteger(n) ? n : 0;
+}
+function contentTextItems(content) {
+  let hasText = false;
+  const texts = [];
+  for (const item of content) {
+    if (!isPlainObject2(item)) throw new Error("jq-fail");
+    if (item.type === "text") {
+      hasText = true;
+      const t = item.text;
+      if (t === null || t === void 0) texts.push("");
+      else if (typeof t === "string") texts.push(t);
+      else throw new Error("jq-fail");
+    }
+  }
+  return hasText ? texts : null;
+}
+function userPromptText(entry) {
+  const message = entry.message;
+  if (message === null || message === void 0) return null;
+  if (!isPlainObject2(message)) throw new Error("jq-fail");
+  if (message.role !== "user") return null;
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const texts = contentTextItems(content);
+    return texts === null ? null : texts.join(" ");
+  }
+  return null;
+}
+function historyUsageSum(usage) {
+  if (!isPlainObject2(usage)) throw new Error("jq-fail");
+  let sum = null;
+  for (const key of [
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens"
+  ]) {
+    const value = usage[key];
+    if (value === null || value === void 0) continue;
+    if (typeof value !== "number") throw new Error("jq-fail");
+    sum = (sum ?? 0) + value;
+  }
+  return sum;
+}
+function historyUsageStr(sum) {
+  return sum === null ? "null" : String(sum);
+}
+function historyFirstPrompt(content) {
+  for (const line of content.split("\n").slice(0, 200)) {
+    if (line.trim() === "") continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject2(entry) || entry.type !== "user") continue;
+    let text;
+    try {
+      text = userPromptText(entry);
+    } catch {
+      continue;
+    }
+    if (text === null) continue;
+    return text.split("\n")[0] ?? "";
+  }
+  return "";
+}
+function historyTopic(content) {
+  const stripped = [...historyFirstPrompt(content)].filter(
+    (ch) => (ch.codePointAt(0) ?? 0) > 31
+  );
+  const topic = stripped.slice(0, 60).join("");
+  return topic.length > 0 ? topic : "(no user prompt)";
+}
+var EMPTY_HISTORY = {
+  firstPrompt: "",
+  lastAssistant: "",
+  createdTs: "",
+  used: "",
+  peak: ""
+};
+function readHistoryData(content) {
+  try {
+    const uPrompts = [];
+    const aTexts = [];
+    const usages = [];
+    const timestamps = [];
+    for (const line of content.split("\n")) {
+      if (line.trim() === "") continue;
+      const entry = JSON.parse(line);
+      if (entry === null) continue;
+      if (!isPlainObject2(entry)) throw new Error("jq-fail");
+      if (entry.type === "user") {
+        const text = userPromptText(entry);
+        if (text !== null) uPrompts.push(text);
+      } else if (entry.type === "assistant") {
+        const message = entry.message;
+        if (message !== null && message !== void 0) {
+          if (!isPlainObject2(message)) throw new Error("jq-fail");
+          if (Array.isArray(message.content)) {
+            const texts = contentTextItems(message.content);
+            if (texts !== null) aTexts.push(texts.join("\n"));
+          }
+          if (message.usage !== null && message.usage !== void 0) {
+            usages.push(message.usage);
+          }
+        }
+      }
+      const ts = entry.timestamp;
+      if (ts !== null && ts !== void 0) timestamps.push(ts);
+    }
+    let createdTs = "";
+    if (timestamps.length > 0) {
+      const first = timestamps[0];
+      if (first === false) createdTs = "";
+      else if (typeof first === "string") createdTs = first;
+      else throw new Error("jq-fail");
+    }
+    let used = "";
+    let peak = "";
+    if (usages.length > 0) {
+      const sums = usages.map(historyUsageSum);
+      used = historyUsageStr(sums[sums.length - 1] ?? null);
+      let peakNum = null;
+      for (const sum of sums) {
+        if (sum !== null && (peakNum === null || sum > peakNum)) peakNum = sum;
+      }
+      peak = historyUsageStr(peakNum);
+    }
+    return {
+      firstPrompt: (uPrompts[0] ?? "").replace(/\n+$/, ""),
+      lastAssistant: (aTexts[aTexts.length - 1] ?? "").replace(/\n+$/, ""),
+      createdTs,
+      used,
+      peak
+    };
+  } catch {
+    return EMPTY_HISTORY;
+  }
+}
+async function historyList(repo, projectDir, env) {
+  if (!isDirectory(projectDir)) {
+    return { code: 0, stdout: `(no past sessions for ${repo})
+`, stderr: "" };
+  }
+  let names;
+  try {
+    names = readdirSync3(projectDir).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    names = [];
+  }
+  if (names.length === 0) {
+    return { code: 0, stdout: `(no past sessions for ${repo})
+`, stderr: "" };
+  }
+  const files = names.map((name) => {
+    let mtime = 0;
+    try {
+      mtime = Math.floor(statSync6(join6(projectDir, name)).mtimeMs / 1e3);
+    } catch {
+      mtime = 0;
+    }
+    return { name, mtime };
+  });
+  files.sort((a, b) => b.mtime - a.mtime || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const liveSid = resolveSid(repo) ?? "";
+  const now = Math.floor(Date.now() / 1e3);
+  const rows = [[" ", "SID", "AGE", "SIZE", "TOPIC"]];
+  for (const { name, mtime } of files) {
+    const full = join6(projectDir, name);
+    const sidFull = name.replace(/\.jsonl$/, "");
+    let size = 0;
+    try {
+      size = statSync6(full).size;
+    } catch {
+      size = 0;
+    }
+    let content = "";
+    try {
+      content = readFileSync7(full, "utf8");
+    } catch {
+      content = "";
+    }
+    const mark = liveSid !== "" && sidFull === liveSid ? "*" : " ";
+    rows.push([
+      mark,
+      sidFull.slice(0, 8),
+      fmtAge(now - mtime),
+      fmtSize(size),
+      historyTopic(content)
+    ]);
+  }
+  return env.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
+`);
+}
+function historyDetail(repo, projectDir, prefix) {
+  if (!/^[0-9a-f-]{1,36}$/.test(prefix)) {
+    return die(`tm history: invalid sid prefix '${prefix}' \u2014 must match ^[0-9a-f-]{1,36}$`);
+  }
+  if (!isDirectory(projectDir)) {
+    return die(`tm history: no project dir at ${projectDir} for ${repo} (no sessions yet)`);
+  }
+  let names;
+  try {
+    names = readdirSync3(projectDir).filter(
+      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile(join6(projectDir, name2))
+    );
+  } catch {
+    names = [];
+  }
+  names.sort();
+  if (names.length === 0) {
+    return die(`tm history: no session matching '${prefix}' in ${repo}`);
+  }
+  if (names.length > 1) {
+    const cands = `${names.map((name2) => name2.replace(/\.jsonl$/, "")).join(" ")} `;
+    return die(
+      `tm history: prefix '${prefix}' matches ${names.length} sessions \u2014 be more specific: ${cands}`
+    );
+  }
+  const name = names[0];
+  const file = join6(projectDir, name);
+  const sidFull = name.replace(/\.jsonl$/, "");
+  let size = 0;
+  let mtime = 0;
+  try {
+    const stat = statSync6(file);
+    size = stat.size;
+    mtime = Math.floor(stat.mtimeMs / 1e3);
+  } catch {
+    size = 0;
+    mtime = 0;
+  }
+  let content = "";
+  try {
+    content = readFileSync7(file, "utf8");
+  } catch {
+    content = "";
+  }
+  const lineCount = (content.match(/\n/g) ?? []).length;
+  const now = Math.floor(Date.now() / 1e3);
+  const data = readHistoryData(content);
+  const createdStr = data.createdTs !== "" ? mungeCreated(data.createdTs) : "";
+  let ctxStr = "(no usage data)";
+  if (data.used !== "" && data.peak !== "") {
+    const window = bashNum(data.peak) > 21e4 ? 1e6 : 2e5;
+    const pct = Math.trunc(bashNum(data.used) * 100 / window);
+    const wlabel = window >= 1e6 ? "1M" : "200k";
+    const note = window >= 1e6 ? "detected 1M" : "assumed 200k";
+    ctxStr = `${data.used} tokens \xB7 ${pct}% of ${wlabel} (${note})`;
+  }
+  let laDisplay = data.lastAssistant !== "" ? data.lastAssistant : "(no assistant text)";
+  if (data.lastAssistant !== "") {
+    const cps = [...data.lastAssistant];
+    if (cps.length > 1500) {
+      laDisplay = `${cps.slice(0, 1500).join("")}
+... (${cps.length - 1500} chars truncated; full text in jsonl)`;
+    }
+  }
+  const fpDisplay = data.firstPrompt !== "" ? data.firstPrompt : "(no user prompt)";
+  const stdout = `sid:        ${sidFull}
+file:       ${file}
+            (${fmtSize(size)} \xB7 ${lineCount} lines)
+created:    ${createdStr !== "" ? createdStr : "(unknown)"}
+last_seen:  ${fmtLocalDateTime(mtime)}  (${fmtAge(now - mtime)} ago)
+ctx:        ${ctxStr}
+
+first prompt:
+${indent(fpDisplay)}
+
+last assistant:
+${indent(laDisplay)}
+
+resume: tm resume ${repo} ${sidFull}
+`;
+  return { code: 0, stdout, stderr: "" };
+}
+async function claudeHistory(args, env) {
+  const repo = args[0] ?? "";
+  if (repo.length === 0) return die("usage: tm history <repo> [<sid-or-prefix>]");
+  const path = join6(env.dispatcherDir, repo);
+  if (!isDirectory(path)) return dieRepoNotFound("history", repo, path, env.dispatcherDir);
+  const projectDir = projectDirForRepo(repo, env);
+  const sidArg = args[1] ?? "";
+  return sidArg === "" ? historyList(repo, projectDir, env) : historyDetail(repo, projectDir, sidArg);
+}
+
+// src/engines/claude/last.ts
+import { readFileSync as readFileSync8, statSync as statSync7 } from "node:fs";
+function readIfNonEmpty4(file) {
+  try {
+    if (statSync7(file).size === 0) return null;
+    return readFileSync8(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+function claudeLast(name) {
+  const sid = readSid(name);
+  if (sid === null) {
+    return {
+      kind: "failed",
+      message: `no sid file for ${name} at ${sidFile(name)} \u2014 was this teammate spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)`
+    };
+  }
+  const file = lastFileFor(sid);
+  const reply = readIfNonEmpty4(file);
+  if (reply === null) {
+    return {
+      kind: "failed",
+      message: `no reply yet for ${name} (sid=${sid}) \u2014 file is missing or empty at ${file}. Try 'tm wait ${name}' to block for the next Stop, or 'tm send ${name} --prompt "..."' to drive a turn.`
+    };
+  }
+  return { kind: "text", text: reply };
+}
+
+// src/engines/claude/mem.ts
+import { readFileSync as readFileSync9, realpathSync as realpathSync2, statSync as statSync8 } from "node:fs";
+import { dirname as dirname5, join as join7 } from "node:path";
+function isRegularFile4(path) {
+  try {
+    return statSync8(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function isDirectory2(path) {
+  try {
+    return statSync8(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function projectDirForName(name, env) {
+  const phys = realpathSync2(join7(env.dispatcherDir, name));
+  return join7(env.projectsDir, encodeProjectDir(phys));
+}
+function repoNotFoundMessage(verb, name, expected, dispatcherDir) {
+  if (isDirectory2(join7(dispatcherDir, ".git"))) {
+    return `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
+    The dispatcher dir should be the PARENT of your sibling repos.
+    Try:  cd "${dirname5(dispatcherDir)}" && tm ${verb} ${name}
+    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
+    \u2014 run /claudemux:setup to wire it up automatically.)`;
+  }
+  return `repo not found at ${expected} \u2014 <repo> must be a direct subdirectory of the dispatcher dir (${dispatcherDir}). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.`;
+}
+function claudeMem(name, env) {
+  const path = join7(env.dispatcherDir, name);
+  if (!isDirectory2(path)) {
+    return { kind: "failed", message: repoNotFoundMessage("mem", name, path, env.dispatcherDir) };
+  }
+  const mfile = join7(projectDirForName(name, env), "memory", "MEMORY.md");
+  if (!isRegularFile4(mfile)) {
+    return {
+      kind: "not-supported",
+      reason: `tm mem: no auto-memory recorded for ${name} (looked at ${mfile})`
+    };
+  }
+  return { kind: "text", text: readFileSync9(mfile, "utf8") };
+}
+
+// src/engines/claude/reload.ts
+async function claudeReload(args, env) {
+  let all = false;
+  const repos = [];
+  for (const arg of args) {
+    if (arg === "--all") all = true;
+    else if (arg === "-h" || arg === "--help") return die("usage: tm reload <repo>... | --all");
+    else if (arg.startsWith("-")) return die(`tm reload: unknown flag: ${arg}`);
+    else repos.push(arg);
+  }
+  if (all) {
+    if (repos.length > 0) return die("tm reload: --all conflicts with explicit repos");
+    repos.push(...await iterTeammates(env.runTmux));
+    if (repos.length === 0) {
+      return { code: 0, stdout: "(no teammate sessions to reload)\n", stderr: "" };
+    }
+  } else if (repos.length === 0) {
+    return die("usage: tm reload <repo>... | --all");
+  }
+  let stdout = "";
+  for (const repo of repos) {
+    stdout += `\u2192 ${repo}: /reload-plugins
+`;
+    const sent = await sendKeys(repo, "/reload-plugins", env.runTmux, process.env);
+    if (sent.code !== 0) return { code: sent.code, stdout, stderr: "" };
+  }
+  return { code: 0, stdout, stderr: "" };
+}
+
+// src/engines/claude/resume.ts
+import { readdirSync as readdirSync4, statSync as statSync10 } from "node:fs";
+import { join as join9 } from "node:path";
+
+// src/engines/claude/spawn.ts
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, realpathSync as realpathSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
+
+// src/engines/claude/wait-signals.ts
+import { existsSync as existsSync3, statSync as statSync9 } from "node:fs";
+async function waitIdleSignal(name, timeoutSec, fresh, runTmux2) {
+  const sessionMissing = await requireSession(name, runTmux2);
+  if (sessionMissing !== null) return sessionMissing;
+  const sidR = resolveSidOrDie(name);
+  if ("error" in sidR) return sidR.error;
+  if (fresh) clearIdle(sidR.sid);
+  const end = nowSec() + timeoutSec;
+  const marker = idleMarkerFor(sidR.sid);
+  while (nowSec() < end) {
+    if (existsSync3(marker)) return { ok: true };
+    await sleepMs(3e3);
+  }
+  return { ok: false };
+}
+async function waitPaneQuiet(name, timeoutSec, runTmux2) {
+  const sessionMissing = await requireSession(name, runTmux2);
+  if (sessionMissing !== null) return sessionMissing;
+  let sendAt = 0;
+  try {
+    sendAt = Math.floor(statSync9(sendAtFile(name)).mtimeMs / 1e3);
+  } catch {
+    sendAt = 0;
+  }
+  const end = nowSec() + timeoutSec;
+  let quietStreak = 0;
+  while (nowSec() < end) {
+    const sid = resolveSid(name);
+    const isBusy = sid !== null && isRegularFile(busyMarkerFor(sid));
+    if (isBusy) quietStreak = 0;
+    else quietStreak += 1;
+    if (quietStreak >= 2 && nowSec() - sendAt >= 3) return { ok: true };
+    await sleepMs(2e3);
+  }
+  return { ok: false };
+}
+
+// src/engines/claude/post-turn.ts
+function printLastOrEmpty(name) {
+  const sid = resolveSid(name);
+  if (sid === null) return `(no sid for ${name})
+`;
+  const reply = readIfNonEmpty(lastFileFor(sid));
+  if (reply === null) {
+    return "(no text reply this turn \u2014 tool-only, /compact, /clear, or fresh spawn)\n";
+  }
+  return reply;
+}
+function echoCtxToStderr(name, env) {
+  const body = claudeCtxLine(name, "", env);
+  if (body.includes(": ? (")) return "";
+  const prefix = `${name}: `;
+  const data = body.startsWith(prefix) ? body.slice(prefix.length) : body;
+  return `ctx: ${data}
+`;
+}
+
+// src/engines/claude/send.ts
+function shellSingleQuote(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+function parseSendArgs(args) {
+  let paneQuiet = false;
+  let timeout = "1800";
+  let repo = "";
+  let prompt = "";
+  let hasPrompt = false;
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--pane-quiet") {
+      paneQuiet = true;
+      i++;
+    } else if (arg === "--timeout") {
+      if (i + 1 >= args.length) return { error: die("tm send: --timeout requires a value") };
+      timeout = args[i + 1];
+      i += 2;
+    } else if (arg.startsWith("--timeout=")) {
+      timeout = arg.slice("--timeout=".length);
+      i++;
+    } else if (arg === "--prompt") {
+      if (i + 1 >= args.length) return { error: die("tm send: --prompt requires a value") };
+      prompt = args[i + 1];
+      hasPrompt = true;
+      i += 2;
+    } else if (arg.startsWith("--prompt=")) {
+      prompt = arg.slice("--prompt=".length);
+      hasPrompt = true;
+      i++;
+    } else if (arg === "--") {
+      i++;
+      repo = args[i] ?? "";
+      i++;
+      break;
+    } else if (arg.startsWith("-")) {
+      return { error: die(`tm send: unknown flag: ${arg}`) };
+    } else if (repo === "") {
+      repo = arg;
+      i++;
+    } else {
+      const tail = args.slice(i).join(" ");
+      return {
+        error: die(
+          `tm send: prompt is now a --prompt flag, not a positional arg. Did you mean: tm send ${repo} --prompt ${shellSingleQuote(tail)} ?`
+        )
+      };
+    }
+  }
+  return { repo, prompt, hasPrompt, paneQuiet, timeout };
+}
+async function claudeSend(args, env) {
+  const parsed = parseSendArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed;
+  if (repo === "") {
+    return die(
+      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
+    );
+  }
+  if (!hasPrompt) {
+    return die(
+      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
+    );
+  }
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
+  }
+  const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env);
+  if (sentResult.code !== 0) return sentResult;
+  const timeoutSec = Number(timeout);
+  const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env.runTmux) : await waitIdleSignal(repo, timeoutSec, false, env.runTmux);
+  if ("code" in verdict) return verdict;
+  if (!verdict.ok) {
+    const kind = paneQuiet ? "pane-quiet" : "Stop hook";
+    return {
+      code: 1,
+      stdout: printLastOrEmpty(repo),
+      stderr: sentResult.stderr + `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}
+`
+    };
+  }
+  let trailingStderr = "";
+  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env);
+  return {
+    code: 0,
+    stdout: printLastOrEmpty(repo),
+    stderr: sentResult.stderr + trailingStderr
+  };
+}
+
+// src/engines/claude/identifiers.ts
+import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
+function newSid() {
+  return randomUUID().toLowerCase();
+}
+function randSuffix() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = randomBytes2(4);
+  let out = "";
+  for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+function sanitizeTaskSlug(task) {
+  let s = task.toLowerCase();
+  s = s.replace(/[^a-z0-9一-鿿]+/g, "-");
+  s = s.replace(/^-+|-+$/g, "");
+  const cps = [...s];
+  if (cps.length > 30) {
+    s = cps.slice(0, 30).join("");
+    s = s.replace(/-+$/, "");
+  }
+  return s;
+}
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// src/engines/claude/spawn.ts
+import { join as join8 } from "node:path";
+function parseSpawnArgs(rest) {
+  const SILENT = { code: 1, stdout: "", stderr: "" };
+  let resumeSid = "";
+  let task = "";
+  let prompt = "";
+  let hasPrompt = false;
+  let timeout = null;
+  let engine = null;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--resume") {
+      if (i + 1 >= rest.length) return { error: SILENT };
+      resumeSid = rest[i + 1];
+      i++;
+    } else if (arg === "--engine") {
+      if (i + 1 >= rest.length) return { error: die("tm spawn: --engine requires a value") };
+      const value = rest[i + 1];
+      if (value !== "claude" && value !== "codex") {
+        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
+      }
+      engine = value;
+      i++;
+    } else if (arg.startsWith("--engine=")) {
+      const value = arg.slice("--engine=".length);
+      if (value !== "claude" && value !== "codex") {
+        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
+      }
+      engine = value;
+    } else if (arg === "--task") {
+      if (i + 1 >= rest.length) return { error: SILENT };
+      task = rest[i + 1];
+      i++;
+    } else if (arg === "--timeout") {
+      if (i + 1 >= rest.length) return { error: die("tm spawn: --timeout requires a value") };
+      timeout = rest[i + 1];
+      i++;
+    } else if (arg.startsWith("--timeout=")) {
+      timeout = arg.slice("--timeout=".length);
+    } else if (arg.startsWith("--task=")) {
+      task = arg.slice("--task=".length);
+    } else if (arg === "--prompt") {
+      if (i + 1 >= rest.length) return { error: die("tm spawn: --prompt requires a value") };
+      prompt = rest[i + 1];
+      hasPrompt = true;
+      i++;
+    } else if (arg.startsWith("--prompt=")) {
+      prompt = arg.slice("--prompt=".length);
+      hasPrompt = true;
+    } else {
+      return { error: die(`unknown flag: ${arg}`) };
+    }
+  }
+  return { engine, resumeSid, task, prompt, hasPrompt, timeout };
+}
+function shellSingleQuote2(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+function teammateLaunchFlags(mdExcludes) {
+  return `--settings ${shellSingleQuote2(mdExcludes)} --disallowedTools AskUserQuestion`;
+}
+async function pollReady(name) {
+  const rf = readyFile(name);
+  for (let i = 1; i <= 60; i++) {
+    if (existsSync4(rf)) return i * 300;
+    await sleepMs(300);
+  }
+  return null;
+}
+async function claudeSpawn(args, env) {
+  const repo = args[0] ?? "";
+  if (repo.length === 0) {
+    return die('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]');
+  }
+  const parsed = parseSpawnArgs(args.slice(1));
+  if ("error" in parsed) return parsed.error;
+  const { resumeSid, task, prompt, hasPrompt } = parsed;
+  const path = join8(env.dispatcherDir, repo);
+  if (!isDirectory(path)) return dieRepoNotFound("spawn", repo, path, env.dispatcherDir);
+  const cwdPhys = realpathSync3(path);
+  const dispatcherPhys = realpathSync3(env.dispatcherDir);
+  const mdExcludes = JSON.stringify({
+    claudeMdExcludes: [
+      `${dispatcherPhys}/CLAUDE.md`,
+      `${dispatcherPhys}/CLAUDE.local.md`
+    ]
+  });
+  let displayName = "";
+  if (task.length > 0) {
+    const slug = sanitizeTaskSlug(task);
+    if (slug.length === 0) {
+      return die(
+        `tm spawn: --task '${task}' has no usable characters after sanitization (allowlist: ASCII letters/digits + CJK Unified Ideographs)`
+      );
+    }
+    displayName = `${repo}-${slug}`;
+  } else if (resumeSid.length === 0) {
+    displayName = `${repo}-${randSuffix()}`;
+  }
+  const name = tmuxSessionName(repo);
+  if (await sessionExists(name, env.runTmux)) {
+    if (hasPrompt) {
+      return die(
+        `${repo} already exists (tmux=${name}) \u2014 atomic bootstrap rejected because the teammate is already running. Use 'tm send ${repo} --prompt "\u2026"' to drive an existing teammate, or 'tm kill ${repo}' first to start over.`
+      );
+    }
+    return {
+      code: 0,
+      stdout: `${repo} already exists (tmux=${name}; use 'tm status ${repo}' to view, or 'tm kill ${repo}' first)
+`,
+      stderr: ""
+    };
+  }
+  const rf = readyFile(repo);
+  rmSync4(rf, { force: true });
+  const cf = cwdFile(repo);
+  mkdirSync4(dirname6(cf), { recursive: true });
+  writeFileSync4(cf, `${cwdPhys}
+`);
+  let paneId = "";
+  try {
+    const newSession = await env.runTmux([
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-c",
+      cwdPhys,
+      "-e",
+      `CLAUDEMUX_TEAMMATE_REPO=${repo}`,
+      "-P",
+      "-F",
+      "#{session_id}"
+    ]);
+    if (newSession.code !== 0) {
+      return die(`tmux new-session failed: ${newSession.stderr.trim() || newSession.stdout.trim()}`);
+    }
+    paneId = newSession.stdout.split("\n")[0] ?? "";
+  } catch (err) {
+    return die(`tmux new-session failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (paneId.length === 0) return die(`tmux new-session returned no session id for ${repo}`);
+  const sid = resumeSid.length > 0 ? resumeSid : newSid();
+  const launchFlags = teammateLaunchFlags(mdExcludes);
+  const nameArg = displayName.length > 0 ? ` -n ${shellSingleQuote2(displayName)}` : "";
+  const launchCmd = resumeSid.length > 0 ? `claude --resume ${sid} ${launchFlags}${nameArg}` : `claude --session-id ${sid} ${launchFlags}${nameArg}`;
+  await env.runTmux(["send-keys", "-t", paneId, launchCmd, "Enter"]);
+  let stderr = "";
+  if (resumeSid.length > 0) {
+    const nameNote = displayName.length > 0 ? `, name=${displayName}` : "";
+    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, resumed sid=${sid}${nameNote})
+`;
+  } else {
+    const nameNote = displayName.length > 0 ? `, name=${displayName}` : "";
+    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, sid=${sid}${nameNote})
+`;
+  }
+  const sf = sidFile(repo);
+  mkdirSync4(dirname6(sf), { recursive: true });
+  writeFileSync4(sf, `${sid}
+`);
+  clearIdle(sid);
+  if (resumeSid.length === 0) {
+    mkdirSync4(idleDir(), { recursive: true });
+    writeFileSync4(lastFileFor(sid), "");
+  }
+  const readyAfter = await pollReady(repo);
+  if (readyAfter !== null) {
+    stderr += `ready: ${repo} (tmux=${name}, SessionStart fired after ~${readyAfter} ms)
+`;
+  } else {
+    stderr += `WARN: ${repo} (tmux=${name}) did not signal ready within 18s (no SessionStart hook fire \u2014 the plugin's on-session-start.sh may not be loaded, or claude failed to boot). Continuing, but if the REPL is actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / 'tm compact' will block until its --timeout expires (default 1800s). 'tm status ${repo}' shows the live pane if you need to verify.
+`;
+  }
+  if (!hasPrompt) {
+    return { code: 0, stdout: "", stderr };
+  }
+  await sleepMs(3e3);
+  const sendArgs = [repo, "--prompt", prompt];
+  const sendResult = await claudeSend(sendArgs, env);
+  return {
+    code: sendResult.code,
+    stdout: sendResult.stdout,
+    stderr: stderr + sendResult.stderr
+  };
+}
+
+// src/engines/claude/resume.ts
+function parseResumeArgs(args) {
+  const SILENT = { code: 1, stdout: "", stderr: "" };
+  let repo = "";
+  let sid = "";
+  let task = "";
+  let prompt = "";
+  let hasPrompt = false;
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--prompt") {
+      if (i + 1 >= args.length) return { error: die("tm resume: --prompt requires a value") };
+      prompt = args[i + 1];
+      hasPrompt = true;
+      i += 2;
+    } else if (arg.startsWith("--prompt=")) {
+      prompt = arg.slice("--prompt=".length);
+      hasPrompt = true;
+      i++;
+    } else if (arg === "--task") {
+      if (i + 1 >= args.length) return { error: SILENT };
+      task = args[i + 1];
+      i += 2;
+    } else if (arg.startsWith("--task=")) {
+      task = arg.slice("--task=".length);
+      i++;
+    } else if (arg === "--") {
+      i++;
+      break;
+    } else if (arg.startsWith("-")) {
+      return { error: die(`unknown flag: ${arg}`) };
+    } else if (repo === "") {
+      repo = arg;
+      i++;
+    } else if (sid === "") {
+      sid = arg;
+      i++;
+    } else {
+      return {
+        error: die(
+          `tm resume: too many positional args (got '${arg}' after repo='${repo}' sid='${sid}')`
+        )
+      };
+    }
+  }
+  return { repo, sid, task, prompt, hasPrompt };
+}
+async function claudeResume(args, env) {
+  const parsed = parseResumeArgs(args);
+  if ("error" in parsed) return parsed.error;
+  let { sid } = parsed;
+  const { repo, task, prompt, hasPrompt } = parsed;
+  if (repo === "") {
+    return die(
+      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation)'
+    );
+  }
+  const path = join9(env.dispatcherDir, repo);
+  if (!isDirectory(path)) return dieRepoNotFound("resume", repo, path, env.dispatcherDir);
+  const name = tmuxSessionName(repo);
+  if (await sessionExists(name, env.runTmux)) {
+    return die(
+      `${repo} already running (tmux=${name}) \u2014 'tm kill ${repo}' first if you really want to start over`
+    );
+  }
+  const projectDir = projectDirForRepo(repo, env);
+  let autoPickStderr = "";
+  if (sid === "") {
+    if (!isDirectory(projectDir)) {
+      return die(
+        `no project dir at ${projectDir} \u2014 has anyone ever run claude inside ${path}? Try 'tm spawn ${repo}' first.`
+      );
+    }
+    let names = [];
+    try {
+      names = readdirSync4(projectDir).filter((file) => file.endsWith(".jsonl"));
+    } catch {
+      names = [];
+    }
+    if (names.length === 0) {
+      return die(`no .jsonl transcripts under ${projectDir} \u2014 try 'tm spawn ${repo}' to start fresh.`);
+    }
+    const stats = names.map((file) => {
+      let mtime = 0;
+      try {
+        mtime = Math.floor(statSync10(join9(projectDir, file)).mtimeMs / 1e3);
+      } catch {
+        mtime = 0;
+      }
+      return { file, mtime };
+    });
+    stats.sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+    const latest = stats[0];
+    sid = latest.file.replace(/\.jsonl$/, "");
+    autoPickStderr = `tm resume: no sid given \u2014 auto-picked ${sid} (jsonl mtime ${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.
+`;
+  } else {
+    const target = join9(projectDir, `${sid}.jsonl`);
+    if (!isRegularFile(target)) {
+      return die(
+        `no transcript at ${target} \u2014 wrong repo for this sid, or sid does not exist. Check 'ls ${projectDir}/'.`
+      );
+    }
+  }
+  if (!UUID_RE.test(sid)) return die(`sid is not a valid uuid: ${sid}`);
+  const spawnArgs = [repo, "--resume", sid];
+  if (task.length > 0) {
+    spawnArgs.push("--task", task);
+  }
+  if (hasPrompt) {
+    spawnArgs.push("--prompt", prompt);
+  }
+  const result = await claudeSpawn(spawnArgs, env);
+  return {
+    code: result.code,
+    stdout: result.stdout,
+    stderr: autoPickStderr + result.stderr
+  };
+}
+
+// src/engines/claude/wait.ts
+function parseWaitArgs(args) {
+  const SILENT = { code: 1, stdout: "", stderr: "" };
+  let repo = "";
+  let timeout = "1800";
+  let fresh = false;
+  let paneQuiet = false;
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--fresh") {
+      fresh = true;
+      i++;
+    } else if (arg === "--pane-quiet") {
+      paneQuiet = true;
+      i++;
+    } else if (arg === "--timeout") {
+      if (i + 1 >= args.length) return { error: SILENT };
+      timeout = args[i + 1];
+      i += 2;
+    } else if (arg.startsWith("--timeout=")) {
+      timeout = arg.slice("--timeout=".length);
+      i++;
+    } else if (arg.startsWith("-")) {
+      return { error: die(`tm wait: unknown flag: ${arg}`) };
+    } else if (repo === "") {
+      repo = arg;
+      i++;
+    } else {
+      timeout = arg;
+      i++;
+    }
+  }
+  return { repo, timeout, fresh, paneQuiet };
+}
+async function claudeWait(args, env) {
+  const parsed = parseWaitArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { repo, timeout, fresh, paneQuiet } = parsed;
+  if (repo === "") {
+    return die(
+      "usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]"
+    );
+  }
+  if (!isNonNegativeInteger(timeout)) {
+    return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
+  }
+  const timeoutSec = Number(timeout);
+  const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env.runTmux) : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux);
+  if ("code" in verdict) return verdict;
+  if (!verdict.ok) {
+    return {
+      code: 1,
+      stdout: printLastOrEmpty(repo),
+      stderr: `tm wait: timed out after ${timeout}s on ${repo}
+`
+    };
+  }
+  let trailingStderr = "";
+  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env);
+  return {
+    code: 0,
+    stdout: printLastOrEmpty(repo),
+    stderr: trailingStderr
+  };
+}
+
+// src/engines/claude/claude-engine.ts
+import { dirname as dirname7 } from "node:path";
+import { fileURLToPath } from "node:url";
+import { join as join10 } from "node:path";
+var CLAUDE_CAPABILITIES = {
+  atomicSend: true,
+  atomicSpawnPrompt: true,
+  compaction: "manual",
+  contextUsage: "transcript-jsonl",
+  history: "transcript-files",
+  memory: "claude-project-memory",
+  reload: "prompt-command",
+  resume: "transcript-id",
+  detachedTurn: "replayable",
+  events: "synthesized"
+};
+function rstrip3(text) {
+  return text.replace(/\n+$/, "");
+}
+function readIfNonEmpty5(path) {
+  try {
+    if (statSync11(path).size === 0) return null;
+    return readFileSync10(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+function readSid2(name) {
+  const raw = readIfNonEmpty5(sidFile(name));
+  return raw === null ? null : rstrip3(raw);
+}
+function readCwd(name) {
+  const raw = readIfNonEmpty5(cwdFile(name));
+  return raw === null ? null : rstrip3(raw);
+}
+async function hasTmuxSession(env, sessionName) {
+  try {
+    return (await env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
+  } catch {
+    return false;
+  }
+}
+function deriveState(name) {
+  const sid = readSid2(name);
+  if (sid === null) return "unknown";
+  if (existsSync5(busyMarkerFor(sid))) return "busy";
+  if (existsSync5(idleMarkerFor(sid))) return "idle";
+  return "unknown";
+}
+var ClaudeEngine = class {
+  /** The Claude engine carries the `NativeEnv` only because Phase 2a-1 still
+   *  delegates 12 of its 16 methods to `NATIVE_VERBS`. Phase 2a-2 inlines
+   *  the implementations and shrinks the constructor accordingly. */
+  constructor(env) {
+    this.env = env;
+  }
+  kind = "claude";
+  capabilities = CLAUDE_CAPABILITIES;
+  // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
+  async list(ctx) {
+    let listing = "";
+    try {
+      listing = (await this.env.runTmux(["ls"])).stdout;
+    } catch {
+      listing = "";
+    }
+    const now = Math.floor(ctx.now() / 1e3);
+    const out = [];
+    for (const line of listing.split("\n")) {
+      const colon = line.indexOf(":");
+      const session = colon >= 0 ? line.slice(0, colon) : line;
+      if (!session.startsWith(TMUX_SESSION_PREFIX)) continue;
+      const name = session.slice(TMUX_SESSION_PREFIX.length);
+      const extras = listingExtras(name, now);
+      out.push({
+        name,
+        engine: "claude",
+        state: deriveState(name),
+        cwd: readCwd(name) ?? "",
+        displayName: null,
+        extras: {
+          sidShort: extras.sidShort,
+          busy: extras.busy,
+          last: extras.last,
+          preview: extras.preview
+        }
+      });
+    }
+    return out;
+  }
+  async status(req, _ctx) {
+    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
+    if (!await hasTmuxSession(this.env, sessionName)) return { kind: "not-found" };
+    const linesArg = String(req.lines ?? 80);
+    let pane = null;
+    try {
+      const list = await this.env.runTmux(["list-sessions", "-F", "#{session_id} #{session_name}"]);
+      if (list.code !== 0) {
+        return { kind: "failed", message: rstrip3(list.stderr) || rstrip3(list.stdout) || `tmux list-sessions exit ${list.code}` };
+      }
+      for (const line of list.stdout.split("\n")) {
+        const space = line.indexOf(" ");
+        if (space >= 0 && line.slice(space + 1) === sessionName) {
+          pane = line.slice(0, space);
+          break;
+        }
+      }
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
+    }
+    if (pane === null) {
+      return { kind: "failed", message: `tmux session ${sessionName} present in has-session but absent from list-sessions` };
+    }
+    let capture;
+    try {
+      const result = await this.env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${linesArg}`]);
+      if (result.code !== 0) {
+        return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) || `tmux capture-pane exit ${result.code}` };
+      }
+      capture = result.stdout;
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
+    }
+    return {
+      kind: "present",
+      name: req.name,
+      engine: "claude",
+      state: deriveState(req.name),
+      cwd: readCwd(req.name) ?? "",
+      pane: capture,
+      diagnostics: {
+        tmuxSession: sessionName,
+        sid: readSid2(req.name) ?? ""
+      }
+    };
+  }
+  async kill(req, _ctx) {
+    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
+    const sid = readSid2(req.name);
+    if (sid !== null) {
+      rmSync5(idleMarkerFor(sid), { force: true });
+      rmSync5(lastFileFor(sid), { force: true });
+      rmSync5(busyMarkerFor(sid), { force: true });
+    }
+    for (const file of [sidFile(req.name), sendAtFile(req.name), readyFile(req.name), cwdFile(req.name)]) {
+      rmSync5(file, { force: true });
+    }
+    let running = false;
+    try {
+      running = (await this.env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
+    } catch {
+      running = false;
+    }
+    if (!running) return { kind: "not-found" };
+    try {
+      await this.env.runTmux(["kill-session", "-t", `=${sessionName}`]);
+    } catch (err) {
+      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
+    }
+    return { kind: "killed" };
+  }
+  // ─── Hot path / session-shape — real bodies in engines/claude/<verb>.ts
+  async spawn(req, _ctx) {
+    const argv = [req.name];
+    if (req.displayName !== null) argv.push("--task", req.displayName);
+    if (req.prompt !== null) argv.push("--prompt", req.prompt);
+    const result = await claudeSpawn(argv, this.env);
+    if (result.code !== 0) {
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+    }
+    return {
+      kind: "spawned",
+      name: req.name,
+      firstTurn: req.prompt === null ? null : { kind: "completed", text: result.stdout, items: [], context: null }
+    };
+  }
+  async send(req, _ctx) {
+    const argv = [req.name, "--prompt", req.prompt];
+    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    const result = await claudeSend(argv, this.env);
+    if (result.code !== 0) {
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: false };
+    }
+    return { kind: "completed", text: result.stdout, items: [], context: null };
+  }
+  async wait(req, _ctx) {
+    const argv = [req.name];
+    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
+    const result = await claudeWait(argv, this.env);
+    if (result.code !== 0) {
+      return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout), recoverable: true };
+    }
+    return { kind: "completed", text: result.stdout, items: [], context: null };
+  }
+  async compact(req, _ctx) {
+    const result = await claudeCompact([req.name], this.env);
+    if (result.code === 0) return { kind: "compacted" };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+  }
+  async resume(req, _ctx) {
+    const result = await claudeResume([req.name, req.checkpoint], this.env);
+    if (result.code === 0) return { kind: "resumed", checkpoint: req.checkpoint };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+  }
+  async last(req, _ctx) {
+    return claudeLast(req.name);
+  }
+  async ctx(req, _ctx) {
+    return claudeCtxUsage(req.name, {
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir
+    });
+  }
+  async history(req, _ctx) {
+    const argv = [req.name];
+    if (req.index !== null) argv.push(String(req.index));
+    const result = await claudeHistory(argv, this.env);
+    if (result.code === 0) {
+      return {
+        kind: "list",
+        turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip3(result.stdout) }]
+      };
+    }
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+  }
+  async mem(req, _ctx) {
+    return claudeMem(req.name, {
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir
+    });
+  }
+  async reload(req, _ctx) {
+    const result = await claudeReload([req.name], this.env);
+    if (result.code === 0) return { kind: "reloaded" };
+    return { kind: "failed", message: rstrip3(result.stderr) || rstrip3(result.stdout) };
+  }
+  // ─── Diagnostic ─────────────────────────────────────────────────────
+  async inspect(req, _ctx) {
+    return {
+      engine: "claude",
+      name: req.name,
+      fields: {
+        sid: readSid2(req.name) ?? "",
+        cwd: readCwd(req.name) ?? "",
+        tmuxSession: `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`
+      }
+    };
+  }
+  async doctor(_ctx) {
+    const moduleDir = dirname7(fileURLToPath(import.meta.url));
+    const tmWrapper = join10(moduleDir, "..", "..", "..", "..", "bin", "tm");
+    const pluginJson = join10(moduleDir, "..", "..", "..", "..", ".claude-plugin", "plugin.json");
+    const result = await claudeDoctor([], this.env, { tmWrapper, pluginJson });
+    return {
+      engine: "claude",
+      findings: [
+        {
+          severity: result.code === 0 ? "ok" : "warn",
+          summary: rstrip3(result.stdout) || rstrip3(result.stderr) || "no doctor output",
+          fix: null
+        }
+      ]
+    };
+  }
+};
 
 // node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -4417,463 +6711,6 @@ async function runTurn(client, threadId, prompt, options) {
   return collector.awaitTurn();
 }
 
-// src/engines/codex/supervisor.ts
-import {
-  spawn as spawnChild
-} from "node:child_process";
-import { dirname as dirname2, join as join3 } from "node:path";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync as mkdirSync2,
-  openSync,
-  readFileSync as readFileSync2,
-  readdirSync,
-  renameSync as renameSync2,
-  rmdirSync,
-  rmSync as rmSync2,
-  statSync,
-  writeFileSync as writeFileSync2,
-  writeSync
-} from "node:fs";
-
-// src/engines/codex/persistence.ts
-import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
-import { dirname, join as join2 } from "node:path";
-
-// src/engines/teammate-record.ts
-var TEAMMATE_RECORD_SCHEMA = 1;
-var TeammateRecord = class {
-  schema = TEAMMATE_RECORD_SCHEMA;
-  name;
-  cwd;
-  createdAt;
-  displayName;
-  constructor(args) {
-    this.name = args.name;
-    this.cwd = args.cwd;
-    this.createdAt = args.createdAt;
-    this.displayName = args.displayName;
-  }
-  /**
-   * Absolute path of the base JSON file for this teammate. The single
-   * builder so the file shape changes in one place.
-   */
-  static markerPath(name) {
-    return `/tmp/teammate-${name}.json`;
-  }
-  /** Serialise this record's base fields to the on-disk JSON shape. */
-  toJson() {
-    return {
-      schema: this.schema,
-      name: this.name,
-      engine: this.engine,
-      cwd: this.cwd,
-      createdAt: this.createdAt,
-      displayName: this.displayName
-    };
-  }
-};
-
-// src/engines/codex/persistence.ts
-function codexRegistryRoot() {
-  return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
-}
-function codexTeammateDir(name) {
-  return join2(codexRegistryRoot(), name);
-}
-function codexSocketPath(name) {
-  return join2(codexTeammateDir(name), "socket");
-}
-function codexPidFile(name) {
-  return join2(codexTeammateDir(name), "pid");
-}
-function codexStartedAtFile(name) {
-  return join2(codexTeammateDir(name), "started-at");
-}
-function codexThreadFile(name) {
-  return join2(codexTeammateDir(name), "thread");
-}
-function codexLastSeenFile(name) {
-  return join2(codexTeammateDir(name), "last-seen");
-}
-function codexStdoutLogFile(name) {
-  return join2(codexTeammateDir(name), "stdout.log");
-}
-function codexStderrLogFile(name) {
-  return join2(codexTeammateDir(name), "stderr.log");
-}
-function codexMetaFile(name) {
-  return join2(codexTeammateDir(name), "meta.json");
-}
-function codexBorrowLockFile(name) {
-  return join2(codexTeammateDir(name), "lock");
-}
-function codexExtension(name) {
-  const root = codexTeammateDir(name);
-  return {
-    root,
-    pid: codexPidFile(name),
-    socket: codexSocketPath(name),
-    thread: codexThreadFile(name),
-    startedAt: codexStartedAtFile(name),
-    lastSeen: codexLastSeenFile(name),
-    stdoutLog: codexStdoutLogFile(name),
-    stderrLog: codexStderrLogFile(name),
-    meta: codexMetaFile(name),
-    lock: codexBorrowLockFile(name)
-  };
-}
-function atomicWrite(path, content) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, content, { mode: 384 });
-  renameSync(tmp, path);
-}
-function readBaseRecord(name) {
-  try {
-    const parsed = JSON.parse(readFileSync(TeammateRecord.markerPath(name), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && (parsed.engine === "claude" || parsed.engine === "codex") && typeof parsed.cwd === "string" && typeof parsed.createdAt === "number") {
-      const displayName = parsed.displayName;
-      return {
-        schema: 1,
-        name: parsed.name,
-        engine: parsed.engine,
-        cwd: parsed.cwd,
-        createdAt: parsed.createdAt,
-        displayName: typeof displayName === "string" ? displayName : null
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function writeBaseRecord(record) {
-  atomicWrite(
-    TeammateRecord.markerPath(record.name),
-    `${JSON.stringify(record.toJson(), null, 2)}
-`
-  );
-}
-function removeBaseRecord(name) {
-  rmSync(TeammateRecord.markerPath(name), { force: true });
-}
-function readCodexMeta(name) {
-  try {
-    const parsed = JSON.parse(readFileSync(codexMetaFile(name), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && typeof parsed.cwd === "string" && typeof parsed.spawnedAt === "number") {
-      const displayName = parsed.displayName;
-      return {
-        schema: 1,
-        name: parsed.name,
-        cwd: parsed.cwd,
-        displayName: typeof displayName === "string" ? displayName : null,
-        spawnedAt: parsed.spawnedAt
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-var CodexTeammateRecord = class extends TeammateRecord {
-  engine = "codex";
-  constructor(args) {
-    super(args);
-  }
-  extension() {
-    return codexExtension(this.name);
-  }
-  engineExtensionFiles() {
-    const ext = this.extension();
-    return [
-      ext.pid,
-      ext.socket,
-      ext.thread,
-      ext.startedAt,
-      ext.lastSeen,
-      ext.stdoutLog,
-      ext.stderrLog,
-      ext.meta,
-      ext.lock
-    ];
-  }
-};
-
-// src/engines/codex/supervisor.ts
-var CodexDaemonSpawnInProgressError = class extends Error {
-  constructor(name) {
-    super(`codex daemon '${name}' is already being spawned`);
-    this.name = "CodexDaemonSpawnInProgressError";
-  }
-};
-var CodexDaemonAlreadyAliveError = class extends Error {
-  constructor(name, pid) {
-    super(`codex daemon '${name}' is already alive (pid ${pid}); reap it first with tm doctor / tm kill`);
-    this.name = "CodexDaemonAlreadyAliveError";
-  }
-};
-function atomicWrite2(path, content) {
-  const tmpPath = `${path}.tmp`;
-  const fd = openSync(tmpPath, "w", 384);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync2(tmpPath, path);
-}
-function readIntFile(path) {
-  try {
-    const txt = readFileSync2(path, "utf8").trim();
-    if (txt === "") return null;
-    const n = Number.parseInt(txt, 10);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
-}
-function readTextFile(path) {
-  try {
-    return readFileSync2(path, "utf8").trim() || null;
-  } catch {
-    return null;
-  }
-}
-function nowSec() {
-  return Math.floor(Date.now() / 1e3);
-}
-function isProcessAlive(pid) {
-  if (!Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    const errno = e.code;
-    if (errno === "EPERM") return true;
-    return false;
-  }
-}
-function killProcessGroup(pgid, signal) {
-  if (!Number.isFinite(pgid) || pgid <= 0) return;
-  try {
-    process.kill(-pgid, signal);
-  } catch (e) {
-    const errno = e.code;
-    if (errno === "ESRCH" || errno === "EPERM") return;
-    throw e;
-  }
-}
-function readDaemonState(name) {
-  const pid = readIntFile(codexPidFile(name));
-  const startedAt = readIntFile(codexStartedAtFile(name));
-  if (pid === null || startedAt === null) return null;
-  return {
-    name,
-    pid,
-    startedAt,
-    socketPath: codexSocketPath(name),
-    threadId: readTextFile(codexThreadFile(name)),
-    lastSeen: readIntFile(codexLastSeenFile(name))
-  };
-}
-function daemonAlive(name) {
-  const state = readDaemonState(name);
-  if (state === null) return false;
-  return isProcessAlive(state.pid);
-}
-function listDaemons() {
-  try {
-    const root = codexRegistryRoot();
-    const names = [];
-    const walk = (dir, prefix) => {
-      if (prefix.length > 0 && existsSync(join3(dir, "pid"))) names.push(prefix);
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const childPrefix = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
-        walk(join3(dir, entry.name), childPrefix);
-      }
-    };
-    walk(root, "");
-    return names.sort();
-  } catch (e) {
-    if (e.code === "ENOENT") return [];
-    throw e;
-  }
-}
-function removeSelfRegistry(name) {
-  for (const file of [
-    codexPidFile(name),
-    codexSocketPath(name),
-    codexStartedAtFile(name),
-    codexThreadFile(name),
-    codexLastSeenFile(name),
-    codexStdoutLogFile(name),
-    codexStderrLogFile(name),
-    codexMetaFile(name),
-    codexBorrowLockFile(name)
-  ]) {
-    rmSync2(file, { force: true });
-  }
-  try {
-    rmdirSync(codexTeammateDir(name));
-  } catch (e) {
-    const code = e.code;
-    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw e;
-  }
-}
-async function spawnDaemon(opts) {
-  const { name } = opts;
-  const dir = codexTeammateDir(name);
-  const socketPath = codexSocketPath(name);
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
-  const spawnLock = `${dir}.spawn.lock`;
-  mkdirSync2(dirname2(spawnLock), { recursive: true });
-  let lockFd = null;
-  try {
-    lockFd = openSync(spawnLock, "wx", 384);
-    writeSync(lockFd, `${process.pid}
-`);
-  } catch {
-    throw new CodexDaemonSpawnInProgressError(name);
-  }
-  try {
-    if (daemonAlive(name)) {
-      throw new CodexDaemonAlreadyAliveError(name, readDaemonState(name)?.pid ?? "?");
-    }
-    removeSelfRegistry(name);
-    mkdirSync2(dir, { recursive: true });
-    const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs);
-    return state;
-  } finally {
-    if (lockFd !== null) closeSync(lockFd);
-    rmSync2(spawnLock, { force: true });
-  }
-}
-async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
-  const { name } = opts;
-  const binPath = opts.binPath ?? (process.env["CLAUDEMUX_CODEX_BIN"] || "codex");
-  const args = ["app-server", "--listen", `unix://${socketPath}`, ...opts.extraArgs ?? []];
-  const stdoutLog = codexStdoutLogFile(name);
-  const stderrLog = codexStderrLogFile(name);
-  const stdoutFd = openSync(stdoutLog, "a", 384);
-  const stderrFd = openSync(stderrLog, "a", 384);
-  const spawnOpts = {
-    cwd: opts.cwd ?? process.cwd(),
-    env: opts.env ?? process.env,
-    detached: true,
-    stdio: ["ignore", stdoutFd, stderrFd]
-  };
-  let child;
-  try {
-    child = await new Promise((resolve, reject) => {
-      let settled = false;
-      const c = spawnChild(binPath, args, spawnOpts);
-      c.once("error", (e) => {
-        if (settled) return;
-        settled = true;
-        reject(e instanceof Error ? e : new Error(String(e)));
-      });
-      c.once("spawn", () => {
-        if (settled) return;
-        settled = true;
-        resolve(c);
-      });
-    });
-  } catch (e) {
-    closeSync(stdoutFd);
-    closeSync(stderrFd);
-    removeSelfRegistry(name);
-    throw new Error(
-      `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
-    );
-  }
-  closeSync(stdoutFd);
-  closeSync(stderrFd);
-  child.unref();
-  child.on("error", () => {
-  });
-  const pid = child.pid;
-  if (pid === void 0) {
-    removeSelfRegistry(name);
-    throw new Error(`codex daemon '${name}' spawned without a pid`);
-  }
-  const startedAt = nowSec();
-  atomicWrite2(codexPidFile(name), `${pid}
-`);
-  atomicWrite2(codexStartedAtFile(name), `${startedAt}
-`);
-  if (opts.meta !== void 0 && opts.meta !== null) {
-    atomicWrite2(codexMetaFile(name), JSON.stringify(opts.meta, null, 2) + "\n");
-  }
-  try {
-    await waitForSocket(socketPath, pid, readyTimeoutMs);
-  } catch (e) {
-    killProcessGroup(pid, "SIGKILL");
-    removeSelfRegistry(name);
-    throw e;
-  }
-  return {
-    name,
-    pid,
-    startedAt,
-    socketPath,
-    threadId: null,
-    lastSeen: null
-  };
-}
-async function waitForSocket(path, pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (existsSync(path)) {
-      try {
-        const st = statSync(path);
-        if (st.isSocket()) return;
-      } catch {
-      }
-    }
-    if (!isProcessAlive(pid)) {
-      throw new Error(
-        `codex daemon (pid ${pid}) exited before binding ${path}`
-      );
-    }
-    await new Promise((res) => setTimeout(res, 25));
-  }
-  throw new Error(
-    `codex daemon (pid ${pid}) did not bind ${path} within ${timeoutMs}ms`
-  );
-}
-async function reapDaemon(name) {
-  const state = readDaemonState(name);
-  if (state !== null) {
-    if (isProcessAlive(state.pid)) {
-      killProcessGroup(state.pid, "SIGTERM");
-      const deadline = Date.now() + 1e3;
-      while (Date.now() < deadline) {
-        if (!isProcessAlive(state.pid)) break;
-        await new Promise((res) => setTimeout(res, 25));
-      }
-    }
-    killProcessGroup(state.pid, "SIGKILL");
-  }
-  removeSelfRegistry(name);
-}
-function touchLastSeen(name) {
-  writeFileSync2(codexLastSeenFile(name), `${nowSec()}
-`);
-}
-function writeThreadId(name, threadId) {
-  atomicWrite2(codexThreadFile(name), `${threadId}
-`);
-}
-
 // src/engines/codex/engine.ts
 var CODEX_CLIENT_INFO = {
   name: "claudemux",
@@ -4966,7 +6803,7 @@ var CodexEngine = class {
     detachedTurn: "unsupported",
     events: "push"
   };
-  async spawn(req, ctx2) {
+  async spawn(req, ctx) {
     const existing = readBaseRecord(req.name);
     if (existing !== null) {
       if (existing.engine !== "codex") return { kind: "already-exists", existingEngine: existing.engine };
@@ -4974,7 +6811,7 @@ var CodexEngine = class {
       removeBaseRecord(req.name);
     }
     if (daemonAlive(req.name)) return { kind: "already-exists", existingEngine: "codex" };
-    const createdAt = Math.floor(ctx2.now() / 1e3);
+    const createdAt = Math.floor(ctx.now() / 1e3);
     const record = new CodexTeammateRecord({
       name: req.name,
       cwd: req.cwd,
@@ -4986,7 +6823,7 @@ var CodexEngine = class {
         name: req.name,
         binPath: this.options.binPath,
         cwd: req.cwd,
-        env: ctx2.env,
+        env: ctx.env,
         readyTimeoutMs: this.options.readyTimeoutMs,
         meta: {
           schema: 1,
@@ -5003,7 +6840,7 @@ var CodexEngine = class {
       }
       const firstTurn = await this.send(
         { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs },
-        ctx2
+        ctx
       );
       return { kind: "spawned", name: req.name, firstTurn };
     } catch (e) {
@@ -5179,9 +7016,9 @@ var CodexEngine = class {
     return { kind: "not-supported", reason: "codex has no reload prompt command" };
   }
   async inspect(req, _ctx) {
-    const status2 = await this.status({ name: req.name, lines: null }, _ctx);
-    if (status2.kind !== "present") return { engine: "codex", name: req.name, fields: { status: status2.kind } };
-    return { engine: "codex", name: req.name, fields: status2.diagnostics };
+    const status = await this.status({ name: req.name, lines: null }, _ctx);
+    if (status.kind !== "present") return { engine: "codex", name: req.name, fields: { status: status.kind } };
+    return { engine: "codex", name: req.name, fields: status.diagnostics };
   }
   async doctor(_ctx) {
     const findings = [];
@@ -5231,8 +7068,271 @@ async function openInitializedCodexClient(name) {
   }
 }
 
+// src/engines/registry.ts
+var EngineRegistry = class {
+  engines = /* @__PURE__ */ new Map();
+  /** Add an engine; throws if a kind is registered twice in one process. */
+  register(engine) {
+    if (this.engines.has(engine.kind)) {
+      throw new Error(
+        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
+      );
+    }
+    this.engines.set(engine.kind, engine);
+  }
+  get(kind) {
+    return this.engines.get(kind);
+  }
+  registered() {
+    return Array.from(this.engines.values());
+  }
+  kinds() {
+    return Array.from(this.engines.keys());
+  }
+};
+
+// src/engines/production.ts
+function productionRegistry(env) {
+  const registry = new EngineRegistry();
+  registry.register(new ClaudeEngine(env));
+  registry.register(new CodexEngine());
+  return registry;
+}
+
+// src/verbs/archive.ts
+import { readFileSync as readFileSync11, statSync as statSync12, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join11 } from "node:path";
+
+// src/persistence/project-dir.ts
+function encodeProjectDir2(cwd) {
+  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+// src/verbs/archive.ts
+var ARCHIVE_TEMPLATE = `${[
+  "---",
+  "name: dispatcher-tasks-archive",
+  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
+  "metadata:",
+  "  node_type: memory",
+  "  type: project",
+  "---",
+  "",
+  "# Dispatcher task archive",
+  "",
+  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
+  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
+  "that outlives a task should be promoted to its own memory file, not kept here.",
+  "",
+  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
+].join("\n")}
+`;
+function die2(message) {
+  return { code: 1, stdout: "", stderr: `tm: ${message}
+` };
+}
+function isRegularFile5(path) {
+  try {
+    return statSync12(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function fmtLocalDate() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function ledgerLines(content) {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+function parseArchiveArgs(args) {
+  let id = "";
+  let status = "";
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--status") {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
+      status = args[i + 1];
+      i++;
+    } else if (arg.startsWith("--status=")) {
+      status = arg.slice("--status=".length);
+    } else if (arg.startsWith("-")) {
+      return { error: die2(`tm archive: unknown flag: ${arg}`) };
+    } else if (id === "") {
+      id = arg;
+    } else {
+      return { error: die2(`tm archive: unexpected arg: ${arg}`) };
+    }
+  }
+  return { id, status };
+}
+async function archiveVerb(args, stdin, env) {
+  const parsed = parseArchiveArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { id } = parsed;
+  if (id === "") {
+    return die2("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
+  }
+  const memoryDir = join11(env.projectsDir, encodeProjectDir2(env.dispatcherDir), "memory");
+  const activePath = join11(memoryDir, "active-dispatcher-tasks.md");
+  const archivePath = join11(memoryDir, "dispatcher-tasks-archive.md");
+  if (!isRegularFile5(activePath)) return die2(`no active ledger at ${activePath}`);
+  const outcome = (stdin ?? "").replace(/\n+$/, "");
+  if (outcome.replace(/\s/g, "") === "") {
+    return die2(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
+  }
+  const activeContent = readFileSync11(activePath, "utf8");
+  const activeLines = ledgerLines(activeContent);
+  let headerRe;
+  try {
+    headerRe = new RegExp(`^### ${id}(\\s|$)`);
+  } catch {
+    headerRe = /(?!)/;
+  }
+  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
+  if (headerLines.length === 0) {
+    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
+    return die2(`id not found in active ledger: ${id}
+  available: ${available}`);
+  }
+  if (headerLines.length !== 1) {
+    return die2(`id matches ${headerLines.length} entries in active ledger: ${id}`);
+  }
+  const start = headerLines[0];
+  const total = (activeContent.match(/\n/g) ?? []).length;
+  let end = total;
+  for (let index = start; index < activeLines.length; index++) {
+    if (/^(### |## )/.test(activeLines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const blockLines = activeLines.slice(start - 1, end);
+  let status = parsed.status;
+  if (status === "") {
+    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
+    status = tag ? tag[1] : "done";
+  }
+  const field = (name) => {
+    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
+    if (line === void 0) return "(unknown)";
+    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
+    return value === "" ? "(unknown)" : value;
+  };
+  const entry = `### ${id}  [${status}]
+- repo/branch: ${field("repo")} / ${field("branch")}
+- intent: ${field("intent")}
+- outcome: ${outcome}
+- closed: ${fmtLocalDate()}`;
+  const archiveContent = isRegularFile5(archivePath) ? readFileSync11(archivePath, "utf8") : ARCHIVE_TEMPLATE;
+  const archiveLines = ledgerLines(archiveContent);
+  let firstEntry = 0;
+  for (let index = 0; index < archiveLines.length; index++) {
+    if (archiveLines[index].startsWith("### ")) {
+      firstEntry = index + 1;
+      break;
+    }
+  }
+  let newArchive;
+  if (firstEntry > 0) {
+    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
+` : "";
+    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
+`;
+    newArchive = `${head}${entry}
+
+${tail}`;
+  } else {
+    newArchive = `${archiveContent}
+${entry}
+`;
+  }
+  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
+  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
+` : "";
+  writeFileSync5(archivePath, newArchive);
+  writeFileSync5(activePath, newActive);
+  return {
+    code: 0,
+    stdout: `archived ${id}  [${status}] -> dispatcher-tasks-archive.md  (removed from active ledger)
+`,
+    stderr: ""
+  };
+}
+
 // src/engines/codex/verbs.ts
-function die(message) {
+import { closeSync as closeSync2, openSync as openSync2, rmSync as rmSync6, writeSync as writeSync2 } from "node:fs";
+
+// src/verbs/format.ts
+function teammateNotFound(name) {
+  return { code: 1, stdout: "", stderr: `tm: no such teammate: ${name}
+` };
+}
+function noEngineRegistered() {
+  return {
+    code: 1,
+    stdout: "",
+    stderr: "tm: no engine registered in this process (Phase 2 wiring pending)\n"
+  };
+}
+function formatListing(rows) {
+  if (rows.length === 0) {
+    return { code: 0, stdout: "(no teammate sessions; use 'tm spawn <repo>')\n", stderr: "" };
+  }
+  const lines = rows.map((r) => `${r.name}	${r.engine}	${r.state}	${r.cwd}`);
+  return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+}
+function formatStatus(status) {
+  switch (status.kind) {
+    case "present": {
+      return { code: 0, stdout: status.pane ?? "", stderr: "" };
+    }
+    case "not-found":
+      return { code: 1, stdout: "", stderr: "tm: status: not found\n" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: status: ${status.message}
+` };
+  }
+}
+function formatKill(name, result) {
+  switch (result.kind) {
+    case "killed":
+      return { code: 0, stdout: `killed: ${name}
+`, stderr: "" };
+    case "not-found":
+      return { code: 0, stdout: `not running: ${name}
+`, stderr: "" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: kill: ${result.message}
+` };
+  }
+}
+function formatTurn(turn) {
+  switch (turn.kind) {
+    case "completed":
+      return { code: 0, stdout: turn.text.endsWith("\n") ? turn.text : `${turn.text}
+`, stderr: "" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: turn failed: ${turn.message}
+` };
+    case "timed-out":
+      return { code: 1, stdout: "", stderr: `tm: turn timed out after ${turn.elapsedMs}ms
+` };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${turn.reason}
+` };
+    case "no-op":
+      return { code: 0, stdout: "", stderr: `  no-op: ${turn.reason}
+` };
+  }
+}
+
+// src/engines/codex/verbs.ts
+function die3(message) {
   return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
 }
@@ -5278,14 +7378,14 @@ async function codexSpawn(name, opts = {}) {
       };
     }
     case "already-exists":
-      return die(`codex teammate '${name}' already exists (engine=${result.existingEngine})`);
+      return die3(`codex teammate '${name}' already exists (engine=${result.existingEngine})`);
     case "failed":
-      return die(result.message);
+      return die3(result.message);
   }
 }
 async function codexSend(name, prompt, opts = {}) {
   if (opts.noWait === true) {
-    return die("tm send: --no-wait is not supported for codex teammates");
+    return die3("tm send: --no-wait is not supported for codex teammates");
   }
   const result = await resolveEngine(opts.engine).send(
     {
@@ -5304,75 +7404,6 @@ async function codexWait(name, opts = {}) {
   );
   return formatTurn(result);
 }
-async function codexKill(name, opts = {}) {
-  const state = readDaemonState(name);
-  const base = readBaseRecord(name);
-  const result = await resolveEngine(opts.engine).kill({ name }, engineContext());
-  if (result.kind === "failed") return die(result.message);
-  if (result.kind === "not-found" || state === null && base === null) {
-    return {
-      code: 0,
-      stdout: "",
-      stderr: `no codex teammate '${name}' to kill (already gone)
-`
-    };
-  }
-  return {
-    code: 0,
-    stdout: "",
-    stderr: state === null ? `killed: ${name}
-` : `killed: ${name} (was pid=${state.pid})
-`
-  };
-}
-async function codexListLines(engine) {
-  const rows = await resolveEngine(engine).list(engineContext());
-  return rows.map((row) => formatListLine(row));
-}
-function formatListLine(row) {
-  const pid = row.extras["pid"] === void 0 || row.extras["pid"] === "" ? "?" : row.extras["pid"];
-  return `${row.name}: codex daemon (${row.state}; pid=${pid})`;
-}
-async function codexStateRows(nowSec3, engine) {
-  const rows = await resolveEngine(engine).list(engineContext());
-  return rows.map((row) => {
-    const thread = row.extras["thread"] ?? "";
-    const lastSeen = row.extras["lastSeen"] ?? "";
-    const pid = row.extras["pid"] ?? "";
-    const lastSeenSec = Number.parseInt(lastSeen, 10);
-    const last2 = Number.isFinite(lastSeenSec) ? `${Math.max(0, nowSec3 - lastSeenSec)}s` : "-";
-    const preview = pid.length === 0 ? "codex daemon" : `pid=${pid}`;
-    return [
-      row.name,
-      thread.length === 0 ? "codex" : thread.slice(0, 8),
-      row.state === "busy" ? "yes" : row.state === "idle" ? "no" : "?",
-      last2,
-      preview
-    ];
-  });
-}
-async function codexStatus(name, engine) {
-  const result = await resolveEngine(engine).status({ name, lines: null }, engineContext());
-  switch (result.kind) {
-    case "present": {
-      const lines = [
-        `codex teammate: ${result.name}`,
-        `engine:          ${result.engine}`,
-        `state:           ${result.state}`,
-        `cwd:             ${result.cwd}`
-      ];
-      for (const [key, value] of Object.entries(result.diagnostics)) {
-        if (value.length > 0) lines.push(`${key}: ${value}`);
-      }
-      return { code: 0, stdout: `${lines.join("\n")}
-`, stderr: "" };
-    }
-    case "not-found":
-      return die(`no such codex teammate: ${name}`);
-    case "failed":
-      return die(`codex status on '${name}' failed: ${result.message}`);
-  }
-}
 function tryBorrow(name) {
   try {
     const fd = openSync2(codexBorrowLockFile(name), "wx", 384);
@@ -5388,13 +7419,13 @@ function tryBorrow(name) {
   }
 }
 function releaseBorrow(name) {
-  rmSync3(codexBorrowLockFile(name), { force: true });
+  rmSync6(codexBorrowLockFile(name), { force: true });
 }
 async function codexAsk(prompt) {
-  if (prompt.length === 0) return die('usage: tm ask "<prompt>"');
+  if (prompt.length === 0) return die3('usage: tm ask "<prompt>"');
   const candidates = listDaemons();
   if (candidates.length === 0) {
-    return die("no codex teammates available \u2014 run 'tm spawn codex-1' (or similar) first");
+    return die3("no codex teammates available \u2014 run 'tm spawn codex-1' (or similar) first");
   }
   let borrowed = null;
   let aliveCount = 0;
@@ -5408,9 +7439,9 @@ async function codexAsk(prompt) {
   }
   if (borrowed === null) {
     if (aliveCount === 0) {
-      return die(`all ${candidates.length} codex teammate(s) are dead \u2014 'tm doctor' will reap them`);
+      return die3(`all ${candidates.length} codex teammate(s) are dead \u2014 'tm doctor' will reap them`);
     }
-    return die(`all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`);
+    return die3(`all ${aliveCount} alive codex teammate(s) are busy \u2014 retry, or spawn another`);
   }
   const borrowedName = borrowed;
   let client = null;
@@ -5429,7 +7460,7 @@ async function codexAsk(prompt) {
       stderr: ""
     };
   } catch (e) {
-    return die(
+    return die3(
       `codex ask on '${borrowedName}' failed: ${e instanceof Error ? e.message : String(e)}`
     );
   } finally {
@@ -5438,928 +7469,34 @@ async function codexAsk(prompt) {
   }
 }
 
-// src/engines/claude/ctx.ts
-import { readFileSync as readFileSync4, statSync as statSync3 } from "node:fs";
-import { join as join5 } from "node:path";
-
-// src/engines/claude/persistence.ts
-import { join as join4 } from "node:path";
-var TEAMMATE_ROOT = "/tmp";
-function cwdFile2(name) {
-  return join4(TEAMMATE_ROOT, `teammate-${name}.cwd`);
-}
-function sidFile2(name) {
-  return join4(TEAMMATE_ROOT, `teammate-${name}.sid`);
-}
-function readyFile2(name) {
-  return join4(TEAMMATE_ROOT, `teammate-${name}.ready`);
-}
-function sendAtFile2(name) {
-  return join4(TEAMMATE_ROOT, `teammate-${name}.send-at`);
-}
-function idleDir2() {
-  return "/tmp/claude-idle";
-}
-function idleMarkerFor2(sid) {
-  return join4(idleDir2(), sid);
-}
-function busyMarkerFor2(sid) {
-  return join4(idleDir2(), `${sid}.busy`);
-}
-function lastFileFor2(sid) {
-  return join4(idleDir2(), `${sid}.last`);
-}
-var TMUX_SESSION_PREFIX = "teammate-";
-
-// src/engines/claude/state.ts
-import { readFileSync as readFileSync3, statSync as statSync2 } from "node:fs";
-function rstrip(text) {
-  return text.replace(/\n+$/, "");
-}
-function readIfNonEmpty(path) {
-  try {
-    if (statSync2(path).size === 0) return null;
-    return readFileSync3(path, "utf8");
-  } catch {
-    return null;
+// src/verbs/ask.ts
+async function askVerb(args) {
+  if (args.length === 0) {
+    return { code: 1, stdout: "", stderr: 'tm: usage: tm ask "<prompt>"\n' };
   }
-}
-function readSid(name) {
-  const raw = readIfNonEmpty(sidFile2(name));
-  return raw === null ? null : rstrip(raw);
-}
-function isRegularFile(path) {
-  try {
-    return statSync2(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function fmtAge(age) {
-  if (age < 60) return `${age}s`;
-  if (age < 3600) return `${Math.floor(age / 60)}m`;
-  if (age < 86400) return `${Math.floor(age / 3600)}h`;
-  return `${Math.floor(age / 86400)}d`;
-}
-function lastPreview(lastPath) {
-  let content;
-  try {
-    content = readFileSync3(lastPath, "utf8");
-  } catch {
-    return "(no first line)";
-  }
-  const preview = [...content.split("\n")[0] ?? ""].filter((ch) => (ch.codePointAt(0) ?? 0) > 31).slice(0, 50).join("");
-  return preview.length > 0 ? preview : "(no first line)";
-}
-function listingExtras(name, now) {
-  const sid = readSid(name);
-  const sidShort = sid === null ? "?" : sid.slice(0, 8);
-  const busy = sid !== null && isRegularFile(busyMarkerFor2(sid)) ? "yes" : "no";
-  let last2 = "-";
-  let preview = "-";
-  if (sid !== null && sid.length > 0) {
-    const lf = lastFileFor2(sid);
-    let stat;
-    try {
-      stat = statSync2(lf);
-    } catch {
-      stat = null;
-    }
-    if (stat !== null && stat.size > 0) {
-      const age = now - Math.floor(stat.mtimeMs / 1e3);
-      last2 = `${stat.size}B/${fmtAge(age)}`;
-      preview = lastPreview(lf);
-    }
-  }
-  return { sidShort, busy, last: last2, preview };
-}
-
-// src/engines/claude/ctx.ts
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function usageInput(usage) {
-  const num = (v) => typeof v === "number" ? v : 0;
-  return num(usage["input_tokens"]) + num(usage["cache_creation_input_tokens"]) + num(usage["cache_read_input_tokens"]);
-}
-function readIfNonEmpty2(file) {
-  try {
-    if (statSync3(file).size === 0) return null;
-    return readFileSync4(file, "utf8");
-  } catch {
-    return null;
-  }
-}
-function isRegularFile2(path) {
-  try {
-    return statSync3(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function transcriptFile(projectsDir, cwd, sid) {
-  return join5(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
-}
-function readCtxUsage(jsonl) {
-  let content;
-  try {
-    content = readFileSync4(jsonl, "utf8");
-  } catch {
-    return null;
-  }
-  const inputs = [];
-  let lastOut = 0;
-  for (const line of content.split("\n")) {
-    if (line.trim() === "") continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      return null;
-    }
-    if (entry === null) continue;
-    if (!isPlainObject(entry)) return null;
-    if (entry["type"] !== "assistant") continue;
-    const message = entry["message"];
-    if (message === null || message === void 0) continue;
-    if (!isPlainObject(message)) return null;
-    const usage = message["usage"];
-    if (usage === null || usage === void 0) continue;
-    if (!isPlainObject(usage)) return null;
-    inputs.push(usageInput(usage));
-    lastOut = typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : 0;
-  }
-  if (inputs.length === 0) return null;
-  let peak = inputs[0];
-  for (const value of inputs) if (value > peak) peak = value;
-  return { used: inputs[inputs.length - 1], out: lastOut, peak };
-}
-function claudeCtxLine(name, windowOverride, env) {
-  const sid = readSid(name);
-  if (sid === null) return `${name}: ? (no sid file)`;
-  const recordedCwd = readIfNonEmpty2(cwdFile2(name));
-  const cwd = recordedCwd !== null ? recordedCwd.replace(/\n+$/, "") : `${env.dispatcherDir}/${name}`;
-  const jsonl = transcriptFile(env.projectsDir, cwd, sid);
-  if (!isRegularFile2(jsonl)) return `${name}: ? (no transcript at ${jsonl})`;
-  const usage = readCtxUsage(jsonl);
-  if (usage === null) return `${name}: ? (no assistant usage in transcript)`;
-  const next = usage.used + usage.out;
-  let window;
-  let note;
-  if (windowOverride === "1m") {
-    window = 1e6;
-    note = "flag";
-  } else if (windowOverride === "200k") {
-    window = 2e5;
-    note = "flag";
-  } else if (usage.peak > 21e4) {
-    window = 1e6;
-    note = "detected 1M";
-  } else {
-    window = 2e5;
-    note = "assumed 200k";
-  }
-  const pct = Math.floor(usage.used * 100 / window);
-  const wlabel = window >= 1e6 ? "1M" : "200k";
-  return `${name}: ${usage.used} tokens \xB7 ~${next} next turn \xB7 ${pct}% of ${wlabel} (${note})`;
-}
-function claudeCtxUsage(name, env) {
-  const sid = readSid(name);
-  if (sid === null) return { kind: "not-supported", reason: `no sid file for ${name}` };
-  const recordedCwd = readIfNonEmpty2(cwdFile2(name));
-  const cwd = recordedCwd !== null ? recordedCwd.replace(/\n+$/, "") : `${env.dispatcherDir}/${name}`;
-  const jsonl = transcriptFile(env.projectsDir, cwd, sid);
-  if (!isRegularFile2(jsonl)) {
-    return { kind: "not-supported", reason: `no transcript at ${jsonl}` };
-  }
-  const usage = readCtxUsage(jsonl);
-  if (usage === null) {
-    return { kind: "not-supported", reason: `no assistant usage in transcript for ${name}` };
-  }
-  const window = usage.peak > 21e4 ? 1e6 : 2e5;
-  return {
-    kind: "usage",
-    tokensUsed: usage.used,
-    tokensTotal: window,
-    pct: Math.floor(usage.used * 100 / window)
-  };
-}
-
-// src/engines/claude/last.ts
-import { readFileSync as readFileSync5, statSync as statSync4 } from "node:fs";
-function readIfNonEmpty3(file) {
-  try {
-    if (statSync4(file).size === 0) return null;
-    return readFileSync5(file, "utf8");
-  } catch {
-    return null;
-  }
-}
-function claudeLast(name) {
-  const sid = readSid(name);
-  if (sid === null) {
+  if (args.length > 1) {
     return {
-      kind: "failed",
-      message: `no sid file for ${name} at ${sidFile2(name)} \u2014 was this teammate spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)`
+      code: 1,
+      stdout: "",
+      stderr: `tm: tm ask: takes exactly one positional argument (the prompt) \u2014 got ${args.length}
+`
     };
   }
-  const file = lastFileFor2(sid);
-  const reply = readIfNonEmpty3(file);
-  if (reply === null) {
-    return {
-      kind: "failed",
-      message: `no reply yet for ${name} (sid=${sid}) \u2014 file is missing or empty at ${file}. Try 'tm wait ${name}' to block for the next Stop, or 'tm send ${name} --prompt "..."' to drive a turn.`
-    };
-  }
-  return { kind: "text", text: reply };
+  return codexAsk(args[0] ?? "");
 }
 
-// src/engines/claude/mem.ts
-import { readFileSync as readFileSync6, realpathSync, statSync as statSync5 } from "node:fs";
-import { dirname as dirname3, join as join6 } from "node:path";
-function isRegularFile3(path) {
-  try {
-    return statSync5(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function isDirectory(path) {
-  try {
-    return statSync5(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function projectDirForName(name, env) {
-  const phys = realpathSync(join6(env.dispatcherDir, name));
-  return join6(env.projectsDir, encodeProjectDir(phys));
-}
-function repoNotFoundMessage(verb, name, expected, dispatcherDir) {
-  if (isDirectory(join6(dispatcherDir, ".git"))) {
-    return `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
-    The dispatcher dir should be the PARENT of your sibling repos.
-    Try:  cd "${dirname3(dispatcherDir)}" && tm ${verb} ${name}
-    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
-    \u2014 run /claudemux:setup to wire it up automatically.)`;
-  }
-  return `repo not found at ${expected} \u2014 <repo> must be a direct subdirectory of the dispatcher dir (${dispatcherDir}). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.`;
-}
-function claudeMem(name, env) {
-  const path = join6(env.dispatcherDir, name);
-  if (!isDirectory(path)) {
-    return { kind: "failed", message: repoNotFoundMessage("mem", name, path, env.dispatcherDir) };
-  }
-  const mfile = join6(projectDirForName(name, env), "memory", "MEMORY.md");
-  if (!isRegularFile3(mfile)) {
-    return {
-      kind: "not-supported",
-      reason: `tm mem: no auto-memory recorded for ${name} (looked at ${mfile})`
-    };
-  }
-  return { kind: "text", text: readFileSync6(mfile, "utf8") };
-}
-
-// src/native.ts
-var SESSION_PREFIX = "teammate-";
-function die2(message) {
-  return { code: 1, stdout: "", stderr: `tm: ${message}
-` };
-}
-function sessionField(line) {
-  const colon = line.indexOf(":");
-  return colon >= 0 ? line.slice(0, colon) : line;
-}
-var ls = async (_args, _options, env) => {
-  let listing = "";
-  try {
-    listing = (await env.runTmux(["ls"])).stdout;
-  } catch {
-    listing = "";
-  }
-  const rows = listing.split("\n").filter((line) => sessionField(line).startsWith(SESSION_PREFIX));
-  const codexRows = await codexListLines(env.engines?.get("codex"));
-  const allRows = [...rows, ...codexRows];
-  const text = allRows.length > 0 ? `${allRows.join("\n")}
-` : "(no teammate sessions; use 'tm spawn <repo>')\n";
-  return { code: 0, stdout: text, stderr: "" };
-};
-function resolveSid(repo) {
-  try {
-    const file = sidFile(repo);
-    if (statSync6(file).size === 0) return null;
-    return readFileSync7(file, "utf8").replace(/\n+$/, "");
-  } catch {
-    return null;
-  }
-}
-function readIfNonEmpty4(file) {
-  try {
-    if (statSync6(file).size === 0) return null;
-    return readFileSync7(file, "utf8");
-  } catch {
-    return null;
-  }
-}
-var last = async (args) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die2("usage: tm last <repo>");
-  const result = claudeLast(repo);
-  if (result.kind === "text") return { code: 0, stdout: result.text, stderr: "" };
-  if (result.kind === "failed") return die2(result.message);
-  return die2(`unexpected last result: ${result.kind}`);
-};
-function usageInput2(usage) {
-  const num = (v) => typeof v === "number" ? v : 0;
-  return num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens);
-}
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function readCtxUsage2(jsonl) {
-  let content;
-  try {
-    content = readFileSync7(jsonl, "utf8");
-  } catch {
-    return null;
-  }
-  const inputs = [];
-  let lastOut = 0;
-  for (const line of content.split("\n")) {
-    if (line.trim() === "") continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      return null;
-    }
-    if (entry === null) continue;
-    if (!isPlainObject2(entry)) return null;
-    if (entry.type !== "assistant") continue;
-    const message = entry.message;
-    if (message === null || message === void 0) continue;
-    if (!isPlainObject2(message)) return null;
-    const usage = message.usage;
-    if (usage === null || usage === void 0) continue;
-    if (!isPlainObject2(usage)) return null;
-    inputs.push(usageInput2(usage));
-    lastOut = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  }
-  if (inputs.length === 0) return null;
-  let peak = inputs[0];
-  for (const value of inputs) if (value > peak) peak = value;
-  return { used: inputs[inputs.length - 1], out: lastOut, peak };
-}
-function transcriptFile2(projectsDir, cwd, sid) {
-  return join7(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
-}
-function isRegularFile4(path) {
-  try {
-    return statSync6(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function isDirectory2(path) {
-  try {
-    return statSync6(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function ctxLine(repo, windowOverride, env) {
-  const sid = resolveSid(repo);
-  if (sid === null) return `${repo}: ? (no sid file)`;
-  const recordedCwd = readIfNonEmpty4(cwdFile(repo));
-  const cwd = recordedCwd !== null ? recordedCwd.replace(/\n+$/, "") : `${env.dispatcherDir}/${repo}`;
-  const jsonl = transcriptFile2(env.projectsDir, cwd, sid);
-  if (!isRegularFile4(jsonl)) return `${repo}: ? (no transcript at ${jsonl})`;
-  const usage = readCtxUsage2(jsonl);
-  if (usage === null) return `${repo}: ? (no assistant usage in transcript)`;
-  const next = usage.used + usage.out;
-  let window;
-  let note;
-  if (windowOverride === "1m") {
-    window = 1e6;
-    note = "flag";
-  } else if (windowOverride === "200k") {
-    window = 2e5;
-    note = "flag";
-  } else if (usage.peak > 21e4) {
-    window = 1e6;
-    note = "detected 1M";
-  } else {
-    window = 2e5;
-    note = "assumed 200k";
-  }
-  const pct = Math.floor(usage.used * 100 / window);
-  const wlabel = window >= 1e6 ? "1M" : "200k";
-  return `${repo}: ${usage.used} tokens \xB7 ~${next} next turn \xB7 ${pct}% of ${wlabel} (${note})`;
-}
-async function iterRepos(runTmux2) {
-  let listing = "";
-  try {
-    listing = (await runTmux2(["ls"])).stdout;
-  } catch {
-    listing = "";
-  }
-  const repos = [];
-  for (const line of listing.split("\n")) {
-    const field = sessionField(line);
-    if (field.startsWith(SESSION_PREFIX)) repos.push(field.slice(SESSION_PREFIX.length));
-  }
-  return repos;
-}
-function parseCtxArgs(args) {
-  const repos = [];
-  let windowOverride = "";
-  let all = false;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--all") {
-      all = true;
-    } else if (arg === "--window") {
-      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
-      windowOverride = args[i + 1];
-      i++;
-    } else if (arg.startsWith("--window=")) {
-      windowOverride = arg.slice("--window=".length);
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`tm ctx: unknown flag: ${arg}`) };
-    } else {
-      repos.push(arg);
-    }
-  }
-  if (windowOverride !== "" && windowOverride !== "200k" && windowOverride !== "1m") {
-    return { error: die2("tm ctx: --window must be 200k or 1m") };
-  }
-  return { repos, windowOverride, all };
-}
-var ctx = async (args, _options, env) => {
-  const parsed = parseCtxArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const repos = [...parsed.repos];
-  if (parsed.all) repos.push(...await iterRepos(env.runTmux));
-  if (repos.length === 0) {
-    return die2("usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]");
-  }
-  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env));
-  return { code: 0, stdout: `${lines.join("\n")}
-`, stderr: "" };
-};
-function fmtAge2(age) {
-  if (age < 60) return `${age}s`;
-  if (age < 3600) return `${Math.floor(age / 60)}m`;
-  if (age < 86400) return `${Math.floor(age / 3600)}h`;
-  return `${Math.floor(age / 86400)}d`;
-}
-function lastPreview2(lastFile) {
-  let content;
-  try {
-    content = readFileSync7(lastFile, "utf8");
-  } catch {
-    return "(no first line)";
-  }
-  const preview = [...content.split("\n")[0] ?? ""].filter((ch) => (ch.codePointAt(0) ?? 0) > 31).slice(0, 50).join("");
-  return preview.length > 0 ? preview : "(no first line)";
-}
-function statesRow(repo, now) {
-  const sid = resolveSid(repo);
-  const sidShort = sid === null ? "?" : sid.slice(0, 8);
-  const busy = sid !== null && isRegularFile4(busyMarkerFor(sid)) ? "yes" : "no";
-  let last2 = "-";
-  let preview = "-";
-  if (sid !== null && sid.length > 0) {
-    const lf = lastFileFor(sid);
-    let stat;
-    try {
-      stat = statSync6(lf);
-    } catch {
-      stat = null;
-    }
-    if (stat !== null && stat.size > 0) {
-      const age = now - Math.floor(stat.mtimeMs / 1e3);
-      last2 = `${stat.size}B/${fmtAge2(age)}`;
-      preview = lastPreview2(lf);
-    }
-  }
-  return [repo, sidShort, busy, last2, preview];
-}
-var states = async (_args, _options, env) => {
-  const repos = await iterRepos(env.runTmux);
-  const now = Math.floor(Date.now() / 1e3);
-  const codexRows = await codexStateRows(now, env.engines?.get("codex"));
-  if (repos.length === 0 && codexRows.length === 0) {
-    return { code: 0, stdout: "(no teammate sessions)\n", stderr: "" };
-  }
-  const rows = [
-    ["REPO", "SID", "BUSY", "LAST", "PREVIEW"],
-    ...repos.map((repo) => statesRow(repo, now)),
-    ...codexRows
-  ];
-  return env.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
-`);
-};
-function dieRepoNotFound(verb, repo, path, dispatcherDir) {
-  if (isDirectory2(join7(dispatcherDir, ".git"))) {
-    return die2(
-      `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
-    The dispatcher dir should be the PARENT of your sibling repos.
-    Try:  cd "${dirname4(dispatcherDir)}" && tm ${verb} ${repo}
-    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
-    \u2014 run /claudemux:setup to wire it up automatically.)`
-    );
-  }
-  return die2(
-    `repo not found at ${path} \u2014 <repo> must be a direct subdirectory of the dispatcher dir (${dispatcherDir}). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.`
-  );
-}
-function projectDirForRepo(repo, env) {
-  const phys = realpathSync2(join7(env.dispatcherDir, repo));
-  return join7(env.projectsDir, encodeProjectDir(phys));
-}
-var mem = async (args, _options, env) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die2("usage: tm mem <repo>");
-  const result = claudeMem(repo, env);
-  switch (result.kind) {
-    case "text":
-      return { code: 0, stdout: result.text, stderr: "" };
-    case "failed":
-      return die2(result.message);
-    case "not-supported":
-      return { code: 0, stdout: "", stderr: `${result.reason}
-` };
-  }
-};
-function toFixed1HalfEven(value) {
-  const tenths = value * 10;
-  const floor = Math.floor(tenths);
-  const frac = tenths - floor;
-  let rounded;
-  if (frac < 0.5) rounded = floor;
-  else if (frac > 0.5) rounded = floor + 1;
-  else rounded = floor % 2 === 0 ? floor : floor + 1;
-  return (rounded / 10).toFixed(1);
-}
-function fmtSize(bytes) {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1048576) return `${Math.trunc(bytes / 1024)}K`;
-  if (bytes < 1073741824) return `${toFixed1HalfEven(bytes / 1048576)}M`;
-  return `${toFixed1HalfEven(bytes / 1073741824)}G`;
-}
-function fmtLocalDateTime(epochSec) {
-  const d = new Date(epochSec * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-function mungeCreated(ts) {
-  return ts.replace("T", " ").replace(/\.[0-9]+Z?$/, "").replace(/Z$/, "");
-}
-function indent(text) {
-  return text.split("\n").map((line) => `  ${line}`).join("\n");
-}
-function bashNum(value) {
-  const n = Number(value);
-  return Number.isInteger(n) ? n : 0;
-}
-function contentTextItems(content) {
-  let hasText = false;
-  const texts = [];
-  for (const item of content) {
-    if (!isPlainObject2(item)) throw new Error("jq-fail");
-    if (item.type === "text") {
-      hasText = true;
-      const t = item.text;
-      if (t === null || t === void 0) texts.push("");
-      else if (typeof t === "string") texts.push(t);
-      else throw new Error("jq-fail");
-    }
-  }
-  return hasText ? texts : null;
-}
-function userPromptText(entry) {
-  const message = entry.message;
-  if (message === null || message === void 0) return null;
-  if (!isPlainObject2(message)) throw new Error("jq-fail");
-  if (message.role !== "user") return null;
-  const content = message.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const texts = contentTextItems(content);
-    return texts === null ? null : texts.join(" ");
-  }
-  return null;
-}
-function historyUsageSum(usage) {
-  if (!isPlainObject2(usage)) throw new Error("jq-fail");
-  let sum = null;
-  for (const key of [
-    "input_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens"
-  ]) {
-    const value = usage[key];
-    if (value === null || value === void 0) continue;
-    if (typeof value !== "number") throw new Error("jq-fail");
-    sum = (sum ?? 0) + value;
-  }
-  return sum;
-}
-function historyUsageStr(sum) {
-  return sum === null ? "null" : String(sum);
-}
-function historyFirstPrompt(content) {
-  for (const line of content.split("\n").slice(0, 200)) {
-    if (line.trim() === "") continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isPlainObject2(entry) || entry.type !== "user") continue;
-    let text;
-    try {
-      text = userPromptText(entry);
-    } catch {
-      continue;
-    }
-    if (text === null) continue;
-    return text.split("\n")[0] ?? "";
-  }
-  return "";
-}
-function historyTopic(content) {
-  const stripped = [...historyFirstPrompt(content)].filter(
-    (ch) => (ch.codePointAt(0) ?? 0) > 31
-  );
-  const topic = stripped.slice(0, 60).join("");
-  return topic.length > 0 ? topic : "(no user prompt)";
-}
-var EMPTY_HISTORY = {
-  firstPrompt: "",
-  lastAssistant: "",
-  createdTs: "",
-  used: "",
-  peak: ""
-};
-function readHistoryData(content) {
-  try {
-    const uPrompts = [];
-    const aTexts = [];
-    const usages = [];
-    const timestamps = [];
-    for (const line of content.split("\n")) {
-      if (line.trim() === "") continue;
-      const entry = JSON.parse(line);
-      if (entry === null) continue;
-      if (!isPlainObject2(entry)) throw new Error("jq-fail");
-      if (entry.type === "user") {
-        const text = userPromptText(entry);
-        if (text !== null) uPrompts.push(text);
-      } else if (entry.type === "assistant") {
-        const message = entry.message;
-        if (message !== null && message !== void 0) {
-          if (!isPlainObject2(message)) throw new Error("jq-fail");
-          if (Array.isArray(message.content)) {
-            const texts = contentTextItems(message.content);
-            if (texts !== null) aTexts.push(texts.join("\n"));
-          }
-          if (message.usage !== null && message.usage !== void 0) {
-            usages.push(message.usage);
-          }
-        }
-      }
-      const ts = entry.timestamp;
-      if (ts !== null && ts !== void 0) timestamps.push(ts);
-    }
-    let createdTs = "";
-    if (timestamps.length > 0) {
-      const first = timestamps[0];
-      if (first === false) createdTs = "";
-      else if (typeof first === "string") createdTs = first;
-      else throw new Error("jq-fail");
-    }
-    let used = "";
-    let peak = "";
-    if (usages.length > 0) {
-      const sums = usages.map(historyUsageSum);
-      used = historyUsageStr(sums[sums.length - 1] ?? null);
-      let peakNum = null;
-      for (const sum of sums) {
-        if (sum !== null && (peakNum === null || sum > peakNum)) peakNum = sum;
-      }
-      peak = historyUsageStr(peakNum);
-    }
-    return {
-      firstPrompt: (uPrompts[0] ?? "").replace(/\n+$/, ""),
-      lastAssistant: (aTexts[aTexts.length - 1] ?? "").replace(/\n+$/, ""),
-      createdTs,
-      used,
-      peak
-    };
-  } catch {
-    return EMPTY_HISTORY;
-  }
-}
-async function historyList(repo, projectDir, env) {
-  if (!isDirectory2(projectDir)) {
-    return { code: 0, stdout: `(no past sessions for ${repo})
-`, stderr: "" };
-  }
-  let names;
-  try {
-    names = readdirSync2(projectDir).filter((name) => name.endsWith(".jsonl"));
-  } catch {
-    names = [];
-  }
-  if (names.length === 0) {
-    return { code: 0, stdout: `(no past sessions for ${repo})
-`, stderr: "" };
-  }
-  const files = names.map((name) => {
-    let mtime = 0;
-    try {
-      mtime = Math.floor(statSync6(join7(projectDir, name)).mtimeMs / 1e3);
-    } catch {
-      mtime = 0;
-    }
-    return { name, mtime };
-  });
-  files.sort((a, b) => b.mtime - a.mtime || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const liveSid = resolveSid(repo) ?? "";
-  const now = Math.floor(Date.now() / 1e3);
-  const rows = [[" ", "SID", "AGE", "SIZE", "TOPIC"]];
-  for (const { name, mtime } of files) {
-    const full = join7(projectDir, name);
-    const sidFull = name.replace(/\.jsonl$/, "");
-    let size = 0;
-    try {
-      size = statSync6(full).size;
-    } catch {
-      size = 0;
-    }
-    let content = "";
-    try {
-      content = readFileSync7(full, "utf8");
-    } catch {
-      content = "";
-    }
-    const mark = liveSid !== "" && sidFull === liveSid ? "*" : " ";
-    rows.push([
-      mark,
-      sidFull.slice(0, 8),
-      fmtAge2(now - mtime),
-      fmtSize(size),
-      historyTopic(content)
-    ]);
-  }
-  return env.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
-`);
-}
-function historyDetail(repo, projectDir, prefix) {
-  if (!/^[0-9a-f-]{1,36}$/.test(prefix)) {
-    return die2(
-      `tm history: invalid sid prefix '${prefix}' \u2014 must match ^[0-9a-f-]{1,36}$`
-    );
-  }
-  if (!isDirectory2(projectDir)) {
-    return die2(`tm history: no project dir at ${projectDir} for ${repo} (no sessions yet)`);
-  }
-  let names;
-  try {
-    names = readdirSync2(projectDir).filter(
-      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile4(join7(projectDir, name2))
-    );
-  } catch {
-    names = [];
-  }
-  names.sort();
-  if (names.length === 0) {
-    return die2(`tm history: no session matching '${prefix}' in ${repo}`);
-  }
-  if (names.length > 1) {
-    const cands = `${names.map((name2) => name2.replace(/\.jsonl$/, "")).join(" ")} `;
-    return die2(
-      `tm history: prefix '${prefix}' matches ${names.length} sessions \u2014 be more specific: ${cands}`
-    );
-  }
-  const name = names[0];
-  const file = join7(projectDir, name);
-  const sidFull = name.replace(/\.jsonl$/, "");
-  let size = 0;
-  let mtime = 0;
-  try {
-    const stat = statSync6(file);
-    size = stat.size;
-    mtime = Math.floor(stat.mtimeMs / 1e3);
-  } catch {
-    size = 0;
-    mtime = 0;
-  }
-  let content = "";
-  try {
-    content = readFileSync7(file, "utf8");
-  } catch {
-    content = "";
-  }
-  const lineCount = (content.match(/\n/g) ?? []).length;
-  const now = Math.floor(Date.now() / 1e3);
-  const data = readHistoryData(content);
-  const createdStr = data.createdTs !== "" ? mungeCreated(data.createdTs) : "";
-  let ctxStr = "(no usage data)";
-  if (data.used !== "" && data.peak !== "") {
-    const window = bashNum(data.peak) > 21e4 ? 1e6 : 2e5;
-    const pct = Math.trunc(bashNum(data.used) * 100 / window);
-    const wlabel = window >= 1e6 ? "1M" : "200k";
-    const note = window >= 1e6 ? "detected 1M" : "assumed 200k";
-    ctxStr = `${data.used} tokens \xB7 ${pct}% of ${wlabel} (${note})`;
-  }
-  let laDisplay = data.lastAssistant !== "" ? data.lastAssistant : "(no assistant text)";
-  if (data.lastAssistant !== "") {
-    const cps = [...data.lastAssistant];
-    if (cps.length > 1500) {
-      laDisplay = `${cps.slice(0, 1500).join("")}
-... (${cps.length - 1500} chars truncated; full text in jsonl)`;
-    }
-  }
-  const fpDisplay = data.firstPrompt !== "" ? data.firstPrompt : "(no user prompt)";
-  const stdout = `sid:        ${sidFull}
-file:       ${file}
-            (${fmtSize(size)} \xB7 ${lineCount} lines)
-created:    ${createdStr !== "" ? createdStr : "(unknown)"}
-last_seen:  ${fmtLocalDateTime(mtime)}  (${fmtAge2(now - mtime)} ago)
-ctx:        ${ctxStr}
-
-first prompt:
-${indent(fpDisplay)}
-
-last assistant:
-${indent(laDisplay)}
-
-resume: tm resume ${repo} ${sidFull}
-`;
-  return { code: 0, stdout, stderr: "" };
-}
-var history = async (args, _options, env) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die2("usage: tm history <repo> [<sid-or-prefix>]");
-  const path = join7(env.dispatcherDir, repo);
-  if (!isDirectory2(path)) return dieRepoNotFound("history", repo, path, env.dispatcherDir);
-  const projectDir = projectDirForRepo(repo, env);
-  const sidArg = args[1] ?? "";
-  return sidArg === "" ? historyList(repo, projectDir, env) : historyDetail(repo, projectDir, sidArg);
-};
-async function requireSession(repo, runTmux2) {
-  const name = `${SESSION_PREFIX}${repo}`;
-  let exists = false;
-  try {
-    exists = (await runTmux2(["has-session", "-t", `=${name}`])).code === 0;
-  } catch {
-    exists = false;
-  }
-  return exists ? null : die2(`no such teammate session: ${repo} (tmux=${name}; try 'tm ls')`);
-}
-async function resolvePaneTarget(repo, runTmux2) {
-  const name = `${SESSION_PREFIX}${repo}`;
-  let listing = "";
-  try {
-    listing = (await runTmux2(["list-sessions", "-F", "#{session_id} #{session_name}"])).stdout;
-  } catch {
-    listing = "";
-  }
-  for (const line of listing.split("\n")) {
-    const space = line.indexOf(" ");
-    if (space >= 0 && line.slice(space + 1) === name) return line.slice(0, space);
-  }
-  return "";
-}
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-var status = async (args, _options, env) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die2("usage: tm status <repo> [lines=80]");
-  if (isCodexTarget(repo)) return codexStatus(repo, env.engines?.get("codex"));
-  const lines = args[1] || "80";
-  const sessionMissing = await requireSession(repo, env.runTmux);
-  if (sessionMissing !== null) return sessionMissing;
-  const pane = await resolvePaneTarget(repo, env.runTmux);
-  if (pane === "") return die2(`could not resolve pane target for ${repo}`);
-  return env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${lines}`]);
-};
-var poll = async (args, _options, env) => {
+// src/verbs/poll.ts
+async function pollVerb(args, env) {
   const repo = args[0] ?? "";
   const pattern = args[1] ?? "";
   if (repo === "" || pattern === "") {
-    return die2("usage: tm poll <repo> <regex> [timeout=180]");
+    return die4("usage: tm poll <repo> <regex> [timeout=180]");
   }
   const timeoutArg = args[2] || "180";
   const sessionMissing = await requireSession(repo, env.runTmux);
   if (sessionMissing !== null) return sessionMissing;
   const pane = await resolvePaneTarget(repo, env.runTmux);
-  if (pane === "") return die2(`could not resolve pane target for ${repo}`);
+  if (pane === "") return die4(`could not resolve pane target for ${repo}`);
   if (!isNonNegativeInteger(timeoutArg)) return { code: 1, stdout: "", stderr: "" };
   const end = Math.floor(Date.now() / 1e3) + Number(timeoutArg);
   while (Math.floor(Date.now() / 1e3) < end) {
@@ -6368,7 +7505,7 @@ var poll = async (args, _options, env) => {
       return { code: 0, stdout: `matched: ${pattern}
 `, stderr: "" };
     }
-    await sleep(3e3);
+    await sleepMs(3e3);
   }
   return {
     code: 1,
@@ -6376,1659 +7513,33 @@ var poll = async (args, _options, env) => {
     stderr: `tm: timeout after ${timeoutArg}s waiting for /${pattern}/ in ${repo}
 `
   };
-};
-function clearIdle(sid) {
-  if (sid === "") return;
-  for (const file of [idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid)]) {
-    rmSync4(file, { force: true });
-  }
 }
-var kill = async (args, _options, env) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) return die2("usage: tm kill <repo>");
-  if (isCodexTarget(repo)) return codexKill(repo, { engine: env.engines?.get("codex") });
-  const name = `${SESSION_PREFIX}${repo}`;
-  const sid = resolveSid(repo);
-  if (sid !== null) clearIdle(sid);
-  for (const file of [sidFile(repo), sendAtFile(repo), readyFile(repo), cwdFile(repo)]) {
-    rmSync4(file, { force: true });
-  }
-  let running = false;
-  try {
-    running = (await env.runTmux(["has-session", "-t", `=${name}`])).code === 0;
-  } catch {
-    running = false;
-  }
-  if (running) {
-    await env.runTmux(["kill-session", "-t", `=${name}`]);
-    return { code: 0, stdout: `killed: ${repo} (tmux=${name})
-`, stderr: "" };
-  }
-  return { code: 0, stdout: `not running: ${repo} (tmux=${name})
-`, stderr: "" };
-};
-var ARCHIVE_TEMPLATE = `${[
-  "---",
-  "name: dispatcher-tasks-archive",
-  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
-  "metadata:",
-  "  node_type: memory",
-  "  type: project",
-  "---",
-  "",
-  "# Dispatcher task archive",
-  "",
-  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
-  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
-  "that outlives a task should be promoted to its own memory file, not kept here.",
-  "",
-  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
-].join("\n")}
-`;
-function fmtLocalDate() {
-  const d = /* @__PURE__ */ new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function ledgerLines(content) {
-  const lines = content.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-function parseArchiveArgs(args) {
-  let id = "";
-  let status2 = "";
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--status") {
-      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
-      status2 = args[i + 1];
-      i++;
-    } else if (arg.startsWith("--status=")) {
-      status2 = arg.slice("--status=".length);
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`tm archive: unknown flag: ${arg}`) };
-    } else if (id === "") {
-      id = arg;
-    } else {
-      return { error: die2(`tm archive: unexpected arg: ${arg}`) };
-    }
-  }
-  return { id, status: status2 };
-}
-var archive = async (args, options, env) => {
-  const parsed = parseArchiveArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { id } = parsed;
-  if (id === "") {
-    return die2("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
-  }
-  const memoryDir = join7(env.projectsDir, encodeProjectDir(env.dispatcherDir), "memory");
-  const activePath = join7(memoryDir, "active-dispatcher-tasks.md");
-  const archivePath = join7(memoryDir, "dispatcher-tasks-archive.md");
-  if (!isRegularFile4(activePath)) return die2(`no active ledger at ${activePath}`);
-  const outcome = (options?.stdin ?? "").replace(/\n+$/, "");
-  if (outcome.replace(/\s/g, "") === "") {
-    return die2(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
-  }
-  const activeContent = readFileSync7(activePath, "utf8");
-  const activeLines = ledgerLines(activeContent);
-  let headerRe;
-  try {
-    headerRe = new RegExp(`^### ${id}(\\s|$)`);
-  } catch {
-    headerRe = /(?!)/;
-  }
-  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
-  if (headerLines.length === 0) {
-    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
-    return die2(`id not found in active ledger: ${id}
-  available: ${available}`);
-  }
-  if (headerLines.length !== 1) {
-    return die2(`id matches ${headerLines.length} entries in active ledger: ${id}`);
-  }
-  const start = headerLines[0];
-  const total = (activeContent.match(/\n/g) ?? []).length;
-  let end = total;
-  for (let index = start; index < activeLines.length; index++) {
-    if (/^(### |## )/.test(activeLines[index])) {
-      end = index;
-      break;
-    }
-  }
-  const blockLines = activeLines.slice(start - 1, end);
-  let status2 = parsed.status;
-  if (status2 === "") {
-    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
-    status2 = tag ? tag[1] : "done";
-  }
-  const field = (name) => {
-    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
-    if (line === void 0) return "(unknown)";
-    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
-    return value === "" ? "(unknown)" : value;
-  };
-  const entry = `### ${id}  [${status2}]
-- repo/branch: ${field("repo")} / ${field("branch")}
-- intent: ${field("intent")}
-- outcome: ${outcome}
-- closed: ${fmtLocalDate()}`;
-  const archiveContent = isRegularFile4(archivePath) ? readFileSync7(archivePath, "utf8") : ARCHIVE_TEMPLATE;
-  const archiveLines = ledgerLines(archiveContent);
-  let firstEntry = 0;
-  for (let index = 0; index < archiveLines.length; index++) {
-    if (archiveLines[index].startsWith("### ")) {
-      firstEntry = index + 1;
-      break;
-    }
-  }
-  let newArchive;
-  if (firstEntry > 0) {
-    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
-` : "";
-    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
-`;
-    newArchive = `${head}${entry}
-
-${tail}`;
-  } else {
-    newArchive = `${archiveContent}
-${entry}
-`;
-  }
-  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
-  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
-` : "";
-  writeFileSync3(archivePath, newArchive);
-  writeFileSync3(activePath, newActive);
-  return {
-    code: 0,
-    stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
-`,
-    stderr: ""
-  };
-};
-var reload = async (args, _options, env) => {
-  let all = false;
-  const repos = [];
-  for (const arg of args) {
-    if (arg === "--all") all = true;
-    else if (arg === "-h" || arg === "--help") return die2("usage: tm reload <repo>... | --all");
-    else if (arg.startsWith("-")) return die2(`tm reload: unknown flag: ${arg}`);
-    else repos.push(arg);
-  }
-  if (all) {
-    if (repos.length > 0) return die2("tm reload: --all conflicts with explicit repos");
-    repos.push(...await iterRepos(env.runTmux));
-    if (repos.length === 0) {
-      return { code: 0, stdout: "(no teammate sessions to reload)\n", stderr: "" };
-    }
-  } else if (repos.length === 0) {
-    return die2("usage: tm reload <repo>... | --all");
-  }
-  let stdout = "";
-  for (const repo of repos) {
-    stdout += `\u2192 ${repo}: /reload-plugins
-`;
-    const sent = await send(["--no-wait", repo, "--prompt", "/reload-plugins"], void 0, env);
-    if (sent.code !== 0) return { code: sent.code, stdout, stderr: "" };
-  }
-  return { code: 0, stdout, stderr: "" };
-};
-function resolveSidOrDie(repo) {
-  const sid = resolveSid(repo);
-  if (sid === null) {
-    return {
-      error: die2(
-        `no sid file for ${repo} at ${sidFile(repo)} \u2014 was this teammate spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)`
-      )
-    };
-  }
-  return { sid };
-}
-function newSid() {
-  return randomUUID().toLowerCase();
-}
-function randSuffix() {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = randomBytes(4);
-  let out = "";
-  for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
-  return out;
-}
-function sanitizeTaskSlug(task) {
-  let s = task.toLowerCase();
-  s = s.replace(/[^a-z0-9一-鿿]+/g, "-");
-  s = s.replace(/^-+|-+$/g, "");
-  const cps = [...s];
-  if (cps.length > 30) {
-    s = cps.slice(0, 30).join("");
-    s = s.replace(/-+$/, "");
-  }
-  return s;
-}
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function nowSec2() {
-  return Math.floor(Date.now() / 1e3);
-}
-function isNonNegativeInteger(value) {
-  return /^[0-9]+$/.test(value);
-}
-function readSendKeysConfig() {
-  const inlineRaw = process.env.TM_SEND_INLINE_MAX ?? "";
-  const inlineMax = inlineRaw === "" ? 200 : Number(inlineRaw);
-  if (inlineRaw !== "" && !/^[0-9]+$/.test(inlineRaw)) {
-    return die2(
-      `TM_SEND_INLINE_MAX must be a non-negative integer (got: '${inlineRaw}')`
-    );
-  }
-  const gapRaw = process.env.TM_SEND_GAP ?? "";
-  if (gapRaw !== "" && !/^[0-9]+(\.[0-9]+)?$/.test(gapRaw)) {
-    return die2(
-      `TM_SEND_GAP must be a non-negative number of seconds (got: '${gapRaw}')`
-    );
-  }
-  return {
-    inlineMax,
-    gapOverride: gapRaw === "" ? null : gapRaw
-  };
-}
-function defaultPasteGapSec(promptLength) {
-  if (promptLength <= 256) return 0.2;
-  if (promptLength <= 1024) return 0.5;
-  if (promptLength <= 4096) return 1;
-  if (promptLength <= 16384) return 2;
-  return 4;
-}
-async function sendKeys(repo, prompt, env) {
-  const sessionMissing = await requireSession(repo, env.runTmux);
-  if (sessionMissing !== null) return sessionMissing;
-  const pane = await resolvePaneTarget(repo, env.runTmux);
-  if (pane === "") return die2(`could not resolve pane target for ${repo}`);
-  const cfg = readSendKeysConfig();
-  if ("code" in cfg) return cfg;
-  const sid = resolveSid(repo);
-  if (sid !== null) clearIdle(sid);
-  const sa = sendAtFile(repo);
-  mkdirSync3(dirname4(sa), { recursive: true });
-  writeFileSync3(sa, "");
-  const n = prompt.length;
-  const inlinePath = n <= cfg.inlineMax && !prompt.includes("\n");
-  const name = `${SESSION_PREFIX}${repo}`;
-  let stderr = `sent to ${repo} (tmux=${name})
-`;
-  if (sid !== null) stderr += `sid=${sid}
-`;
-  const tmuxOk = (result, what) => result.code === 0 ? null : die2(`tmux ${what} failed: ${result.stderr.trim() || "non-zero exit"}`);
-  if (inlinePath) {
-    const sent = await env.runTmux(["send-keys", "-t", pane, "-l", prompt]);
-    const sentErr = tmuxOk(sent, "send-keys");
-    if (sentErr !== null) return sentErr;
-    const enter = await env.runTmux(["send-keys", "-t", pane, "Enter"]);
-    const enterErr = tmuxOk(enter, "send-keys Enter");
-    if (enterErr !== null) return enterErr;
-    return { code: 0, stdout: "", stderr };
-  }
-  const gap = cfg.gapOverride !== null ? Number(cfg.gapOverride) : defaultPasteGapSec(n);
-  const buf = `tm-send-${process.pid}-${randomBytes(2).toString("hex")}`;
-  let loaded = false;
-  try {
-    const loadResult = await env.runTmux(["load-buffer", "-b", buf, "-"], { stdin: prompt });
-    const loadErr = tmuxOk(loadResult, "load-buffer");
-    if (loadErr !== null) return loadErr;
-    loaded = true;
-    const pasteResult = await env.runTmux([
-      "paste-buffer",
-      "-p",
-      "-r",
-      "-d",
-      "-b",
-      buf,
-      "-t",
-      pane
-    ]);
-    const pasteErr = tmuxOk(pasteResult, "paste-buffer");
-    if (pasteErr !== null) return pasteErr;
-    loaded = false;
-    await sleepMs(Math.round(gap * 1e3));
-    const enter = await env.runTmux(["send-keys", "-t", pane, "Enter"]);
-    const enterErr = tmuxOk(enter, "send-keys Enter");
-    if (enterErr !== null) return enterErr;
-  } finally {
-    if (loaded) {
-      try {
-        await env.runTmux(["delete-buffer", "-b", buf]);
-      } catch {
-      }
-    }
-  }
-  return { code: 0, stdout: "", stderr };
-}
-async function waitIdleSignal(repo, timeoutSec, fresh, env) {
-  const sessionMissing = await requireSession(repo, env.runTmux);
-  if (sessionMissing !== null) return sessionMissing;
-  const sidR = resolveSidOrDie(repo);
-  if ("error" in sidR) return sidR.error;
-  if (fresh) clearIdle(sidR.sid);
-  const end = nowSec2() + timeoutSec;
-  const marker = idleMarkerFor(sidR.sid);
-  while (nowSec2() < end) {
-    if (existsSync2(marker)) return { ok: true };
-    await sleepMs(3e3);
-  }
-  return { ok: false };
-}
-async function waitPaneQuiet(repo, timeoutSec, env) {
-  const sessionMissing = await requireSession(repo, env.runTmux);
-  if (sessionMissing !== null) return sessionMissing;
-  let sendAt = 0;
-  try {
-    const sa = sendAtFile(repo);
-    sendAt = Math.floor(statSync6(sa).mtimeMs / 1e3);
-  } catch {
-    sendAt = 0;
-  }
-  const end = nowSec2() + timeoutSec;
-  let quietStreak = 0;
-  while (nowSec2() < end) {
-    const sid = resolveSid(repo);
-    const isBusy = sid !== null && isRegularFile4(busyMarkerFor(sid));
-    if (isBusy) quietStreak = 0;
-    else quietStreak += 1;
-    if (quietStreak >= 2 && nowSec2() - sendAt >= 3) return { ok: true };
-    await sleepMs(2e3);
-  }
-  return { ok: false };
-}
-function printLastOrEmpty(repo) {
-  const sid = resolveSid(repo);
-  if (sid === null) return `(no sid for ${repo})
-`;
-  const reply = readIfNonEmpty4(lastFileFor(sid));
-  if (reply === null) {
-    return "(no text reply this turn \u2014 tool-only, /compact, /clear, or fresh spawn)\n";
-  }
-  return reply;
-}
-function echoCtxToStderr(repo, env) {
-  const body = ctxLine(repo, "", env);
-  if (body.includes(": ? (")) return "";
-  const prefix = `${repo}: `;
-  const data = body.startsWith(prefix) ? body.slice(prefix.length) : body;
-  return `ctx: ${data}
-`;
-}
-var doctor = async (args, _options, env) => {
-  if (args.length > 0) {
-    return die2(`tm doctor: takes no arguments (got: ${args.join(" ")})`);
-  }
-  const kv = (label, value) => {
-    const padded = `${label}:`.padEnd(20, " ");
-    return `  ${padded}${value}
-`;
-  };
-  let out = "";
-  const moduleDir = dirname4(fileURLToPath(import.meta.url));
-  const tmWrapper = join7(moduleDir, "..", "..", "bin", "tm");
-  const pluginJson = join7(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
-  let version = "unknown";
-  let pluginJsonPresent = false;
-  try {
-    if (statSync6(pluginJson).isFile()) {
-      pluginJsonPresent = true;
-      const parsed = JSON.parse(readFileSync7(pluginJson, "utf8"));
-      if (typeof parsed.version === "string" && parsed.version.length > 0) {
-        version = parsed.version;
-      }
-    }
-  } catch {
-    pluginJsonPresent = false;
-  }
-  out += "tm executable:\n";
-  out += kv("path", tmWrapper);
-  out += kv("version", version);
-  if (!pluginJsonPresent) out += kv("note", `plugin.json not found at ${pluginJson}`);
-  out += "\n";
-  out += "dispatcher dir:\n";
-  out += kv("resolved", env.dispatcherDir);
-  const envSet = process.env.TM_DISPATCHER_DIR;
-  if (envSet !== void 0 && envSet.length > 0) {
-    out += kv("TM_DISPATCHER_DIR", `set (= ${envSet})`);
-  } else {
-    out += kv(
-      "TM_DISPATCHER_DIR",
-      "unset \u2014 falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)"
-    );
-  }
-  const pwd = process.cwd();
-  out += kv("$PWD", pwd);
-  if (env.dispatcherDir !== pwd) {
-    out += kv(
-      "status",
-      "DIVERGED \u2014 dispatcher dir != $PWD; env override is currently keeping tm correct despite the drifted PWD"
-    );
-  } else {
-    out += kv("status", "matched");
-  }
-  if (!isDirectory2(env.dispatcherDir)) {
-    out += kv("warning", `${env.dispatcherDir} does not exist as a directory`);
-  }
-  out += "\n";
-  out += "tmux:\n";
-  let tmuxVersionOk = false;
-  let tmuxVersionLine = "";
-  try {
-    const versionResult = await env.runTmux(["-V"]);
-    if (versionResult.code === 0) {
-      tmuxVersionOk = true;
-      tmuxVersionLine = versionResult.stdout.split("\n")[0] ?? "?";
-    }
-  } catch {
-    tmuxVersionOk = false;
-  }
-  if (!tmuxVersionOk) {
-    out += kv("installed", "no (tmux not on PATH \u2014 claudemux teammate workflow needs it)");
-  } else {
-    out += kv("installed", `yes (${tmuxVersionLine})`);
-    let serverRunning = false;
-    try {
-      serverRunning = (await env.runTmux(["info"])).code === 0;
-    } catch {
-      serverRunning = false;
-    }
-    if (serverRunning) out += kv("server", "running");
-    else out += kv("server", "not running (no sessions exist yet \u2014 that's fine pre-spawn)");
-    const insideTmux = process.env.TMUX ?? "";
-    if (insideTmux.length > 0) out += kv("in tmux", `yes (TMUX=${insideTmux})`);
-    else out += kv("in tmux", "no \u2014 tm is being run from outside a tmux session");
-  }
-  out += "\n";
-  out += `idle dir (${idleDir()}):
-`;
-  if (isDirectory2(idleDir())) {
-    let count = 0;
-    try {
-      count = readdirSync2(idleDir()).length;
-    } catch {
-      count = 0;
-    }
-    out += kv("exists", `yes (${count} file(s))`);
-  } else {
-    out += kv("exists", "no \u2014 gets created on first tm spawn / scripts/setup.sh");
-  }
-  out += "\n";
-  out += "active teammates:\n";
-  let listing = "";
-  try {
-    listing = (await env.runTmux(["ls"])).stdout;
-  } catch {
-    listing = "";
-  }
-  const sessionRows = listing.split("\n").map((line) => sessionField(line)).filter((name) => name.startsWith(SESSION_PREFIX));
-  if (sessionRows.length === 0) {
-    out += "  (none \u2014 use 'tm spawn <repo>' to launch one)\n";
-  } else {
-    out += kv("count", String(sessionRows.length));
-    for (const name of sessionRows) out += `  ${name}
-`;
-  }
-  out += "\n";
-  out += "codex teammates:\n";
-  const codexNames = listDaemons();
-  if (codexNames.length === 0) {
-    out += "  (none \u2014 use 'tm spawn codex-<n>' to launch one)\n";
-  } else {
-    const reaped = [];
-    const live = [];
-    for (const name of codexNames) {
-      const state = readDaemonState(name);
-      if (state === null) {
-        reaped.push(name);
-        await reapDaemon(name);
-      } else if (!isProcessAlive(state.pid)) {
-        reaped.push(name);
-        await reapDaemon(name);
-      } else {
-        live.push({ name, pid: state.pid, startedAt: state.startedAt });
-      }
-    }
-    out += kv("count", String(live.length));
-    for (const t of live) {
-      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})
-`;
-    }
-    if (reaped.length > 0) {
-      out += kv("reaped orphans", String(reaped.length));
-      for (const name of reaped) out += `  ${name}
-`;
-    }
-  }
-  return { code: 0, stdout: out, stderr: "" };
-};
-function parseSpawnArgs(rest) {
-  const SILENT = { code: 1, stdout: "", stderr: "" };
-  let resumeSid = "";
-  let task = "";
-  let prompt = "";
-  let hasPrompt = false;
-  let noWait = false;
-  let timeout = null;
-  let engine = null;
-  for (let i = 0; i < rest.length; i++) {
-    const arg = rest[i];
-    if (arg === "--resume") {
-      if (i + 1 >= rest.length) return { error: SILENT };
-      resumeSid = rest[i + 1];
-      i++;
-    } else if (arg === "--engine") {
-      if (i + 1 >= rest.length) return { error: die2("tm spawn: --engine requires a value") };
-      const value = rest[i + 1];
-      if (value !== "claude" && value !== "codex") {
-        return { error: die2(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
-      }
-      engine = value;
-      i++;
-    } else if (arg.startsWith("--engine=")) {
-      const value = arg.slice("--engine=".length);
-      if (value !== "claude" && value !== "codex") {
-        return { error: die2(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) };
-      }
-      engine = value;
-    } else if (arg === "--task") {
-      if (i + 1 >= rest.length) return { error: SILENT };
-      task = rest[i + 1];
-      i++;
-    } else if (arg === "--timeout") {
-      if (i + 1 >= rest.length) return { error: die2("tm spawn: --timeout requires a value") };
-      timeout = rest[i + 1];
-      i++;
-    } else if (arg.startsWith("--timeout=")) {
-      timeout = arg.slice("--timeout=".length);
-    } else if (arg.startsWith("--task=")) {
-      task = arg.slice("--task=".length);
-    } else if (arg === "--prompt") {
-      if (i + 1 >= rest.length) return { error: die2("tm spawn: --prompt requires a value") };
-      prompt = rest[i + 1];
-      hasPrompt = true;
-      i++;
-    } else if (arg.startsWith("--prompt=")) {
-      prompt = arg.slice("--prompt=".length);
-      hasPrompt = true;
-    } else if (arg === "--no-wait") {
-      noWait = true;
-    } else {
-      return { error: die2(`unknown flag: ${arg}`) };
-    }
-  }
-  return { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout };
-}
-function shellSingleQuote(value) {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-function teammateLaunchFlags(mdExcludes) {
-  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion`;
-}
-async function sessionExists(name, runTmux2) {
-  try {
-    return (await runTmux2(["has-session", "-t", `=${name}`])).code === 0;
-  } catch {
-    return false;
-  }
-}
-async function pollReady(repo) {
-  const rf = readyFile(repo);
-  for (let i = 1; i <= 60; i++) {
-    if (existsSync2(rf)) return i * 300;
-    await sleepMs(300);
-  }
-  return null;
-}
-var spawn2 = async (args, _options, env) => {
-  const repo = args[0] ?? "";
-  if (repo.length === 0) {
-    return die2('usage: tm spawn <repo> [--task <slug>] [--prompt "..."] [--no-wait]');
-  }
-  const parsed = parseSpawnArgs(args.slice(1));
-  if ("error" in parsed) return parsed.error;
-  const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed;
-  if (engine === "codex" || engine === null && isCodexTarget(repo)) {
-    if (resumeSid.length > 0) return die2("tm spawn: --resume is not supported for codex teammates");
-    if (task.length > 0) return die2("tm spawn: --task is not supported for codex teammates");
-    if (noWait) return die2("tm spawn: --no-wait is not supported for codex teammates");
-    if (timeout !== null && !isNonNegativeInteger(timeout)) {
-      return die2(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`);
-    }
-    const repoPath = join7(env.dispatcherDir, repo);
-    const cwdPhys2 = isDirectory2(repoPath) ? realpathSync2(repoPath) : realpathSync2(env.dispatcherDir);
-    return codexSpawn(repo, {
-      cwd: cwdPhys2,
-      prompt: hasPrompt ? prompt : null,
-      timeoutSec: timeout === null ? null : Number(timeout),
-      displayName: null,
-      engine: env.engines?.get("codex")
-    });
-  }
-  if (noWait && !hasPrompt) {
-    return die2(
-      "tm spawn: --no-wait is only valid with --prompt (a fresh spawn without a prompt already returns as soon as the REPL is ready)"
-    );
-  }
-  const path = join7(env.dispatcherDir, repo);
-  if (!isDirectory2(path)) return dieRepoNotFound("spawn", repo, path, env.dispatcherDir);
-  const cwdPhys = realpathSync2(path);
-  const dispatcherPhys = realpathSync2(env.dispatcherDir);
-  const mdExcludes = JSON.stringify({
-    claudeMdExcludes: [
-      `${dispatcherPhys}/CLAUDE.md`,
-      `${dispatcherPhys}/CLAUDE.local.md`
-    ]
-  });
-  let displayName = "";
-  if (task.length > 0) {
-    const slug = sanitizeTaskSlug(task);
-    if (slug.length === 0) {
-      return die2(
-        `tm spawn: --task '${task}' has no usable characters after sanitization (allowlist: ASCII letters/digits + CJK Unified Ideographs)`
-      );
-    }
-    displayName = `${repo}-${slug}`;
-  } else if (resumeSid.length === 0) {
-    displayName = `${repo}-${randSuffix()}`;
-  }
-  const name = `${SESSION_PREFIX}${repo}`;
-  if (await sessionExists(name, env.runTmux)) {
-    if (hasPrompt) {
-      return die2(
-        `${repo} already exists (tmux=${name}) \u2014 atomic bootstrap rejected because the teammate is already running. Use 'tm send ${repo} --prompt "\u2026"' to drive an existing teammate, or 'tm kill ${repo}' first to start over.`
-      );
-    }
-    return {
-      code: 0,
-      stdout: `${repo} already exists (tmux=${name}; use 'tm status ${repo}' to view, or 'tm kill ${repo}' first)
-`,
-      stderr: ""
-    };
-  }
-  const rf = readyFile(repo);
-  rmSync4(rf, { force: true });
-  const cf = cwdFile(repo);
-  mkdirSync3(dirname4(cf), { recursive: true });
-  writeFileSync3(cf, `${cwdPhys}
-`);
-  let paneId = "";
-  try {
-    const newSession = await env.runTmux([
-      "new-session",
-      "-d",
-      "-s",
-      name,
-      "-c",
-      cwdPhys,
-      "-e",
-      `CLAUDEMUX_TEAMMATE_REPO=${repo}`,
-      "-P",
-      "-F",
-      "#{session_id}"
-    ]);
-    if (newSession.code !== 0) {
-      return die2(`tmux new-session failed: ${newSession.stderr.trim() || newSession.stdout.trim()}`);
-    }
-    paneId = newSession.stdout.split("\n")[0] ?? "";
-  } catch (err) {
-    return die2(`tmux new-session failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (paneId.length === 0) return die2(`tmux new-session returned no session id for ${repo}`);
-  const sid = resumeSid.length > 0 ? resumeSid : newSid();
-  const launchFlags = teammateLaunchFlags(mdExcludes);
-  const nameArg = displayName.length > 0 ? ` -n ${shellSingleQuote(displayName)}` : "";
-  const launchCmd = resumeSid.length > 0 ? `claude --resume ${sid} ${launchFlags}${nameArg}` : `claude --session-id ${sid} ${launchFlags}${nameArg}`;
-  await env.runTmux(["send-keys", "-t", paneId, launchCmd, "Enter"]);
-  let stderr = "";
-  if (resumeSid.length > 0) {
-    const nameNote = displayName.length > 0 ? `, name=${displayName}` : "";
-    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, resumed sid=${sid}${nameNote})
-`;
-  } else {
-    const nameNote = displayName.length > 0 ? `, name=${displayName}` : "";
-    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, sid=${sid}${nameNote})
-`;
-  }
-  const sf = sidFile(repo);
-  mkdirSync3(dirname4(sf), { recursive: true });
-  writeFileSync3(sf, `${sid}
-`);
-  clearIdle(sid);
-  if (resumeSid.length === 0) {
-    mkdirSync3(idleDir(), { recursive: true });
-    writeFileSync3(lastFileFor(sid), "");
-  }
-  const readyAfter = await pollReady(repo);
-  if (readyAfter !== null) {
-    stderr += `ready: ${repo} (tmux=${name}, SessionStart fired after ~${readyAfter} ms)
-`;
-  } else {
-    stderr += `WARN: ${repo} (tmux=${name}) did not signal ready within 18s (no SessionStart hook fire \u2014 the plugin's on-session-start.sh may not be loaded, or claude failed to boot). Continuing, but if the REPL is actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / 'tm compact' will block until its --timeout expires (default 1800s). 'tm status ${repo}' shows the live pane if you need to verify.
-`;
-  }
-  if (!hasPrompt) {
-    return { code: 0, stdout: "", stderr };
-  }
-  await sleepMs(3e3);
-  const sendArgs = [];
-  if (noWait) sendArgs.push("--no-wait");
-  sendArgs.push(repo, "--prompt", prompt);
-  const sendResult = await send(sendArgs, void 0, env);
-  return {
-    code: sendResult.code,
-    stdout: sendResult.stdout,
-    stderr: stderr + sendResult.stderr
-  };
-};
-function parseSendArgs(args) {
-  let noWait = false;
-  let paneQuiet = false;
-  let timeout = "1800";
-  let repo = "";
-  let prompt = "";
-  let hasPrompt = false;
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--no-wait") {
-      noWait = true;
-      i++;
-    } else if (arg === "--pane-quiet") {
-      paneQuiet = true;
-      i++;
-    } else if (arg === "--timeout") {
-      if (i + 1 >= args.length) return { error: die2("tm send: --timeout requires a value") };
-      timeout = args[i + 1];
-      i += 2;
-    } else if (arg.startsWith("--timeout=")) {
-      timeout = arg.slice("--timeout=".length);
-      i++;
-    } else if (arg === "--prompt") {
-      if (i + 1 >= args.length) return { error: die2("tm send: --prompt requires a value") };
-      prompt = args[i + 1];
-      hasPrompt = true;
-      i += 2;
-    } else if (arg.startsWith("--prompt=")) {
-      prompt = arg.slice("--prompt=".length);
-      hasPrompt = true;
-      i++;
-    } else if (arg === "--") {
-      i++;
-      repo = args[i] ?? "";
-      i++;
-      break;
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`tm send: unknown flag: ${arg}`) };
-    } else if (repo === "") {
-      repo = arg;
-      i++;
-    } else {
-      const tail = args.slice(i).join(" ");
-      return {
-        error: die2(
-          `tm send: prompt is now a --prompt flag, not a positional arg. Did you mean: tm send ${repo} --prompt ${shellSingleQuote(tail)} ?`
-        )
-      };
-    }
-  }
-  return { repo, prompt, hasPrompt, noWait, paneQuiet, timeout };
-}
-var send = async (args, _options, env) => {
-  const parsed = parseSendArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed;
-  if (repo === "") {
-    return die2(
-      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]'
-    );
-  }
-  if (!hasPrompt) {
-    return die2(
-      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] [--pane-quiet] [--timeout N]'
-    );
-  }
-  if (!isNonNegativeInteger(timeout)) {
-    return die2(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
-  }
-  if (isCodexTarget(repo)) {
-    if (noWait) return die2("tm send: --no-wait is not supported for codex teammates");
-    if (paneQuiet) return die2("tm send: --pane-quiet is not supported for codex teammates");
-    return codexSend(repo, prompt, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
-  }
-  const sentResult = await sendKeys(repo, prompt, env);
-  if (sentResult.code !== 0) return sentResult;
-  if (noWait) return sentResult;
-  const timeoutSec = Number(timeout);
-  const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env) : await waitIdleSignal(repo, timeoutSec, false, env);
-  if ("code" in verdict) return verdict;
-  if (!verdict.ok) {
-    const kind = paneQuiet ? "pane-quiet" : "Stop hook";
-    return {
-      code: 1,
-      stdout: printLastOrEmpty(repo),
-      stderr: sentResult.stderr + `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}
-`
-    };
-  }
-  let trailingStderr = "";
-  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env);
-  return {
-    code: 0,
-    stdout: printLastOrEmpty(repo),
-    stderr: sentResult.stderr + trailingStderr
-  };
-};
-function parseWaitArgs(args) {
-  const SILENT = { code: 1, stdout: "", stderr: "" };
-  let repo = "";
-  let timeout = "1800";
-  let fresh = false;
-  let paneQuiet = false;
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--fresh") {
-      fresh = true;
-      i++;
-    } else if (arg === "--pane-quiet") {
-      paneQuiet = true;
-      i++;
-    } else if (arg === "--timeout") {
-      if (i + 1 >= args.length) return { error: SILENT };
-      timeout = args[i + 1];
-      i += 2;
-    } else if (arg.startsWith("--timeout=")) {
-      timeout = arg.slice("--timeout=".length);
-      i++;
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`tm wait: unknown flag: ${arg}`) };
-    } else if (repo === "") {
-      repo = arg;
-      i++;
-    } else {
-      timeout = arg;
-      i++;
-    }
-  }
-  return { repo, timeout, fresh, paneQuiet };
-}
-var wait = async (args, _options, env) => {
-  const parsed = parseWaitArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { repo, timeout, fresh, paneQuiet } = parsed;
-  if (repo === "") {
-    return die2(
-      "usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]"
-    );
-  }
-  if (!isNonNegativeInteger(timeout)) {
-    return die2(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
-  }
-  if (isCodexTarget(repo)) {
-    if (fresh) return die2("tm wait: --fresh is not supported for codex teammates");
-    if (paneQuiet) return die2("tm wait: --pane-quiet is not supported for codex teammates");
-    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
-  }
-  const timeoutSec = Number(timeout);
-  const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env) : await waitIdleSignal(repo, timeoutSec, fresh, env);
-  if ("code" in verdict) return verdict;
-  if (!verdict.ok) {
-    return {
-      code: 1,
-      stdout: printLastOrEmpty(repo),
-      stderr: `tm wait: timed out after ${timeout}s on ${repo}
-`
-    };
-  }
-  let trailingStderr = "";
-  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env);
-  return {
-    code: 0,
-    stdout: printLastOrEmpty(repo),
-    stderr: trailingStderr
-  };
-};
-function parseCompactArgs(args) {
-  const SILENT = { code: 1, stdout: "", stderr: "" };
-  let repo = "";
-  let timeout = "1800";
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--timeout") {
-      if (i + 1 >= args.length) return { error: SILENT };
-      timeout = args[i + 1];
-      i += 2;
-    } else if (arg.startsWith("--timeout=")) {
-      timeout = arg.slice("--timeout=".length);
-      i++;
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`tm compact: unknown flag: ${arg}`) };
-    } else if (repo === "") {
-      repo = arg;
-      i++;
-    } else {
-      timeout = arg;
-      i++;
-    }
-  }
-  return { repo, timeout };
-}
-var COMPACT_REFUSAL_MARK = "\u23BF  Error: Not enough messages to compact";
-var compact = async (args, _options, env) => {
-  const parsed = parseCompactArgs(args);
-  if ("error" in parsed) return parsed.error;
-  const { repo, timeout } = parsed;
-  if (repo === "") return die2("usage: tm compact <repo> [timeout=1800] [--timeout N]");
-  if (!isNonNegativeInteger(timeout)) {
-    return die2(`tm compact: --timeout must be a non-negative integer (got: '${timeout}')`);
-  }
-  const sessionMissing = await requireSession(repo, env.runTmux);
-  if (sessionMissing !== null) return sessionMissing;
-  const sidR = resolveSidOrDie(repo);
-  if ("error" in sidR) return sidR.error;
-  const sid = sidR.sid;
-  const pane = await resolvePaneTarget(repo, env.runTmux);
-  if (pane === "") return die2(`could not resolve pane target for ${repo}`);
-  let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)
-`;
-  const sent = await sendKeys(repo, "/compact", env);
-  stderr += sent.stderr;
-  if (sent.code !== 0) {
-    return { code: sent.code, stdout: sent.stdout, stderr };
-  }
-  const timeoutSec = Number(timeout);
-  const end = nowSec2() + timeoutSec;
-  const marker = idleMarkerFor(sid);
-  while (nowSec2() < end) {
-    if (existsSync2(marker)) {
-      return { code: 0, stdout: "compacted\n", stderr };
-    }
-    if (pane.length > 0) {
-      try {
-        const captured = await env.runTmux(["capture-pane", "-t", pane, "-p"]);
-        if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
-          return {
-            code: 1,
-            stdout: "",
-            stderr: stderr + `tm compact: ${repo} refused /compact \u2014 Claude Code reported 'Not enough messages to compact' (transcript too short).
-`
-          };
-        }
-      } catch {
-      }
-    }
-    await sleepMs(3e3);
-  }
-  return {
-    code: 1,
-    stdout: "",
-    stderr: stderr + `tm compact: ${repo} did not signal PostCompact within ${timeout}s \u2014 compaction may still be running, or the Stop hook is misconfigured. Check 'tm status ${repo}' and ${marker}.
-`
-  };
-};
-function parseResumeArgs(args) {
-  const SILENT = { code: 1, stdout: "", stderr: "" };
-  let repo = "";
-  let sid = "";
-  let task = "";
-  let prompt = "";
-  let hasPrompt = false;
-  let noWait = false;
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--prompt") {
-      if (i + 1 >= args.length) return { error: die2("tm resume: --prompt requires a value") };
-      prompt = args[i + 1];
-      hasPrompt = true;
-      i += 2;
-    } else if (arg.startsWith("--prompt=")) {
-      prompt = arg.slice("--prompt=".length);
-      hasPrompt = true;
-      i++;
-    } else if (arg === "--task") {
-      if (i + 1 >= args.length) return { error: SILENT };
-      task = args[i + 1];
-      i += 2;
-    } else if (arg.startsWith("--task=")) {
-      task = arg.slice("--task=".length);
-      i++;
-    } else if (arg === "--no-wait") {
-      noWait = true;
-      i++;
-    } else if (arg === "--") {
-      i++;
-      break;
-    } else if (arg.startsWith("-")) {
-      return { error: die2(`unknown flag: ${arg}`) };
-    } else if (repo === "") {
-      repo = arg;
-      i++;
-    } else if (sid === "") {
-      sid = arg;
-      i++;
-    } else {
-      return {
-        error: die2(
-          `tm resume: too many positional args (got '${arg}' after repo='${repo}' sid='${sid}')`
-        )
-      };
-    }
-  }
-  return { repo, sid, task, prompt, hasPrompt, noWait };
-}
-var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-var resume = async (args, _options, env) => {
-  const parsed = parseResumeArgs(args);
-  if ("error" in parsed) return parsed.error;
-  let { sid } = parsed;
-  const { repo, task, prompt, hasPrompt, noWait } = parsed;
-  if (repo === "") {
-    return die2(
-      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation; --no-wait only with --prompt)'
-    );
-  }
-  if (noWait && !hasPrompt) {
-    return die2("tm resume: --no-wait is only valid with --prompt");
-  }
-  const path = join7(env.dispatcherDir, repo);
-  if (!isDirectory2(path)) return dieRepoNotFound("resume", repo, path, env.dispatcherDir);
-  const name = `${SESSION_PREFIX}${repo}`;
-  if (await sessionExists(name, env.runTmux)) {
-    return die2(
-      `${repo} already running (tmux=${name}) \u2014 'tm kill ${repo}' first if you really want to start over`
-    );
-  }
-  const projectDir = projectDirForRepo(repo, env);
-  let autoPickStderr = "";
-  if (sid === "") {
-    if (!isDirectory2(projectDir)) {
-      return die2(
-        `no project dir at ${projectDir} \u2014 has anyone ever run claude inside ${path}? Try 'tm spawn ${repo}' first.`
-      );
-    }
-    let names = [];
-    try {
-      names = readdirSync2(projectDir).filter((file) => file.endsWith(".jsonl"));
-    } catch {
-      names = [];
-    }
-    if (names.length === 0) {
-      return die2(`no .jsonl transcripts under ${projectDir} \u2014 try 'tm spawn ${repo}' to start fresh.`);
-    }
-    const stats = names.map((file) => {
-      let mtime = 0;
-      try {
-        mtime = Math.floor(statSync6(join7(projectDir, file)).mtimeMs / 1e3);
-      } catch {
-        mtime = 0;
-      }
-      return { file, mtime };
-    });
-    stats.sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-    const latest = stats[0];
-    sid = latest.file.replace(/\.jsonl$/, "");
-    autoPickStderr = `tm resume: no sid given \u2014 auto-picked ${sid} (jsonl mtime ${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.
-`;
-  } else {
-    const target = join7(projectDir, `${sid}.jsonl`);
-    if (!isRegularFile4(target)) {
-      return die2(
-        `no transcript at ${target} \u2014 wrong repo for this sid, or sid does not exist. Check 'ls ${projectDir}/'.`
-      );
-    }
-  }
-  if (!UUID_RE.test(sid)) return die2(`sid is not a valid uuid: ${sid}`);
-  const spawnArgs = [repo, "--resume", sid];
-  if (task.length > 0) {
-    spawnArgs.push("--task", task);
-  }
-  if (hasPrompt) {
-    if (noWait) spawnArgs.push("--no-wait");
-    spawnArgs.push("--prompt", prompt);
-  }
-  const result = await spawn2(spawnArgs, void 0, env);
-  return {
-    code: result.code,
-    stdout: result.stdout,
-    stderr: autoPickStderr + result.stderr
-  };
-};
-var ask = async (args, _options, _env) => {
-  if (args.length === 0) {
-    return die2('usage: tm ask "<prompt>"');
-  }
-  if (args.length > 1) {
-    return die2(
-      `tm ask: takes exactly one positional argument (the prompt) \u2014 got ${args.length}`
-    );
-  }
-  return codexAsk(args[0] ?? "");
-};
-var NATIVE_VERBS = {
-  ls,
-  last,
-  ctx,
-  states,
-  mem,
-  history,
-  status,
-  poll,
-  kill,
-  archive,
-  reload,
-  doctor,
-  spawn: spawn2,
-  send,
-  wait,
-  compact,
-  resume,
-  ask
-};
-
-// src/tmux.ts
-function resolveTmuxBinary() {
-  const override = process.env.CLAUDEMUX_TMUX;
-  if (override && override.length > 0) return override;
-  return "tmux";
-}
-var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], options);
-
-// src/engines/claude/claude-engine.ts
-import { existsSync as existsSync3, readFileSync as readFileSync8, rmSync as rmSync5, statSync as statSync7 } from "node:fs";
-var CLAUDE_CAPABILITIES = {
-  atomicSend: true,
-  atomicSpawnPrompt: true,
-  compaction: "manual",
-  contextUsage: "transcript-jsonl",
-  history: "transcript-files",
-  memory: "claude-project-memory",
-  reload: "prompt-command",
-  resume: "transcript-id",
-  detachedTurn: "replayable",
-  events: "synthesized"
-};
-async function callNative(env, verb, argv, options) {
-  const handler = NATIVE_VERBS[verb];
-  if (handler === void 0) {
-    return { code: 1, stdout: "", stderr: `tm: native verb not registered: ${verb}
-` };
-  }
-  return handler(argv, options, env);
-}
-function rstrip2(text) {
-  return text.replace(/\n+$/, "");
-}
-function readIfNonEmpty5(path) {
-  try {
-    if (statSync7(path).size === 0) return null;
-    return readFileSync8(path, "utf8");
-  } catch {
-    return null;
-  }
-}
-function readSid2(name) {
-  const raw = readIfNonEmpty5(sidFile2(name));
-  return raw === null ? null : rstrip2(raw);
-}
-function readCwd(name) {
-  const raw = readIfNonEmpty5(cwdFile2(name));
-  return raw === null ? null : rstrip2(raw);
-}
-async function hasTmuxSession(env, sessionName) {
-  try {
-    return (await env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
-  } catch {
-    return false;
-  }
-}
-function deriveState(name) {
-  const sid = readSid2(name);
-  if (sid === null) return "unknown";
-  if (existsSync3(busyMarkerFor2(sid))) return "busy";
-  if (existsSync3(idleMarkerFor2(sid))) return "idle";
-  return "unknown";
-}
-var ClaudeEngine = class {
-  /** The Claude engine carries the `NativeEnv` only because Phase 2a-1 still
-   *  delegates 12 of its 16 methods to `NATIVE_VERBS`. Phase 2a-2 inlines
-   *  the implementations and shrinks the constructor accordingly. */
-  constructor(env) {
-    this.env = env;
-  }
-  kind = "claude";
-  capabilities = CLAUDE_CAPABILITIES;
-  // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
-  async list(ctx2) {
-    let listing = "";
-    try {
-      listing = (await this.env.runTmux(["ls"])).stdout;
-    } catch {
-      listing = "";
-    }
-    const now = Math.floor(ctx2.now() / 1e3);
-    const out = [];
-    for (const line of listing.split("\n")) {
-      const colon = line.indexOf(":");
-      const session = colon >= 0 ? line.slice(0, colon) : line;
-      if (!session.startsWith(TMUX_SESSION_PREFIX)) continue;
-      const name = session.slice(TMUX_SESSION_PREFIX.length);
-      const extras = listingExtras(name, now);
-      out.push({
-        name,
-        engine: "claude",
-        state: deriveState(name),
-        cwd: readCwd(name) ?? "",
-        displayName: null,
-        extras: {
-          sidShort: extras.sidShort,
-          busy: extras.busy,
-          last: extras.last,
-          preview: extras.preview
-        }
-      });
-    }
-    return out;
-  }
-  async status(req, _ctx) {
-    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
-    if (!await hasTmuxSession(this.env, sessionName)) return { kind: "not-found" };
-    const linesArg = String(req.lines ?? 80);
-    let pane = null;
-    try {
-      const list = await this.env.runTmux(["list-sessions", "-F", "#{session_id} #{session_name}"]);
-      if (list.code !== 0) {
-        return { kind: "failed", message: rstrip2(list.stderr) || rstrip2(list.stdout) || `tmux list-sessions exit ${list.code}` };
-      }
-      for (const line of list.stdout.split("\n")) {
-        const space = line.indexOf(" ");
-        if (space >= 0 && line.slice(space + 1) === sessionName) {
-          pane = line.slice(0, space);
-          break;
-        }
-      }
-    } catch (err) {
-      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
-    }
-    if (pane === null) {
-      return { kind: "failed", message: `tmux session ${sessionName} present in has-session but absent from list-sessions` };
-    }
-    let capture;
-    try {
-      const result = await this.env.runTmux(["capture-pane", "-t", pane, "-p", "-S", `-${linesArg}`]);
-      if (result.code !== 0) {
-        return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) || `tmux capture-pane exit ${result.code}` };
-      }
-      capture = result.stdout;
-    } catch (err) {
-      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
-    }
-    return {
-      kind: "present",
-      name: req.name,
-      engine: "claude",
-      state: deriveState(req.name),
-      cwd: readCwd(req.name) ?? "",
-      pane: capture,
-      diagnostics: {
-        tmuxSession: sessionName,
-        sid: readSid2(req.name) ?? ""
-      }
-    };
-  }
-  async kill(req, _ctx) {
-    const sessionName = `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`;
-    const sid = readSid2(req.name);
-    if (sid !== null) {
-      rmSync5(idleMarkerFor2(sid), { force: true });
-      rmSync5(lastFileFor2(sid), { force: true });
-      rmSync5(busyMarkerFor2(sid), { force: true });
-    }
-    for (const file of [sidFile2(req.name), sendAtFile2(req.name), readyFile2(req.name), cwdFile2(req.name)]) {
-      rmSync5(file, { force: true });
-    }
-    let running = false;
-    try {
-      running = (await this.env.runTmux(["has-session", "-t", `=${sessionName}`])).code === 0;
-    } catch {
-      running = false;
-    }
-    if (!running) return { kind: "not-found" };
-    try {
-      await this.env.runTmux(["kill-session", "-t", `=${sessionName}`]);
-    } catch (err) {
-      return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
-    }
-    return { kind: "killed" };
-  }
-  // ─── Hot path / session-shape — Phase 2a-1 delegate to NATIVE_VERBS ─
-  async spawn(req, _ctx) {
-    const argv = [req.name];
-    if (req.displayName !== null) argv.push("--task", req.displayName);
-    if (req.prompt !== null) argv.push("--prompt", req.prompt);
-    const result = await callNative(this.env, "spawn", argv);
-    if (result.code !== 0) return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) };
-    return {
-      kind: "spawned",
-      name: req.name,
-      firstTurn: req.prompt === null ? null : { kind: "completed", text: result.stdout, items: [], context: null }
-    };
-  }
-  async send(req, _ctx) {
-    const argv = [req.name, "--prompt", req.prompt];
-    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
-    const result = await callNative(this.env, "send", argv);
-    if (result.code !== 0) {
-      return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout), recoverable: false };
-    }
-    return { kind: "completed", text: result.stdout, items: [], context: null };
-  }
-  async wait(req, _ctx) {
-    const argv = [req.name];
-    if (req.timeoutMs !== null) argv.push("--timeout", String(Math.round(req.timeoutMs / 1e3)));
-    const result = await callNative(this.env, "wait", argv);
-    if (result.code !== 0) {
-      return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout), recoverable: true };
-    }
-    return { kind: "completed", text: result.stdout, items: [], context: null };
-  }
-  async compact(req, _ctx) {
-    const result = await callNative(this.env, "compact", [req.name]);
-    if (result.code === 0) return { kind: "compacted" };
-    return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) };
-  }
-  async resume(req, _ctx) {
-    const result = await callNative(this.env, "resume", [req.name, "--sid", req.checkpoint]);
-    if (result.code === 0) return { kind: "resumed", checkpoint: req.checkpoint };
-    return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) };
-  }
-  async last(req, _ctx) {
-    return claudeLast(req.name);
-  }
-  async ctx(req, _ctx) {
-    return claudeCtxUsage(req.name, {
-      dispatcherDir: this.env.dispatcherDir,
-      projectsDir: this.env.projectsDir
-    });
-  }
-  async history(req, _ctx) {
-    const argv = [req.name];
-    if (req.index !== null) argv.push(String(req.index));
-    const result = await callNative(this.env, "history", argv);
-    if (result.code === 0) {
-      return {
-        kind: "list",
-        turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip2(result.stdout) }]
-      };
-    }
-    return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) };
-  }
-  async mem(req, _ctx) {
-    return claudeMem(req.name, {
-      dispatcherDir: this.env.dispatcherDir,
-      projectsDir: this.env.projectsDir
-    });
-  }
-  async reload(req, _ctx) {
-    const result = await callNative(this.env, "reload", [req.name]);
-    if (result.code === 0) return { kind: "reloaded" };
-    return { kind: "failed", message: rstrip2(result.stderr) || rstrip2(result.stdout) };
-  }
-  // ─── Diagnostic ─────────────────────────────────────────────────────
-  async inspect(req, _ctx) {
-    return {
-      engine: "claude",
-      name: req.name,
-      fields: {
-        sid: readSid2(req.name) ?? "",
-        cwd: readCwd(req.name) ?? "",
-        tmuxSession: `${TMUX_SESSION_PREFIX}${req.name.replace(/\//g, "__")}`
-      }
-    };
-  }
-  async doctor(_ctx) {
-    const result = await callNative(this.env, "doctor", []);
-    return {
-      engine: "claude",
-      findings: [
-        {
-          severity: result.code === 0 ? "ok" : "warn",
-          summary: rstrip2(result.stdout) || rstrip2(result.stderr) || "no doctor output",
-          fix: null
-        }
-      ]
-    };
-  }
-};
-
-// src/engines/registry.ts
-var EngineRegistry = class {
-  engines = /* @__PURE__ */ new Map();
-  /** Add an engine; throws if a kind is registered twice in one process. */
-  register(engine) {
-    if (this.engines.has(engine.kind)) {
-      throw new Error(
-        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
-      );
-    }
-    this.engines.set(engine.kind, engine);
-  }
-  get(kind) {
-    return this.engines.get(kind);
-  }
-  registered() {
-    return Array.from(this.engines.values());
-  }
-  kinds() {
-    return Array.from(this.engines.keys());
-  }
-};
-
-// src/engines/production.ts
-function productionRegistry(env) {
-  const registry = new EngineRegistry();
-  registry.register(new ClaudeEngine(env));
-  registry.register(new CodexEngine());
-  return registry;
-}
-
-// src/cli.ts
-import { homedir } from "node:os";
-import { join as join9 } from "node:path";
-
-// src/verbs/archive.ts
-import { readFileSync as readFileSync9, statSync as statSync8, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
-
-// src/persistence/project-dir.ts
-function encodeProjectDir2(cwd) {
-  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
-}
-
-// src/verbs/archive.ts
-var ARCHIVE_TEMPLATE2 = `${[
-  "---",
-  "name: dispatcher-tasks-archive",
-  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
-  "metadata:",
-  "  node_type: memory",
-  "  type: project",
-  "---",
-  "",
-  "# Dispatcher task archive",
-  "",
-  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
-  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
-  "that outlives a task should be promoted to its own memory file, not kept here.",
-  "",
-  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
-].join("\n")}
-`;
-function die3(message) {
+function die4(message) {
   return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
-}
-function isRegularFile5(path) {
-  try {
-    return statSync8(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function fmtLocalDate2() {
-  const d = /* @__PURE__ */ new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function ledgerLines2(content) {
-  const lines = content.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-function parseArchiveArgs2(args) {
-  let id = "";
-  let status2 = "";
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--status") {
-      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
-      status2 = args[i + 1];
-      i++;
-    } else if (arg.startsWith("--status=")) {
-      status2 = arg.slice("--status=".length);
-    } else if (arg.startsWith("-")) {
-      return { error: die3(`tm archive: unknown flag: ${arg}`) };
-    } else if (id === "") {
-      id = arg;
-    } else {
-      return { error: die3(`tm archive: unexpected arg: ${arg}`) };
-    }
-  }
-  return { id, status: status2 };
-}
-async function archiveVerb(args, stdin, env) {
-  const parsed = parseArchiveArgs2(args);
-  if ("error" in parsed) return parsed.error;
-  const { id } = parsed;
-  if (id === "") {
-    return die3("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
-  }
-  const memoryDir = join8(env.projectsDir, encodeProjectDir2(env.dispatcherDir), "memory");
-  const activePath = join8(memoryDir, "active-dispatcher-tasks.md");
-  const archivePath = join8(memoryDir, "dispatcher-tasks-archive.md");
-  if (!isRegularFile5(activePath)) return die3(`no active ledger at ${activePath}`);
-  const outcome = (stdin ?? "").replace(/\n+$/, "");
-  if (outcome.replace(/\s/g, "") === "") {
-    return die3(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
-  }
-  const activeContent = readFileSync9(activePath, "utf8");
-  const activeLines = ledgerLines2(activeContent);
-  let headerRe;
-  try {
-    headerRe = new RegExp(`^### ${id}(\\s|$)`);
-  } catch {
-    headerRe = /(?!)/;
-  }
-  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
-  if (headerLines.length === 0) {
-    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
-    return die3(`id not found in active ledger: ${id}
-  available: ${available}`);
-  }
-  if (headerLines.length !== 1) {
-    return die3(`id matches ${headerLines.length} entries in active ledger: ${id}`);
-  }
-  const start = headerLines[0];
-  const total = (activeContent.match(/\n/g) ?? []).length;
-  let end = total;
-  for (let index = start; index < activeLines.length; index++) {
-    if (/^(### |## )/.test(activeLines[index])) {
-      end = index;
-      break;
-    }
-  }
-  const blockLines = activeLines.slice(start - 1, end);
-  let status2 = parsed.status;
-  if (status2 === "") {
-    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
-    status2 = tag ? tag[1] : "done";
-  }
-  const field = (name) => {
-    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
-    if (line === void 0) return "(unknown)";
-    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
-    return value === "" ? "(unknown)" : value;
-  };
-  const entry = `### ${id}  [${status2}]
-- repo/branch: ${field("repo")} / ${field("branch")}
-- intent: ${field("intent")}
-- outcome: ${outcome}
-- closed: ${fmtLocalDate2()}`;
-  const archiveContent = isRegularFile5(archivePath) ? readFileSync9(archivePath, "utf8") : ARCHIVE_TEMPLATE2;
-  const archiveLines = ledgerLines2(archiveContent);
-  let firstEntry = 0;
-  for (let index = 0; index < archiveLines.length; index++) {
-    if (archiveLines[index].startsWith("### ")) {
-      firstEntry = index + 1;
-      break;
-    }
-  }
-  let newArchive;
-  if (firstEntry > 0) {
-    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
-` : "";
-    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
-`;
-    newArchive = `${head}${entry}
-
-${tail}`;
-  } else {
-    newArchive = `${archiveContent}
-${entry}
-`;
-  }
-  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
-  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
-` : "";
-  writeFileSync4(archivePath, newArchive);
-  writeFileSync4(activePath, newActive);
-  return {
-    code: 0,
-    stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
-`,
-    stderr: ""
-  };
 }
 
 // src/persistence/atomic-file.ts
 import {
   closeSync as closeSync3,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   openSync as openSync3,
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync12,
   renameSync as renameSync3,
-  rmSync as rmSync6,
-  statSync as statSync9,
-  writeFileSync as writeFileSync5
+  rmSync as rmSync7,
+  statSync as statSync13,
+  writeFileSync as writeFileSync6
 } from "node:fs";
 function readIfPresent(path) {
   try {
-    return readFileSync10(path, "utf8");
+    return readFileSync12(path, "utf8");
   } catch (err) {
     if (err.code === "ENOENT") return null;
     throw err;
   }
 }
 function removeIfPresent(path) {
-  rmSync6(path, { force: true });
+  rmSync7(path, { force: true });
 }
 
 // src/persistence/identity-store.ts
@@ -8149,10 +7660,10 @@ var ProductionIdentityStore = class {
 };
 
 // src/verbs/ls.ts
-async function lsVerb(ctx2) {
-  const engines = ctx2.engines.registered();
+async function lsVerb(ctx) {
+  const engines = ctx.engines.registered();
   if (engines.length === 0) return noEngineRegistered();
-  const listings = await Promise.all(engines.map((engine) => engine.list(ctx2.engineContext)));
+  const listings = await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)));
   return formatListing(listings.flat());
 }
 
@@ -8162,10 +7673,10 @@ function cell(extras, key) {
   const value = extras[key];
   return typeof value === "string" && value.length > 0 ? value : "-";
 }
-async function statesVerb(ctx2) {
-  const engines = ctx2.engines.registered();
+async function statesVerb(ctx) {
+  const engines = ctx.engines.registered();
   if (engines.length === 0) return noEngineRegistered();
-  const listings = (await Promise.all(engines.map((engine) => engine.list(ctx2.engineContext)))).flat();
+  const listings = (await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))).flat();
   if (listings.length === 0) return { code: 0, stdout: "(no teammate sessions)\n", stderr: "" };
   const rows = [
     HEADER,
@@ -8177,28 +7688,28 @@ async function statesVerb(ctx2) {
       cell(row.extras, "preview")
     ])
   ];
-  return ctx2.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
+  return ctx.runColumn(`${rows.map((row) => row.join("	")).join("\n")}
 `);
 }
 
 // src/verbs/status.ts
-async function statusVerb(name, ctx2, options = { lines: null }) {
-  const resolved = await ctx2.router.resolve(name);
+async function statusVerb(name, ctx, options = { lines: null }) {
+  const resolved = await ctx.router.resolve(name);
   if (resolved === null) return teammateNotFound(name);
-  const status2 = await resolved.engine.status(
+  const status = await resolved.engine.status(
     { name, lines: options.lines },
-    ctx2.engineContext
+    ctx.engineContext
   );
-  return formatStatus(status2);
+  return formatStatus(status);
 }
 
 // src/verbs/kill.ts
-async function killVerb(name, ctx2) {
-  const resolved = await ctx2.router.resolve(name);
-  const engine = resolved?.engine ?? ctx2.engines.get("claude");
+async function killVerb(name, ctx) {
+  const resolved = await ctx.router.resolve(name);
+  const engine = resolved?.engine ?? ctx.engines.get("claude");
   if (engine === void 0) return formatKill(name, { kind: "not-found" });
-  const result = await engine.kill({ name }, ctx2.engineContext);
-  if (result.kind === "killed") await ctx2.identity.remove(name);
+  const result = await engine.kill({ name }, ctx.engineContext);
+  if (result.kind === "killed") await ctx.identity.remove(name);
   return formatKill(name, result);
 }
 
@@ -8224,29 +7735,9 @@ function productionVerbContext(env) {
     runColumn: env.runColumn
   };
 }
-var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status", "kill"]);
-async function dispatchEngineVerb(verb, rest, ctx2) {
-  switch (verb) {
-    case "ls":
-      return lsVerb(ctx2);
-    case "states":
-      return statesVerb(ctx2);
-    case "status": {
-      if (rest.length === 0) {
-        return { code: 1, stdout: "", stderr: "tm: usage: tm status <repo> [lines=80]\n" };
-      }
-      const lines = rest[1];
-      const parsed = lines === void 0 ? null : Number(lines);
-      const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed;
-      return statusVerb(rest[0], ctx2, { lines: linesArg });
-    }
-    case "kill":
-      if (rest.length === 0) return { code: 1, stdout: "", stderr: "tm: usage: tm kill <repo>\n" };
-      return killVerb(rest[0], ctx2);
-    default:
-      return { code: 1, stdout: "", stderr: `tm: unsupported engine verb: ${verb}
+function die5(message) {
+  return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
-  }
 }
 function triggersHelp(args) {
   for (const arg of args) {
@@ -8260,12 +7751,8 @@ function removedVerb(message) {
   return { code: 2, stdout: "", stderr: message };
 }
 function unknownVerb(verb) {
-  return {
-    code: 1,
-    stdout: OVERVIEW_HELP,
-    stderr: `tm: unknown subcommand: ${verb}
-`
-  };
+  return { code: 1, stdout: OVERVIEW_HELP, stderr: `tm: unknown subcommand: ${verb}
+` };
 }
 function runHelpVerb(rest) {
   const target = rest[0];
@@ -8282,6 +7769,155 @@ function runHelpVerb(rest) {
     stderr: `tm: no help for unknown verb: ${target}
 `
   };
+}
+var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status", "kill"]);
+async function dispatchEngineVerb(verb, rest, ctx) {
+  switch (verb) {
+    case "ls":
+      return lsVerb(ctx);
+    case "states":
+      return statesVerb(ctx);
+    case "status": {
+      if (rest.length === 0) {
+        return { code: 1, stdout: "", stderr: "tm: usage: tm status <repo> [lines=80]\n" };
+      }
+      const lines = rest[1];
+      const parsed = lines === void 0 ? null : Number(lines);
+      const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed;
+      return statusVerb(rest[0], ctx, { lines: linesArg });
+    }
+    case "kill":
+      if (rest.length === 0) return { code: 1, stdout: "", stderr: "tm: usage: tm kill <repo>\n" };
+      return killVerb(rest[0], ctx);
+    default:
+      return { code: 1, stdout: "", stderr: `tm: unsupported engine verb: ${verb}
+` };
+  }
+}
+function lastDispatch(args) {
+  const repo = args[0] ?? "";
+  if (repo.length === 0) return die5("usage: tm last <repo>");
+  const result = claudeLast(repo);
+  if (result.kind === "text") return { code: 0, stdout: result.text, stderr: "" };
+  return die5(result.kind === "failed" ? result.message : `unexpected last result: ${result.kind}`);
+}
+function parseCtxArgs(args) {
+  const repos = [];
+  let windowOverride = "";
+  let all = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--all") {
+      all = true;
+    } else if (arg === "--window") {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
+      windowOverride = args[i + 1];
+      i++;
+    } else if (arg.startsWith("--window=")) {
+      windowOverride = arg.slice("--window=".length);
+    } else if (arg.startsWith("-")) {
+      return { error: die5(`tm ctx: unknown flag: ${arg}`) };
+    } else {
+      repos.push(arg);
+    }
+  }
+  if (windowOverride !== "" && windowOverride !== "200k" && windowOverride !== "1m") {
+    return { error: die5("tm ctx: --window must be 200k or 1m") };
+  }
+  return { repos, windowOverride, all };
+}
+async function ctxDispatch(args, env) {
+  const parsed = parseCtxArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const repos = [...parsed.repos];
+  if (parsed.all) repos.push(...await iterTeammates(env.runTmux));
+  if (repos.length === 0) {
+    return die5("usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]");
+  }
+  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env));
+  return { code: 0, stdout: `${lines.join("\n")}
+`, stderr: "" };
+}
+function memDispatch(args, env) {
+  const repo = args[0] ?? "";
+  if (repo.length === 0) return die5("usage: tm mem <repo>");
+  const result = claudeMem(repo, env);
+  switch (result.kind) {
+    case "text":
+      return { code: 0, stdout: result.text, stderr: "" };
+    case "failed":
+      return die5(result.message);
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `${result.reason}
+` };
+  }
+}
+async function doctorDispatch(args, env) {
+  const moduleDir = dirname8(fileURLToPath2(import.meta.url));
+  const tmWrapper = join12(moduleDir, "..", "..", "bin", "tm");
+  const pluginJson = join12(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
+  return claudeDoctor(args, env, { tmWrapper, pluginJson });
+}
+async function spawnDispatch(args, env) {
+  const repo = args[0] ?? "";
+  if (repo.length === 0) {
+    return die5('usage: tm spawn <repo> [--task <slug>] [--prompt "..."]');
+  }
+  const parsed = parseSpawnArgs(args.slice(1));
+  if ("error" in parsed) return parsed.error;
+  const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed;
+  if (engine === "codex" || engine === null && isCodexTarget(repo)) {
+    if (resumeSid.length > 0) return die5("tm spawn: --resume is not supported for codex teammates");
+    if (task.length > 0) return die5("tm spawn: --task is not supported for codex teammates");
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
+      return die5(`tm spawn: --timeout must be a non-negative integer (got: '${timeout}')`);
+    }
+    const repoPath = join12(env.dispatcherDir, repo);
+    const cwdPhys = isDirectory(repoPath) ? realpathSync4(repoPath) : realpathSync4(env.dispatcherDir);
+    return codexSpawn(repo, {
+      cwd: cwdPhys,
+      prompt: hasPrompt ? prompt : null,
+      timeoutSec: timeout === null ? null : Number(timeout),
+      displayName: null,
+      engine: env.engines?.get("codex")
+    });
+  }
+  return claudeSpawn(args, env);
+}
+async function sendDispatch(args, env) {
+  const parsed = parseSendArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed;
+  if (repo !== "" && isCodexTarget(repo)) {
+    if (!hasPrompt) {
+      return die5(
+        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
+      );
+    }
+    if (!isNonNegativeInteger(timeout)) {
+      return die5(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
+    }
+    if (paneQuiet) return die5("tm send: --pane-quiet is not supported for codex teammates");
+    return codexSend(repo, prompt, {
+      timeoutSec: Number(timeout),
+      engine: env.engines?.get("codex")
+    });
+  }
+  return claudeSend(args, env);
+}
+async function waitDispatch(args, env) {
+  const parsed = parseWaitArgs(args);
+  if ("error" in parsed) return parsed.error;
+  const { repo, timeout, fresh, paneQuiet } = parsed;
+  if (repo !== "" && isCodexTarget(repo)) {
+    if (!isNonNegativeInteger(timeout)) {
+      return die5(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
+    }
+    if (fresh) return die5("tm wait: --fresh is not supported for codex teammates");
+    if (paneQuiet) return die5("tm wait: --pane-quiet is not supported for codex teammates");
+    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
+  }
+  return claudeWait(args, env);
 }
 async function runCli(argv, env, stdin) {
   const [verb, ...rest] = argv;
@@ -8301,39 +7937,61 @@ async function runCli(argv, env, stdin) {
   if (ENGINE_VERBS.has(verb)) {
     return dispatchEngineVerb(verb, rest, productionVerbContext(env));
   }
-  if (verb === "archive") {
-    return archiveVerb(rest, stdin, {
-      dispatcherDir: env.dispatcherDir,
-      projectsDir: env.projectsDir
-    });
+  switch (verb) {
+    case "archive":
+      return archiveVerb(rest, stdin, {
+        dispatcherDir: env.dispatcherDir,
+        projectsDir: env.projectsDir
+      });
+    case "last":
+      return lastDispatch(rest);
+    case "ctx":
+      return ctxDispatch(rest, env);
+    case "mem":
+      return memDispatch(rest, env);
+    case "history":
+      return claudeHistory(rest, env);
+    case "doctor":
+      return doctorDispatch(rest, env);
+    case "reload":
+      return claudeReload(rest, env);
+    case "compact":
+      return claudeCompact(rest, env);
+    case "resume":
+      return claudeResume(rest, env);
+    case "spawn":
+      return spawnDispatch(rest, env);
+    case "send":
+      return sendDispatch(rest, env);
+    case "wait":
+      return waitDispatch(rest, env);
+    case "poll":
+      return pollVerb(rest, env);
+    case "ask":
+      return askVerb(rest);
+    default:
+      return unknownVerb(verb);
   }
-  if (Object.hasOwn(NATIVE_VERBS, verb)) {
-    const handler = NATIVE_VERBS[verb];
-    const options = stdin != null ? { stdin } : void 0;
-    return handler(rest, options, env);
-  }
-  return unknownVerb(verb);
 }
 function productionEnv() {
   const env = {
     runTmux,
     runColumn,
     runGrep,
-    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or `$PWD`
-    // (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter here:
+    // `tm` resolves the dispatcher dir from `TM_DISPATCHER_DIR` or
+    // `$PWD` (bash's `${TM_DISPATCHER_DIR:-$PWD}`). Two semantics matter:
     //   - `$PWD` is the *logical* cwd, preserving the symlink the user
     //     `cd`'d through; Node's `process.cwd()` would return the
-    //     symlink-resolved physical path, and `~/.claude/projects` lookups
-    //     would diverge between bash and native on a symlinked dispatcher
-    //     tree.
-    //   - bash `${VAR:-default}` triggers the default on *unset* OR *empty*,
-    //     so `||` (which treats empty strings as falsy) is the right
-    //     operator — `??` would let an accidentally-empty
+    //     symlink-resolved physical path, and `~/.claude/projects`
+    //     lookups would diverge between bash and native on a symlinked
+    //     dispatcher tree.
+    //   - bash `${VAR:-default}` triggers the default on *unset* OR
+    //     *empty*, so `||` (which treats empty strings as falsy) is the
+    //     right operator — `??` would let an accidentally-empty
     //     `TM_DISPATCHER_DIR` through and resolve `<repo>` paths against
-    //     `""`, while `tm doctor`'s own check treats empty as unset and
-    //     reports the opposite of what the verbs saw.
+    //     `""`.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
-    projectsDir: join9(process.env.HOME ?? homedir(), ".claude", "projects")
+    projectsDir: join12(process.env.HOME ?? homedir(), ".claude", "projects")
   };
   return { ...env, engines: productionRegistry(env) };
 }

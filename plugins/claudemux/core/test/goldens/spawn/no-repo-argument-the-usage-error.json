@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: usage: tm spawn <repo> [--task <slug>] [--prompt \"...\"] [--no-wait]\n"
+  "stderr": "tm: usage: tm spawn <repo> [--task <slug>] [--prompt \"...\"]\n"
 }

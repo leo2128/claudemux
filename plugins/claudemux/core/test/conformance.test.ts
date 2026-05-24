@@ -366,7 +366,7 @@ function writeCodexDaemon(
       spawnedAt: nowSec - 300,
     }, null, 2)}\n`,
   )
-  if (opts.borrowed === true) writeFileSync(codexBorrowLockFile(name), '99999\n')
+  if (opts.borrowed === true) writeFileSync(codexBorrowLockFile(name), `${process.pid}\n`)
 }
 
 /** Set the session list the fake `tmux ls` returns. */

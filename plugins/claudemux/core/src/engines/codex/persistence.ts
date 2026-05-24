@@ -7,18 +7,20 @@
  * not write any of these files.
  */
 
-import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { TeammateRecord } from '../teammate-record'
 import type { EngineKind, TeammateName } from '../types'
 import type { TeammateRecordJson } from '../teammate-record'
+import { validateTeammateName } from '../../identity/name'
+import {
+  read as readIdentity,
+  remove as removeIdentity,
+  reserve as reserveIdentity,
+  write as writeIdentity,
+  type ReserveResult,
+} from '../../persistence/identity-store'
 
 export interface CodexTeammateExtension {
   root: string
@@ -45,7 +47,15 @@ export function codexRegistryRoot(): string {
   return process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] || '/tmp/teammate-codex'
 }
 
+function assertValidCodexName(name: TeammateName): void {
+  const validation = validateTeammateName(name)
+  if (validation.kind !== 'ok') {
+    throw new Error(`invalid codex teammate name '${name}': ${validation.reason}`)
+  }
+}
+
 export function codexTeammateDir(name: TeammateName): string {
+  assertValidCodexName(name)
   return join(codexRegistryRoot(), name)
 }
 
@@ -101,51 +111,24 @@ export function codexExtension(name: TeammateName): CodexTeammateExtension {
   }
 }
 
-function atomicWrite(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, content, { mode: 0o600 })
-  renameSync(tmp, path)
+export function readBaseRecord(name: TeammateName): TeammateRecordJson | null {
+  if (validateTeammateName(name).kind !== 'ok') return null
+  return readIdentity(name)
 }
 
-export function readBaseRecord(name: TeammateName): TeammateRecordJson | null {
-  try {
-    const parsed = JSON.parse(readFileSync(TeammateRecord.markerPath(name), 'utf8')) as unknown
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      (parsed as { schema?: unknown }).schema === 1 &&
-      typeof (parsed as { name?: unknown }).name === 'string' &&
-      ((parsed as { engine?: unknown }).engine === 'claude' ||
-        (parsed as { engine?: unknown }).engine === 'codex') &&
-      typeof (parsed as { cwd?: unknown }).cwd === 'string' &&
-      typeof (parsed as { createdAt?: unknown }).createdAt === 'number'
-    ) {
-      const displayName = (parsed as { displayName?: unknown }).displayName
-      return {
-        schema: 1,
-        name: (parsed as { name: TeammateName }).name,
-        engine: (parsed as { engine: EngineKind }).engine,
-        cwd: (parsed as { cwd: string }).cwd,
-        createdAt: (parsed as { createdAt: number }).createdAt,
-        displayName: typeof displayName === 'string' ? displayName : null,
-      }
-    }
-    return null
-  } catch {
-    return null
-  }
+export function reserveBaseRecord(record: TeammateRecord): ReserveResult {
+  assertValidCodexName(record.name)
+  return reserveIdentity(record.toJson())
 }
 
 export function writeBaseRecord(record: TeammateRecord): void {
-  atomicWrite(
-    TeammateRecord.markerPath(record.name),
-    `${JSON.stringify(record.toJson(), null, 2)}\n`,
-  )
+  assertValidCodexName(record.name)
+  writeIdentity(record.toJson())
 }
 
 export function removeBaseRecord(name: TeammateName): void {
-  rmSync(TeammateRecord.markerPath(name), { force: true })
+  if (validateTeammateName(name).kind !== 'ok') return
+  removeIdentity(name)
 }
 
 export function readCodexMeta(name: TeammateName): CodexMeta | null {

@@ -44,9 +44,11 @@ import { statusVerb } from './verbs/status'
 import { killVerb } from './verbs/kill'
 
 import {
+  codexNameValidationError,
   codexSend,
   codexSpawn,
   codexWait,
+  isCodexPrefixName,
   isCodexTarget,
 } from './engines/codex/verbs'
 import { isDirectory } from './engines/claude/idle'
@@ -270,7 +272,10 @@ async function spawnDispatch(args: readonly string[], env: NativeEnv): Promise<T
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
   const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed
-  if (engine === 'codex' || (engine === null && isCodexTarget(repo))) {
+  const codexByPrefix = engine === null && isCodexPrefixName(repo)
+  if (engine === 'codex' || codexByPrefix || (engine === null && isCodexTarget(repo))) {
+    const invalidName = codexNameValidationError(repo)
+    if (invalidName !== null) return die(invalidName)
     if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
     if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
     if (timeout !== null && !isNonNegativeInteger(timeout)) {
@@ -293,6 +298,11 @@ async function sendDispatch(args: readonly string[], env: NativeEnv): Promise<Tm
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed
+  const codexByPrefix = isCodexPrefixName(repo)
+  if (codexByPrefix) {
+    const invalidName = codexNameValidationError(repo)
+    if (invalidName !== null) return die(invalidName)
+  }
   if (repo !== '' && isCodexTarget(repo)) {
     if (!hasPrompt) {
       return die(
@@ -300,12 +310,12 @@ async function sendDispatch(args: readonly string[], env: NativeEnv): Promise<Tm
           '[--pane-quiet] [--timeout N]',
       )
     }
-    if (!isNonNegativeInteger(timeout)) {
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
       return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
     }
     if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
     return codexSend(repo, prompt, {
-      timeoutSec: Number(timeout),
+      timeoutSec: timeout === null ? null : Number(timeout),
       engine: env.engines?.get('codex'),
     })
   }
@@ -316,13 +326,21 @@ async function waitDispatch(args: readonly string[], env: NativeEnv): Promise<Tm
   const parsed = parseWaitArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, timeout, fresh, paneQuiet } = parsed
+  const codexByPrefix = isCodexPrefixName(repo)
+  if (codexByPrefix) {
+    const invalidName = codexNameValidationError(repo)
+    if (invalidName !== null) return die(invalidName)
+  }
   if (repo !== '' && isCodexTarget(repo)) {
-    if (!isNonNegativeInteger(timeout)) {
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
       return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
     }
     if (fresh) return die('tm wait: --fresh is not supported for codex teammates')
     if (paneQuiet) return die('tm wait: --pane-quiet is not supported for codex teammates')
-    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
+    return codexWait(repo, {
+      timeoutSec: timeout === null ? null : Number(timeout),
+      engine: env.engines?.get('codex'),
+    })
   }
   return claudeWait(args, env)
 }

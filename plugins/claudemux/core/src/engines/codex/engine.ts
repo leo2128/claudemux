@@ -51,14 +51,17 @@ import { runTurn, subscribeTurnCollection } from './events.js'
 import {
   CodexDaemonAlreadyAliveError,
   CodexDaemonSpawnInProgressError,
-  daemonBorrowed,
   daemonAlive,
+  daemonBorrowed,
+  daemonSpawnInProgress,
   isProcessAlive,
   listDaemons,
   readDaemonState,
   reapDaemon,
+  releaseDaemonBorrow,
   spawnDaemon,
   touchLastSeen,
+  tryBorrowDaemon,
   writeThreadId,
 } from './supervisor.js'
 import {
@@ -66,8 +69,9 @@ import {
   readBaseRecord,
   readCodexMeta,
   removeBaseRecord,
-  writeBaseRecord,
+  reserveBaseRecord,
 } from './persistence.js'
+import { validateTeammateName } from '../../identity/name.js'
 
 export const CODEX_CLIENT_INFO: ClientInfo = {
   name: 'claudemux',
@@ -162,6 +166,13 @@ function isTimedOut<T>(value: T | { timedOut: true }): value is { timedOut: true
   )
 }
 
+function codexNameFailure(name: string): string | null {
+  const validation = validateTeammateName(name)
+  return validation.kind === 'ok'
+    ? null
+    : `invalid codex teammate name '${name}': ${validation.reason}`
+}
+
 function fmtAge(age: number): string {
   if (age < 60) return `${age}s`
   if (age < 3600) return `${Math.floor(age / 60)}m`
@@ -221,10 +232,14 @@ export class CodexEngine implements Engine {
   constructor(private readonly options: CodexEngineOptions = {}) {}
 
   async spawn(req: SpawnRequest, ctx: EngineContext): Promise<SpawnResult> {
+    const invalidName = codexNameFailure(req.name)
+    if (invalidName !== null) return { kind: 'failed', message: invalidName }
+
     const existing = readBaseRecord(req.name)
     if (existing !== null) {
       if (existing.engine !== 'codex') return { kind: 'already-exists', existingEngine: existing.engine }
       if (daemonAlive(req.name)) return { kind: 'already-exists', existingEngine: 'codex' }
+      if (daemonSpawnInProgress(req.name)) return { kind: 'already-exists', existingEngine: 'codex' }
       removeBaseRecord(req.name)
     }
     if (daemonAlive(req.name)) return { kind: 'already-exists', existingEngine: 'codex' }
@@ -236,6 +251,11 @@ export class CodexEngine implements Engine {
       createdAt,
       displayName: req.displayName,
     })
+    const reserved = reserveBaseRecord(record)
+    if (reserved.kind === 'taken') {
+      return { kind: 'already-exists', existingEngine: reserved.existing.engine }
+    }
+    if (reserved.kind === 'failed') return { kind: 'failed', message: reserved.message }
 
     try {
       await spawnDaemon({
@@ -254,7 +274,6 @@ export class CodexEngine implements Engine {
       })
 
       await this.healthCheck(req.name)
-      writeBaseRecord(record)
 
       if (req.prompt === null) {
         return { kind: 'spawned', name: req.name, firstTurn: null }
@@ -265,12 +284,12 @@ export class CodexEngine implements Engine {
       )
       return { kind: 'spawned', name: req.name, firstTurn }
     } catch (e) {
+      removeBaseRecord(req.name)
       if (e instanceof CodexDaemonAlreadyAliveError) {
         return { kind: 'already-exists', existingEngine: 'codex' }
       }
       if (!(e instanceof CodexDaemonSpawnInProgressError)) {
         await reapDaemon(req.name)
-        removeBaseRecord(req.name)
       }
       return {
         kind: 'failed',
@@ -280,6 +299,10 @@ export class CodexEngine implements Engine {
   }
 
   async send(req: SendRequest, _ctx: EngineContext): Promise<TurnResult> {
+    const invalidName = codexNameFailure(req.name)
+    if (invalidName !== null) {
+      return { kind: 'failed', message: invalidName, recoverable: false }
+    }
     if (!daemonAlive(req.name)) {
       return {
         kind: 'failed',
@@ -289,6 +312,9 @@ export class CodexEngine implements Engine {
     }
     if (req.prompt.length === 0) {
       return { kind: 'failed', message: 'usage: tm send <teammate> "<prompt>"', recoverable: false }
+    }
+    if (!tryBorrowDaemon(req.name)) {
+      return { kind: 'failed', message: `codex teammate '${req.name}' is busy`, recoverable: true }
     }
 
     let client: CodexWsClient | null = null
@@ -325,10 +351,15 @@ export class CodexEngine implements Engine {
       }
     } finally {
       if (client !== null) client.close()
+      releaseDaemonBorrow(req.name)
     }
   }
 
   async wait(req: WaitRequest, _ctx: EngineContext): Promise<TurnResult> {
+    const invalidName = codexNameFailure(req.name)
+    if (invalidName !== null) {
+      return { kind: 'failed', message: invalidName, recoverable: false }
+    }
     if (!daemonAlive(req.name)) {
       return { kind: 'failed', message: `codex teammate '${req.name}' is not alive`, recoverable: false }
     }
@@ -460,9 +491,11 @@ export class CodexEngine implements Engine {
       const state = readDaemonState(name)
       if (state === null) {
         await reapDaemon(name)
+        removeBaseRecord(name)
         findings.push({ severity: 'warn', summary: `reaped malformed codex daemon entry ${name}`, fix: null })
       } else if (!isProcessAlive(state.pid)) {
         await reapDaemon(name)
+        removeBaseRecord(name)
         findings.push({ severity: 'warn', summary: `reaped stale codex daemon ${name} (pid=${state.pid})`, fix: null })
       } else {
         findings.push({ severity: 'ok', summary: `${name} alive (pid=${state.pid})`, fix: null })

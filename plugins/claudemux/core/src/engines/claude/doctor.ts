@@ -27,6 +27,7 @@ import {
   readDaemonState as readCodexState,
   reapDaemon as reapCodexDaemon,
 } from '../codex/supervisor'
+import { removeBaseRecord as removeCodexBaseRecord } from '../codex/persistence'
 import type { ClaudeVerbEnv } from './env'
 import type { TmResult } from '../../tm'
 
@@ -179,9 +180,11 @@ export async function claudeDoctor(
       if (state === null) {
         reaped.push(name)
         await reapCodexDaemon(name)
+        removeCodexBaseRecord(name)
       } else if (!codexProcessAlive(state.pid)) {
         reaped.push(name)
         await reapCodexDaemon(name)
+        removeCodexBaseRecord(name)
       } else {
         live.push({ name, pid: state.pid, startedAt: state.startedAt })
       }

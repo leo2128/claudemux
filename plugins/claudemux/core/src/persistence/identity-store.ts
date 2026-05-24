@@ -77,6 +77,21 @@ export type ReserveResult =
   | { kind: 'taken'; existing: TeammateRecordJson }
   | { kind: 'failed'; message: string }
 
+function sleepSync(ms: number): void {
+  const signal = new Int32Array(new SharedArrayBuffer(4))
+  Atomics.wait(signal, 0, 0, ms)
+}
+
+function readReservedRecord(name: TeammateName): TeammateRecordJson | null {
+  const deadline = Date.now() + 50
+  let existing = read(name)
+  while (existing === null && Date.now() < deadline) {
+    sleepSync(1)
+    existing = read(name)
+  }
+  return existing
+}
+
 /**
  * Atomically reserve a teammate name. The exclusive create fails with
  * `EEXIST` if the file already exists — that case is mapped to `taken` and
@@ -90,7 +105,7 @@ export function reserve(record: TeammateRecordJson): ReserveResult {
     return { kind: 'reserved' }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      const existing = read(record.name)
+      const existing = readReservedRecord(record.name)
       if (existing === null) {
         return { kind: 'failed', message: 'EEXIST on identity file but record could not be read back' }
       }

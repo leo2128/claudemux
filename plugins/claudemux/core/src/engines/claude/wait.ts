@@ -15,7 +15,7 @@ import type { TmResult } from '../../tm'
 /** Parsed arg vector for `tm wait`. */
 export interface WaitArgs {
   repo: string
-  timeout: string
+  timeout: string | null
   fresh: boolean
   paneQuiet: boolean
 }
@@ -29,7 +29,7 @@ export interface WaitArgs {
 export function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } {
   const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let repo = ''
-  let timeout = '1800'
+  let timeout: string | null = null
   let fresh = false
   let paneQuiet = false
   let i = 0
@@ -70,11 +70,11 @@ export async function claudeWait(args: readonly string[], env: ClaudeVerbEnv): P
       'usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]',
     )
   }
-  if (!isNonNegativeInteger(timeout)) {
+  if (timeout !== null && !isNonNegativeInteger(timeout)) {
     return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
   }
 
-  const timeoutSec = Number(timeout)
+  const timeoutSec = timeout === null ? 1800 : Number(timeout)
   const verdict = paneQuiet
     ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
     : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux)
@@ -83,7 +83,7 @@ export async function claudeWait(args: readonly string[], env: ClaudeVerbEnv): P
     return {
       code: 1,
       stdout: printLastOrEmpty(repo),
-      stderr: `tm wait: timed out after ${timeout}s on ${repo}\n`,
+      stderr: `tm wait: timed out after ${timeoutSec}s on ${repo}\n`,
     }
   }
 

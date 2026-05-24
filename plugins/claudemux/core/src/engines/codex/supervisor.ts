@@ -55,6 +55,7 @@ import {
   codexThreadFile,
   codexStdoutLogFile,
 } from './persistence.js'
+import { validateTeammateName } from '../../identity/name.js'
 
 /** Snapshot of one daemon's on-disk state. `null` for a missing entry. */
 export interface DaemonState {
@@ -144,6 +145,17 @@ function readTextFile(path: string): string | null {
   }
 }
 
+function clearStaleBorrowLock(name: string): void {
+  const lockPath = codexBorrowLockFile(name)
+  const pid = readIntFile(lockPath)
+  if (pid === null) return
+  if (!isProcessAlive(pid)) rmSync(lockPath, { force: true })
+}
+
+function codexSpawnLockFile(name: string): string {
+  return `${codexTeammateDir(name)}.spawn.lock`
+}
+
 function nowSec(): number {
   return Math.floor(Date.now() / 1000)
 }
@@ -227,9 +239,14 @@ export function daemonAlive(name: string): boolean {
   return isProcessAlive(state.pid)
 }
 
-/** Does this daemon registry entry currently carry an exclusive borrow lock? */
-export function daemonBorrowed(name: string): boolean {
-  return existsSync(codexBorrowLockFile(name))
+/** Is a spawn currently reserving or starting this daemon? */
+export function daemonSpawnInProgress(name: string): boolean {
+  const lockPath = codexSpawnLockFile(name)
+  const pid = readIntFile(lockPath)
+  if (pid === null) return existsSync(lockPath)
+  if (isProcessAlive(pid)) return true
+  rmSync(lockPath, { force: true })
+  return false
 }
 
 /** Names of every registry entry, alive or stale. */
@@ -246,11 +263,38 @@ export function listDaemons(): string[] {
       }
     }
     walk(root, '')
-    return names.sort()
+    return names.filter((name) => validateTeammateName(name).kind === 'ok').sort()
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw e
   }
+}
+
+/** Is a codex daemon currently borrowed by a direct turn (`send` / `ask`)? */
+export function daemonBorrowed(name: string): boolean {
+  clearStaleBorrowLock(name)
+  return existsSync(codexBorrowLockFile(name))
+}
+
+/** Try to borrow a daemon for one direct turn. Returns false when another caller holds it. */
+export function tryBorrowDaemon(name: string): boolean {
+  clearStaleBorrowLock(name)
+  try {
+    const fd = openSync(codexBorrowLockFile(name), 'wx', 0o600)
+    try {
+      writeSync(fd, `${process.pid}\n`)
+    } finally {
+      closeSync(fd)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Release a daemon borrow lock. Idempotent. */
+export function releaseDaemonBorrow(name: string): void {
+  rmSync(codexBorrowLockFile(name), { force: true })
 }
 
 function removeSelfRegistry(name: string): void {
@@ -288,7 +332,7 @@ export async function spawnDaemon(opts: SpawnDaemonOptions): Promise<DaemonState
   const dir = codexTeammateDir(name)
   const socketPath = codexSocketPath(name)
   const readyTimeoutMs = opts.readyTimeoutMs ?? 10000
-  const spawnLock = `${dir}.spawn.lock`
+  const spawnLock = codexSpawnLockFile(name)
   mkdirSync(dirname(spawnLock), { recursive: true })
   let lockFd: number | null = null
   try {

@@ -14,20 +14,28 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { CodexEngine } from '../src/engines/codex/engine'
+import { EngineRegistry } from '../src/engines/registry'
+import { ProductionTeammateRouter } from '../src/identity/router'
 import {
   daemonAlive,
   readDaemonState,
   reapDaemon,
 } from '../src/engines/codex/supervisor'
-import { codexBorrowLockFile, removeBaseRecord } from '../src/engines/codex/persistence'
+import {
+  codexBorrowLockFile,
+  readBaseRecord,
+  removeBaseRecord,
+} from '../src/engines/codex/persistence'
 import type { EngineContext } from '../src/engines/types'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
 
 let registryDir: string
+let identityDir: string
 let cwd: string
 let savedRegistryRoot: string | undefined
+let savedIdentityRoot: string | undefined
 let engine: CodexEngine
 let spawned: string[]
 let counter = 0
@@ -46,9 +54,12 @@ function nameUnder(): string {
 
 beforeEach(() => {
   registryDir = mkdtempSync('/tmp/cmxe-')
+  identityDir = mkdtempSync('/tmp/cmxe-id-')
   cwd = mkdtempSync('/tmp/cmxe-cwd-')
   savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  savedIdentityRoot = process.env['CLAUDEMUX_IDENTITY_ROOT']
   process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = registryDir
+  process.env['CLAUDEMUX_IDENTITY_ROOT'] = identityDir
   engine = new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
   spawned = []
 })
@@ -60,7 +71,10 @@ afterEach(async () => {
   }
   if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
   else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
+  if (savedIdentityRoot === undefined) delete process.env['CLAUDEMUX_IDENTITY_ROOT']
+  else process.env['CLAUDEMUX_IDENTITY_ROOT'] = savedIdentityRoot
   rmSync(registryDir, { recursive: true, force: true })
+  rmSync(identityDir, { recursive: true, force: true })
   rmSync(cwd, { recursive: true, force: true })
 })
 
@@ -74,6 +88,16 @@ describe('CodexEngine — core lifecycle', () => {
       ctx(),
     )
     expect(spawn).toMatchObject({ kind: 'spawned', name })
+    expect(readBaseRecord(name)).toMatchObject({
+      name,
+      engine: 'codex',
+      cwd,
+      displayName: 'engine test',
+    })
+    const registry = new EngineRegistry()
+    registry.register(engine)
+    const routed = await new ProductionTeammateRouter(registry).resolve(name)
+    expect(routed).toMatchObject({ name, engine })
 
     const send = await engine.send({ name, prompt: 'pong from codex', timeoutMs: 5000 }, ctx())
     expect(send.kind).toBe('completed')
@@ -131,9 +155,8 @@ describe('CodexEngine — core lifecycle', () => {
 
     const results = [first, second]
     expect(results.filter((result) => result.kind === 'spawned')).toHaveLength(1)
-    const loser = results.find((result) => result.kind === 'failed')
-    expect(loser).toMatchObject({ kind: 'failed' })
-    if (loser?.kind === 'failed') expect(loser.message).toMatch(/already being spawned/)
+    const loser = results.find((result) => result.kind === 'already-exists')
+    expect(loser).toEqual({ kind: 'already-exists', existingEngine: 'codex' })
     expect(daemonAlive(name)).toBe(true)
     expect(await engine.status({ name, lines: null }, ctx())).toMatchObject({
       kind: 'present',
@@ -154,5 +177,6 @@ describe('CodexEngine — core lifecycle', () => {
     const report = await engine.doctor(ctx())
     expect(report.findings.some((finding) => finding.summary.includes(name))).toBe(true)
     expect(readDaemonState(name)).toBeNull()
+    expect(readBaseRecord(name)).toBeNull()
   })
 })

@@ -29,6 +29,7 @@ import {
   codexKill,
   codexSend,
   codexSpawn,
+  codexStateRows,
   codexWait,
   isCodexTarget,
   subscribeTurnCollection,
@@ -41,6 +42,7 @@ import type {
 import { reapDaemon } from '../src/engines/codex/supervisor'
 import {
   CodexTeammateRecord,
+  codexBorrowLockFile,
   codexPidFile,
   codexStartedAtFile,
   codexTeammateDir,
@@ -54,8 +56,10 @@ const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
 let nameUnder: () => string
 let toReap: string[]
 let suffixDir: string
+let identityDir: string
 let savedBin: string | undefined
 let savedRegistryRoot: string | undefined
+let savedIdentityRoot: string | undefined
 
 beforeEach(() => {
   // The unix socket nodes the fake daemon binds live under
@@ -67,7 +71,10 @@ beforeEach(() => {
   // Private registry root + private bin path per-test so parallel test
   // files never share `/tmp/teammate-codex/` state.
   savedRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  savedIdentityRoot = process.env['CLAUDEMUX_IDENTITY_ROOT']
   process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = suffixDir
+  identityDir = mkdtempSync('/tmp/cmxv-id-')
+  process.env['CLAUDEMUX_IDENTITY_ROOT'] = identityDir
   let counter = 0
   // The `codex-` prefix is part of the codex teammate contract — keep
   // it so the verb-side messages ("tm spawn codex-…") match what a
@@ -84,7 +91,10 @@ afterEach(async () => {
   else process.env['CLAUDEMUX_CODEX_BIN'] = savedBin
   if (savedRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
   else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedRegistryRoot
+  if (savedIdentityRoot === undefined) delete process.env['CLAUDEMUX_IDENTITY_ROOT']
+  else process.env['CLAUDEMUX_IDENTITY_ROOT'] = savedIdentityRoot
   rmSync(suffixDir, { recursive: true, force: true })
+  rmSync(identityDir, { recursive: true, force: true })
 })
 
 describe('isCodexTarget — verb-fork prefix detection', () => {
@@ -189,6 +199,18 @@ describe('codex verbs — daemon-not-alive guards', () => {
   })
 })
 
+describe('codex verbs — teammate-name validation', () => {
+  test.each([
+    ['spawn', () => codexSpawn('../escape')],
+    ['send', () => codexSend('./bad', 'hello')],
+    ['wait', () => codexWait('codex/../../x')],
+  ])('%s rejects path-traversal-shaped names before touching codex paths', async (_label, run) => {
+    const result = await run()
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('invalid codex teammate name')
+  })
+})
+
 describe('codex verbs — spawn failure shape', () => {
   test('a failure inside spawnDaemon surfaces as a `tm: <message>` stderr line', async () => {
     process.env['CLAUDEMUX_CODEX_BIN'] = '/nonexistent/codex-bin'
@@ -220,14 +242,21 @@ describe('codexAsk — pool borrow semantics', () => {
     await codexSpawn(name)
 
     // Manually take the borrow lock, simulating a concurrent caller.
-    const lockPath = `${codexTeammateDir(name)}/lock`
+    const lockPath = codexBorrowLockFile(name)
     const fd = openSync(lockPath, 'wx', 0o600)
-    writeSync(fd, '99999\n')
+    writeSync(fd, `${process.pid}\n`)
     closeSync(fd)
 
     const result = await codexAsk('anyone?')
     expect(result.code).toBe(1)
     expect(result.stderr).toMatch(/all 1 alive codex teammate\(s\) are busy/)
+
+    const send = await codexSend(name, 'busy?')
+    expect(send.code).toBe(1)
+    expect(send.stderr).toContain(`codex teammate '${name}' is busy`)
+
+    const rows = await codexStateRows(Math.floor(Date.now() / 1000))
+    expect(rows.find((row) => row[0] === name)?.[2]).toBe('yes')
   })
 
   test('skips dead teammates and reports "all dead" when no live one exists', async () => {

@@ -27,7 +27,7 @@ export interface SendArgs {
   prompt: string
   hasPrompt: boolean
   paneQuiet: boolean
-  timeout: string
+  timeout: string | null
 }
 
 /**
@@ -46,7 +46,7 @@ function shellSingleQuote(value: string): string {
  */
 export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } {
   let paneQuiet = false
-  let timeout = '1800'
+  let timeout: string | null = null
   let repo = ''
   let prompt = ''
   let hasPrompt = false
@@ -118,14 +118,14 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
         '[--pane-quiet] [--timeout N]',
     )
   }
-  if (!isNonNegativeInteger(timeout)) {
+  if (timeout !== null && !isNonNegativeInteger(timeout)) {
     return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
   }
 
   const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env)
   if (sentResult.code !== 0) return sentResult
 
-  const timeoutSec = Number(timeout)
+  const timeoutSec = timeout === null ? 1800 : Number(timeout)
   const verdict = paneQuiet
     ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
     : await waitIdleSignal(repo, timeoutSec, false, env.runTmux)
@@ -137,7 +137,7 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
       stdout: printLastOrEmpty(repo),
       stderr:
         sentResult.stderr +
-        `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}\n`,
+        `tm send: timed out after ${timeoutSec}s waiting for ${kind} on ${repo}\n`,
     }
   }
 
@@ -149,4 +149,3 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
     stderr: sentResult.stderr + trailingStderr,
   }
 }
-

@@ -7,25 +7,23 @@
  * Engine calls out, existing CLI formatting back.
  */
 
-import { closeSync, openSync, rmSync, writeSync } from 'node:fs'
-
 import type { Engine } from '../engine'
 import type { EngineContext, TeammateListing } from '../types'
 import type { ThreadStartResponse } from '../../codex-protocol/v2/ThreadStartResponse.js'
 import type { TmResult } from '../../tm'
 import { formatTurn } from '../../verbs/format'
+import { validateTeammateName } from '../../identity/name.js'
 import { CodexEngine, openInitializedCodexClient } from './engine.js'
 import { runTurn, subscribeTurnCollection } from './events.js'
 import {
   daemonAlive,
   listDaemons,
   readDaemonState,
+  releaseDaemonBorrow,
   touchLastSeen,
+  tryBorrowDaemon,
 } from './supervisor.js'
-import {
-  codexBorrowLockFile,
-  readBaseRecord,
-} from './persistence.js'
+import { readBaseRecord } from './persistence.js'
 
 /** Per-codex-verb `die` — mirrors the `tm: <msg>` wire shape native.ts uses. */
 function die(message: string): TmResult {
@@ -44,9 +42,26 @@ function timeoutMsFromSeconds(timeoutSec: number | null): number | null {
   return timeoutSec === null ? null : timeoutSec * 1000
 }
 
+export function isCodexPrefixName(name: string): boolean {
+  return name.startsWith('codex-') || name.startsWith('codex/')
+}
+
+export function codexNameValidationError(name: string): string | null {
+  const validation = validateTeammateName(name)
+  return validation.kind === 'ok'
+    ? null
+    : `invalid codex teammate name '${name}': ${validation.reason}`
+}
+
+function validateCodexName(name: string): TmResult | null {
+  const message = codexNameValidationError(name)
+  return message === null ? null : die(message)
+}
+
 /** Names a codex teammate? Verbs check this to fork into this module. */
 export function isCodexTarget(name: string): boolean {
-  if (name.startsWith('codex-') || name.startsWith('codex/')) return true
+  if (codexNameValidationError(name) !== null) return false
+  if (isCodexPrefixName(name)) return true
   const base = readBaseRecord(name)
   if (base?.engine === 'codex') return true
   return false
@@ -68,6 +83,8 @@ export async function codexSpawn(
   name: string,
   opts: CodexSpawnOptions = {},
 ): Promise<TmResult> {
+  const invalidName = validateCodexName(name)
+  if (invalidName !== null) return invalidName
   const engine = resolveEngine(opts.engine)
   const result = await engine.spawn(
     {
@@ -108,6 +125,8 @@ export async function codexSend(
   prompt: string,
   opts: { readonly timeoutSec?: number | null; readonly engine?: Engine } = {},
 ): Promise<TmResult> {
+  const invalidName = validateCodexName(name)
+  if (invalidName !== null) return invalidName
   const result = await resolveEngine(opts.engine).send(
     {
       name,
@@ -124,6 +143,8 @@ export async function codexWait(
   name: string,
   opts: { readonly timeoutSec?: number | null; readonly engine?: Engine } = {},
 ): Promise<TmResult> {
+  const invalidName = validateCodexName(name)
+  if (invalidName !== null) return invalidName
   const result = await resolveEngine(opts.engine).wait(
     { name, recoverFor: null, timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null) },
     engineContext(),
@@ -170,24 +191,17 @@ function formatListLine(row: TeammateListing): string {
 
 /** Codex rows for `tm states`, using the legacy REPO/SID/BUSY/LAST/PREVIEW columns. */
 export async function codexStateRows(
-  nowSec: number,
+  _nowSec: number,
   engine?: Engine,
 ): Promise<readonly string[][]> {
   const rows = await resolveEngine(engine).list(engineContext())
   return rows.map((row) => {
-    const thread = row.extras['thread'] ?? ''
-    const lastSeen = row.extras['lastSeen'] ?? ''
-    const pid = row.extras['pid'] ?? ''
-    const lastSeenSec = Number.parseInt(lastSeen, 10)
-    const last =
-      Number.isFinite(lastSeenSec) ? `${Math.max(0, nowSec - lastSeenSec)}s` : '-'
-    const preview = pid.length === 0 ? 'codex daemon' : `pid=${pid}`
     return [
       row.name,
-      thread.length === 0 ? 'codex' : thread.slice(0, 8),
-      row.state === 'busy' ? 'yes' : row.state === 'idle' ? 'no' : '?',
-      last,
-      preview,
+      row.extras['sidShort'] ?? '-',
+      row.extras['busy'] ?? '-',
+      row.extras['last'] ?? '-',
+      row.extras['preview'] ?? '-',
     ]
   })
 }
@@ -215,24 +229,6 @@ export async function codexStatus(name: string, engine?: Engine): Promise<TmResu
   }
 }
 
-function tryBorrow(name: string): boolean {
-  try {
-    const fd = openSync(codexBorrowLockFile(name), 'wx', 0o600)
-    try {
-      writeSync(fd, `${process.pid}\n`)
-    } finally {
-      closeSync(fd)
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
-function releaseBorrow(name: string): void {
-  rmSync(codexBorrowLockFile(name), { force: true })
-}
-
 /**
  * `tm ask "<prompt>"` — borrow one live codex teammate from the pool, run an
  * ephemeral thread, and release the teammate.
@@ -250,7 +246,7 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
   for (const name of candidates) {
     if (!daemonAlive(name)) continue
     aliveCount += 1
-    if (tryBorrow(name)) {
+    if (tryBorrowDaemon(name)) {
       borrowed = name
       break
     }
@@ -285,7 +281,7 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
     )
   } finally {
     if (client !== null) client.close()
-    releaseBorrow(borrowedName)
+    releaseDaemonBorrow(borrowedName)
   }
 }
 

@@ -4092,7 +4092,7 @@ function resolveTmuxBinary() {
 var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], options);
 
 // src/engines/claude/claude-engine.ts
-import { existsSync as existsSync5, readFileSync as readFileSync10, rmSync as rmSync5, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync11, rmSync as rmSync5, statSync as statSync12 } from "node:fs";
 
 // src/engines/claude/compact.ts
 import { existsSync } from "node:fs";
@@ -4651,7 +4651,7 @@ function claudeCtxUsage(name, env) {
 }
 
 // src/engines/claude/doctor.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync6, statSync as statSync5 } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync as readFileSync7, statSync as statSync6 } from "node:fs";
 
 // src/engines/codex/supervisor.ts
 import {
@@ -4659,33 +4659,168 @@ import {
 } from "node:child_process";
 import { dirname as dirname4, join as join5 } from "node:path";
 import {
-  closeSync,
+  closeSync as closeSync2,
   existsSync as existsSync2,
   mkdirSync as mkdirSync3,
-  openSync,
-  readFileSync as readFileSync5,
+  openSync as openSync2,
+  readFileSync as readFileSync6,
   readdirSync,
   renameSync as renameSync2,
   rmdirSync,
   rmSync as rmSync3,
-  statSync as statSync4,
+  statSync as statSync5,
   writeFileSync as writeFileSync3,
   writeSync
 } from "node:fs";
 
 // src/engines/codex/persistence.ts
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join4 } from "node:path";
+
+// src/identity/name.ts
+var SEGMENT_REGEX = /^[A-Za-z0-9._-]+$/;
+function validateTeammateName(raw) {
+  if (raw.length === 0) return { kind: "invalid", reason: "empty" };
+  if (raw.startsWith("/") || raw.endsWith("/")) {
+    return { kind: "invalid", reason: "leading or trailing '/'" };
+  }
+  if (raw.includes("/") && raw.includes("__")) {
+    return {
+      kind: "invalid",
+      reason: "a nested name (containing '/') must not also contain '__' \u2014 the Claude engine encodes '/' \u2192 '__' for tmux"
+    };
+  }
+  const segments = raw.split("/");
+  for (const seg of segments) {
+    if (seg.length === 0) return { kind: "invalid", reason: "empty segment ('//' not allowed)" };
+    if (seg === "." || seg === "..") return { kind: "invalid", reason: `segment '${seg}' is reserved` };
+    if (seg.startsWith(".")) return { kind: "invalid", reason: `segment '${seg}' starts with '.'` };
+    if (!SEGMENT_REGEX.test(seg)) {
+      return {
+        kind: "invalid",
+        reason: `segment '${seg}' contains characters outside [A-Za-z0-9._-]`
+      };
+    }
+  }
+  return { kind: "ok", name: raw, segments };
+}
+
+// src/persistence/atomic-file.ts
 import {
+  closeSync,
   mkdirSync as mkdirSync2,
+  openSync,
   readFileSync as readFileSync4,
   renameSync,
   rmSync as rmSync2,
+  statSync as statSync4,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { dirname as dirname3, join as join4 } from "node:path";
+import { dirname as dirname3 } from "node:path";
+function readIfPresent(path) {
+  try {
+    return readFileSync4(path, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+function reserveExclusive(path, content) {
+  mkdirSync2(dirname3(path), { recursive: true });
+  const fd = openSync(path, "wx");
+  try {
+    writeFileSync2(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+}
+function removeIfPresent(path) {
+  rmSync2(path, { force: true });
+}
+
+// src/persistence/identity-store.ts
+function identityRoot() {
+  return process.env["CLAUDEMUX_IDENTITY_ROOT"] || "/tmp";
+}
+function identityFile(name) {
+  return `${identityRoot()}/teammate-${name}.json`;
+}
+function sleepSync(ms) {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, ms);
+}
+function readReservedRecord(name) {
+  const deadline = Date.now() + 50;
+  let existing = read(name);
+  while (existing === null && Date.now() < deadline) {
+    sleepSync(1);
+    existing = read(name);
+  }
+  return existing;
+}
+function reserve(record) {
+  const path = identityFile(record.name);
+  try {
+    reserveExclusive(path, `${JSON.stringify(record, null, 2)}
+`);
+    return { kind: "reserved" };
+  } catch (err) {
+    if (err.code === "EEXIST") {
+      const existing = readReservedRecord(record.name);
+      if (existing === null) {
+        return { kind: "failed", message: "EEXIST on identity file but record could not be read back" };
+      }
+      return { kind: "taken", existing };
+    }
+    return { kind: "failed", message: err instanceof Error ? err.message : String(err) };
+  }
+}
+function read(name) {
+  const raw = readIfPresent(identityFile(name));
+  if (raw === null) return null;
+  return parse(raw);
+}
+function remove(name) {
+  removeIfPresent(identityFile(name));
+}
+function parse(raw) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const obj = value;
+  if (obj["schema"] !== TEAMMATE_RECORD_SCHEMA) return null;
+  if (typeof obj["name"] !== "string") return null;
+  if (typeof obj["engine"] !== "string") return null;
+  if (typeof obj["cwd"] !== "string") return null;
+  if (typeof obj["createdAt"] !== "number") return null;
+  const displayName = obj["displayName"];
+  if (displayName !== null && typeof displayName !== "string") return null;
+  return {
+    schema: TEAMMATE_RECORD_SCHEMA,
+    name: obj["name"],
+    engine: obj["engine"],
+    cwd: obj["cwd"],
+    createdAt: obj["createdAt"],
+    displayName
+  };
+}
+
+// src/engines/codex/persistence.ts
 function codexRegistryRoot() {
   return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
 }
+function assertValidCodexName(name) {
+  const validation = validateTeammateName(name);
+  if (validation.kind !== "ok") {
+    throw new Error(`invalid codex teammate name '${name}': ${validation.reason}`);
+  }
+}
 function codexTeammateDir(name) {
+  assertValidCodexName(name);
   return join4(codexRegistryRoot(), name);
 }
 function codexSocketPath(name) {
@@ -4730,44 +4865,21 @@ function codexExtension(name) {
     lock: codexBorrowLockFile(name)
   };
 }
-function atomicWrite(path, content) {
-  mkdirSync2(dirname3(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync2(tmp, content, { mode: 384 });
-  renameSync(tmp, path);
-}
 function readBaseRecord(name) {
-  try {
-    const parsed = JSON.parse(readFileSync4(TeammateRecord.markerPath(name), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && (parsed.engine === "claude" || parsed.engine === "codex") && typeof parsed.cwd === "string" && typeof parsed.createdAt === "number") {
-      const displayName = parsed.displayName;
-      return {
-        schema: 1,
-        name: parsed.name,
-        engine: parsed.engine,
-        cwd: parsed.cwd,
-        createdAt: parsed.createdAt,
-        displayName: typeof displayName === "string" ? displayName : null
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  if (validateTeammateName(name).kind !== "ok") return null;
+  return read(name);
 }
-function writeBaseRecord(record) {
-  atomicWrite(
-    TeammateRecord.markerPath(record.name),
-    `${JSON.stringify(record.toJson(), null, 2)}
-`
-  );
+function reserveBaseRecord(record) {
+  assertValidCodexName(record.name);
+  return reserve(record.toJson());
 }
 function removeBaseRecord(name) {
-  rmSync2(TeammateRecord.markerPath(name), { force: true });
+  if (validateTeammateName(name).kind !== "ok") return;
+  remove(name);
 }
 function readCodexMeta(name) {
   try {
-    const parsed = JSON.parse(readFileSync4(codexMetaFile(name), "utf8"));
+    const parsed = JSON.parse(readFileSync5(codexMetaFile(name), "utf8"));
     if (typeof parsed === "object" && parsed !== null && parsed.schema === 1 && typeof parsed.name === "string" && typeof parsed.cwd === "string" && typeof parsed.spawnedAt === "number") {
       const displayName = parsed.displayName;
       return {
@@ -4822,17 +4934,17 @@ var CodexDaemonAlreadyAliveError = class extends Error {
 };
 function atomicWrite2(path, content) {
   const tmpPath = `${path}.tmp`;
-  const fd = openSync(tmpPath, "w", 384);
+  const fd = openSync2(tmpPath, "w", 384);
   try {
     writeSync(fd, content);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
   renameSync2(tmpPath, path);
 }
 function readIntFile(path) {
   try {
-    const txt = readFileSync5(path, "utf8").trim();
+    const txt = readFileSync6(path, "utf8").trim();
     if (txt === "") return null;
     const n = Number.parseInt(txt, 10);
     return Number.isFinite(n) ? n : null;
@@ -4842,10 +4954,19 @@ function readIntFile(path) {
 }
 function readTextFile(path) {
   try {
-    return readFileSync5(path, "utf8").trim() || null;
+    return readFileSync6(path, "utf8").trim() || null;
   } catch {
     return null;
   }
+}
+function clearStaleBorrowLock(name) {
+  const lockPath = codexBorrowLockFile(name);
+  const pid = readIntFile(lockPath);
+  if (pid === null) return;
+  if (!isProcessAlive(pid)) rmSync3(lockPath, { force: true });
+}
+function codexSpawnLockFile(name) {
+  return `${codexTeammateDir(name)}.spawn.lock`;
 }
 function nowSec2() {
   return Math.floor(Date.now() / 1e3);
@@ -4889,8 +5010,13 @@ function daemonAlive(name) {
   if (state === null) return false;
   return isProcessAlive(state.pid);
 }
-function daemonBorrowed(name) {
-  return existsSync2(codexBorrowLockFile(name));
+function daemonSpawnInProgress(name) {
+  const lockPath = codexSpawnLockFile(name);
+  const pid = readIntFile(lockPath);
+  if (pid === null) return existsSync2(lockPath);
+  if (isProcessAlive(pid)) return true;
+  rmSync3(lockPath, { force: true });
+  return false;
 }
 function listDaemons() {
   try {
@@ -4905,11 +5031,33 @@ function listDaemons() {
       }
     };
     walk(root, "");
-    return names.sort();
+    return names.filter((name) => validateTeammateName(name).kind === "ok").sort();
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw e;
   }
+}
+function daemonBorrowed(name) {
+  clearStaleBorrowLock(name);
+  return existsSync2(codexBorrowLockFile(name));
+}
+function tryBorrowDaemon(name) {
+  clearStaleBorrowLock(name);
+  try {
+    const fd = openSync2(codexBorrowLockFile(name), "wx", 384);
+    try {
+      writeSync(fd, `${process.pid}
+`);
+    } finally {
+      closeSync2(fd);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+function releaseDaemonBorrow(name) {
+  rmSync3(codexBorrowLockFile(name), { force: true });
 }
 function removeSelfRegistry(name) {
   for (const file of [
@@ -4937,11 +5085,11 @@ async function spawnDaemon(opts) {
   const dir = codexTeammateDir(name);
   const socketPath = codexSocketPath(name);
   const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
-  const spawnLock = `${dir}.spawn.lock`;
+  const spawnLock = codexSpawnLockFile(name);
   mkdirSync3(dirname4(spawnLock), { recursive: true });
   let lockFd = null;
   try {
-    lockFd = openSync(spawnLock, "wx", 384);
+    lockFd = openSync2(spawnLock, "wx", 384);
     writeSync(lockFd, `${process.pid}
 `);
   } catch {
@@ -4956,7 +5104,7 @@ async function spawnDaemon(opts) {
     const state = await spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs);
     return state;
   } finally {
-    if (lockFd !== null) closeSync(lockFd);
+    if (lockFd !== null) closeSync2(lockFd);
     rmSync3(spawnLock, { force: true });
   }
 }
@@ -4966,8 +5114,8 @@ async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
   const args = ["app-server", "--listen", `unix://${socketPath}`, ...opts.extraArgs ?? []];
   const stdoutLog = codexStdoutLogFile(name);
   const stderrLog = codexStderrLogFile(name);
-  const stdoutFd = openSync(stdoutLog, "a", 384);
-  const stderrFd = openSync(stderrLog, "a", 384);
+  const stdoutFd = openSync2(stdoutLog, "a", 384);
+  const stderrFd = openSync2(stderrLog, "a", 384);
   const spawnOpts = {
     cwd: opts.cwd ?? process.cwd(),
     env: opts.env ?? process.env,
@@ -4991,15 +5139,15 @@ async function spawnDaemonUnlocked(opts, dir, socketPath, readyTimeoutMs) {
       });
     });
   } catch (e) {
-    closeSync(stdoutFd);
-    closeSync(stderrFd);
+    closeSync2(stdoutFd);
+    closeSync2(stderrFd);
     removeSelfRegistry(name);
     throw new Error(
       `codex daemon '${name}' failed to spawn ${binPath}: ${e.message}`
     );
   }
-  closeSync(stdoutFd);
-  closeSync(stderrFd);
+  closeSync2(stdoutFd);
+  closeSync2(stderrFd);
   child.unref();
   child.on("error", () => {
   });
@@ -5037,7 +5185,7 @@ async function waitForSocket(path, pid, timeoutMs) {
   while (Date.now() < deadline) {
     if (existsSync2(path)) {
       try {
-        const st = statSync4(path);
+        const st = statSync5(path);
         if (st.isSocket()) return;
       } catch {
       }
@@ -5092,9 +5240,9 @@ async function claudeDoctor(args, env, paths) {
   let version = "unknown";
   let pluginJsonPresent = false;
   try {
-    if (statSync5(pluginJson).isFile()) {
+    if (statSync6(pluginJson).isFile()) {
       pluginJsonPresent = true;
-      const parsed = JSON.parse(readFileSync6(pluginJson, "utf8"));
+      const parsed = JSON.parse(readFileSync7(pluginJson, "utf8"));
       if (typeof parsed.version === "string" && parsed.version.length > 0) {
         version = parsed.version;
       }
@@ -5199,9 +5347,11 @@ async function claudeDoctor(args, env, paths) {
       if (state === null) {
         reaped.push(name);
         await reapDaemon(name);
+        removeBaseRecord(name);
       } else if (!isProcessAlive(state.pid)) {
         reaped.push(name);
         await reapDaemon(name);
+        removeBaseRecord(name);
       } else {
         live.push({ name, pid: state.pid, startedAt: state.startedAt });
       }
@@ -5221,7 +5371,7 @@ async function claudeDoctor(args, env, paths) {
 }
 
 // src/engines/claude/history.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync7, statSync as statSync6 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync8, statSync as statSync7 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/engines/claude/repo-fs.ts
@@ -5434,7 +5584,7 @@ async function historyList(repo, projectDir, env) {
   const files = names.map((name) => {
     let mtime = 0;
     try {
-      mtime = Math.floor(statSync6(join7(projectDir, name)).mtimeMs / 1e3);
+      mtime = Math.floor(statSync7(join7(projectDir, name)).mtimeMs / 1e3);
     } catch {
       mtime = 0;
     }
@@ -5449,13 +5599,13 @@ async function historyList(repo, projectDir, env) {
     const sidFull = name.replace(/\.jsonl$/, "");
     let size = 0;
     try {
-      size = statSync6(full).size;
+      size = statSync7(full).size;
     } catch {
       size = 0;
     }
     let content = "";
     try {
-      content = readFileSync7(full, "utf8");
+      content = readFileSync8(full, "utf8");
     } catch {
       content = "";
     }
@@ -5502,7 +5652,7 @@ function historyDetail(repo, projectDir, prefix) {
   let size = 0;
   let mtime = 0;
   try {
-    const stat = statSync6(file);
+    const stat = statSync7(file);
     size = stat.size;
     mtime = Math.floor(stat.mtimeMs / 1e3);
   } catch {
@@ -5511,7 +5661,7 @@ function historyDetail(repo, projectDir, prefix) {
   }
   let content = "";
   try {
-    content = readFileSync7(file, "utf8");
+    content = readFileSync8(file, "utf8");
   } catch {
     content = "";
   }
@@ -5564,11 +5714,11 @@ async function claudeHistory(args, env) {
 }
 
 // src/engines/claude/last.ts
-import { readFileSync as readFileSync8, statSync as statSync7 } from "node:fs";
+import { readFileSync as readFileSync9, statSync as statSync8 } from "node:fs";
 function readIfNonEmpty4(file) {
   try {
-    if (statSync7(file).size === 0) return null;
-    return readFileSync8(file, "utf8");
+    if (statSync8(file).size === 0) return null;
+    return readFileSync9(file, "utf8");
   } catch {
     return null;
   }
@@ -5593,18 +5743,18 @@ function claudeLast(name) {
 }
 
 // src/engines/claude/mem.ts
-import { readFileSync as readFileSync9, realpathSync as realpathSync2, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync10, realpathSync as realpathSync2, statSync as statSync9 } from "node:fs";
 import { dirname as dirname6, join as join8 } from "node:path";
 function isRegularFile4(path) {
   try {
-    return statSync8(path).isFile();
+    return statSync9(path).isFile();
   } catch {
     return false;
   }
 }
 function isDirectory2(path) {
   try {
-    return statSync8(path).isDirectory();
+    return statSync9(path).isDirectory();
   } catch {
     return false;
   }
@@ -5635,7 +5785,7 @@ function claudeMem(name, env) {
       reason: `tm mem: no auto-memory recorded for ${name} (looked at ${mfile})`
     };
   }
-  return { kind: "text", text: readFileSync9(mfile, "utf8") };
+  return { kind: "text", text: readFileSync10(mfile, "utf8") };
 }
 
 // src/engines/claude/reload.ts
@@ -5668,7 +5818,7 @@ async function claudeReload(args, env) {
 }
 
 // src/engines/claude/resume.ts
-import { readdirSync as readdirSync4, statSync as statSync10 } from "node:fs";
+import { readdirSync as readdirSync4, statSync as statSync11 } from "node:fs";
 import { join as join10 } from "node:path";
 
 // src/engines/claude/spawn.ts
@@ -5676,7 +5826,7 @@ import { existsSync as existsSync4, mkdirSync as mkdirSync4, realpathSync as rea
 import { dirname as dirname7 } from "node:path";
 
 // src/engines/claude/wait-signals.ts
-import { existsSync as existsSync3, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync3, statSync as statSync10 } from "node:fs";
 async function waitIdleSignal(name, timeoutSec, fresh, runTmux2) {
   const sessionMissing = await requireSession(name, runTmux2);
   if (sessionMissing !== null) return sessionMissing;
@@ -5696,7 +5846,7 @@ async function waitPaneQuiet(name, timeoutSec, runTmux2) {
   if (sessionMissing !== null) return sessionMissing;
   let sendAt = 0;
   try {
-    sendAt = Math.floor(statSync9(sendAtFile(name)).mtimeMs / 1e3);
+    sendAt = Math.floor(statSync10(sendAtFile(name)).mtimeMs / 1e3);
   } catch {
     sendAt = 0;
   }
@@ -5739,7 +5889,7 @@ function shellSingleQuote(value) {
 }
 function parseSendArgs(args) {
   let paneQuiet = false;
-  let timeout = "1800";
+  let timeout = null;
   let repo = "";
   let prompt = "";
   let hasPrompt = false;
@@ -5800,12 +5950,12 @@ async function claudeSend(args, env) {
       'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
     );
   }
-  if (!isNonNegativeInteger(timeout)) {
+  if (timeout !== null && !isNonNegativeInteger(timeout)) {
     return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
   }
   const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env);
   if (sentResult.code !== 0) return sentResult;
-  const timeoutSec = Number(timeout);
+  const timeoutSec = timeout === null ? 1800 : Number(timeout);
   const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env.runTmux) : await waitIdleSignal(repo, timeoutSec, false, env.runTmux);
   if ("code" in verdict) return verdict;
   if (!verdict.ok) {
@@ -5813,7 +5963,7 @@ async function claudeSend(args, env) {
     return {
       code: 1,
       stdout: printLastOrEmpty(repo),
-      stderr: sentResult.stderr + `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}
+      stderr: sentResult.stderr + `tm send: timed out after ${timeoutSec}s waiting for ${kind} on ${repo}
 `
     };
   }
@@ -6125,7 +6275,7 @@ async function claudeResume(args, env) {
     const stats = names.map((file) => {
       let mtime = 0;
       try {
-        mtime = Math.floor(statSync10(join10(projectDir, file)).mtimeMs / 1e3);
+        mtime = Math.floor(statSync11(join10(projectDir, file)).mtimeMs / 1e3);
       } catch {
         mtime = 0;
       }
@@ -6164,7 +6314,7 @@ async function claudeResume(args, env) {
 function parseWaitArgs(args) {
   const SILENT = { code: 1, stdout: "", stderr: "" };
   let repo = "";
-  let timeout = "1800";
+  let timeout = null;
   let fresh = false;
   let paneQuiet = false;
   let i = 0;
@@ -6204,17 +6354,17 @@ async function claudeWait(args, env) {
       "usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]"
     );
   }
-  if (!isNonNegativeInteger(timeout)) {
+  if (timeout !== null && !isNonNegativeInteger(timeout)) {
     return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
   }
-  const timeoutSec = Number(timeout);
+  const timeoutSec = timeout === null ? 1800 : Number(timeout);
   const verdict = paneQuiet ? await waitPaneQuiet(repo, timeoutSec, env.runTmux) : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux);
   if ("code" in verdict) return verdict;
   if (!verdict.ok) {
     return {
       code: 1,
       stdout: printLastOrEmpty(repo),
-      stderr: `tm wait: timed out after ${timeout}s on ${repo}
+      stderr: `tm wait: timed out after ${timeoutSec}s on ${repo}
 `
     };
   }
@@ -6245,8 +6395,8 @@ function rstrip3(text) {
 }
 function readIfNonEmpty5(path) {
   try {
-    if (statSync11(path).size === 0) return null;
-    return readFileSync10(path, "utf8");
+    if (statSync12(path).size === 0) return null;
+    return readFileSync11(path, "utf8");
   } catch {
     return null;
   }
@@ -6799,6 +6949,10 @@ async function withTimeout(promise, timeoutMs) {
 function isTimedOut(value) {
   return typeof value === "object" && value !== null && value.timedOut === true;
 }
+function codexNameFailure(name) {
+  const validation = validateTeammateName(name);
+  return validation.kind === "ok" ? null : `invalid codex teammate name '${name}': ${validation.reason}`;
+}
 function fmtAge3(age) {
   if (age < 60) return `${age}s`;
   if (age < 3600) return `${Math.floor(age / 60)}m`;
@@ -6844,10 +6998,13 @@ var CodexEngine = class {
     events: "push"
   };
   async spawn(req, ctx) {
+    const invalidName = codexNameFailure(req.name);
+    if (invalidName !== null) return { kind: "failed", message: invalidName };
     const existing = readBaseRecord(req.name);
     if (existing !== null) {
       if (existing.engine !== "codex") return { kind: "already-exists", existingEngine: existing.engine };
       if (daemonAlive(req.name)) return { kind: "already-exists", existingEngine: "codex" };
+      if (daemonSpawnInProgress(req.name)) return { kind: "already-exists", existingEngine: "codex" };
       removeBaseRecord(req.name);
     }
     if (daemonAlive(req.name)) return { kind: "already-exists", existingEngine: "codex" };
@@ -6858,6 +7015,11 @@ var CodexEngine = class {
       createdAt,
       displayName: req.displayName
     });
+    const reserved = reserveBaseRecord(record);
+    if (reserved.kind === "taken") {
+      return { kind: "already-exists", existingEngine: reserved.existing.engine };
+    }
+    if (reserved.kind === "failed") return { kind: "failed", message: reserved.message };
     try {
       await spawnDaemon({
         name: req.name,
@@ -6874,7 +7036,6 @@ var CodexEngine = class {
         }
       });
       await this.healthCheck(req.name);
-      writeBaseRecord(record);
       if (req.prompt === null) {
         return { kind: "spawned", name: req.name, firstTurn: null };
       }
@@ -6884,12 +7045,12 @@ var CodexEngine = class {
       );
       return { kind: "spawned", name: req.name, firstTurn };
     } catch (e) {
+      removeBaseRecord(req.name);
       if (e instanceof CodexDaemonAlreadyAliveError) {
         return { kind: "already-exists", existingEngine: "codex" };
       }
       if (!(e instanceof CodexDaemonSpawnInProgressError)) {
         await reapDaemon(req.name);
-        removeBaseRecord(req.name);
       }
       return {
         kind: "failed",
@@ -6898,6 +7059,10 @@ var CodexEngine = class {
     }
   }
   async send(req, _ctx) {
+    const invalidName = codexNameFailure(req.name);
+    if (invalidName !== null) {
+      return { kind: "failed", message: invalidName, recoverable: false };
+    }
     if (!daemonAlive(req.name)) {
       return {
         kind: "failed",
@@ -6907,6 +7072,9 @@ var CodexEngine = class {
     }
     if (req.prompt.length === 0) {
       return { kind: "failed", message: 'usage: tm send <teammate> "<prompt>"', recoverable: false };
+    }
+    if (!tryBorrowDaemon(req.name)) {
+      return { kind: "failed", message: `codex teammate '${req.name}' is busy`, recoverable: true };
     }
     let client = null;
     try {
@@ -6941,9 +7109,14 @@ var CodexEngine = class {
       };
     } finally {
       if (client !== null) client.close();
+      releaseDaemonBorrow(req.name);
     }
   }
   async wait(req, _ctx) {
+    const invalidName = codexNameFailure(req.name);
+    if (invalidName !== null) {
+      return { kind: "failed", message: invalidName, recoverable: false };
+    }
     if (!daemonAlive(req.name)) {
       return { kind: "failed", message: `codex teammate '${req.name}' is not alive`, recoverable: false };
     }
@@ -7062,9 +7235,11 @@ var CodexEngine = class {
       const state = readDaemonState(name);
       if (state === null) {
         await reapDaemon(name);
+        removeBaseRecord(name);
         findings.push({ severity: "warn", summary: `reaped malformed codex daemon entry ${name}`, fix: null });
       } else if (!isProcessAlive(state.pid)) {
         await reapDaemon(name);
+        removeBaseRecord(name);
         findings.push({ severity: "warn", summary: `reaped stale codex daemon ${name} (pid=${state.pid})`, fix: null });
       } else {
         findings.push({ severity: "ok", summary: `${name} alive (pid=${state.pid})`, fix: null });
@@ -7136,7 +7311,7 @@ function productionRegistry(env) {
 }
 
 // src/verbs/archive.ts
-import { readFileSync as readFileSync11, statSync as statSync12, writeFileSync as writeFileSync5 } from "node:fs";
+import { readFileSync as readFileSync12, statSync as statSync13, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join11 } from "node:path";
 
 // src/persistence/project-dir.ts
@@ -7169,7 +7344,7 @@ function die2(message) {
 }
 function isRegularFile5(path) {
   try {
-    return statSync12(path).isFile();
+    return statSync13(path).isFile();
   } catch {
     return false;
   }
@@ -7220,7 +7395,7 @@ async function archiveVerb(args, stdin, env) {
   if (outcome.replace(/\s/g, "") === "") {
     return die2(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
   }
-  const activeContent = readFileSync11(activePath, "utf8");
+  const activeContent = readFileSync12(activePath, "utf8");
   const activeLines = ledgerLines(activeContent);
   let headerRe;
   try {
@@ -7263,7 +7438,7 @@ async function archiveVerb(args, stdin, env) {
 - intent: ${field("intent")}
 - outcome: ${outcome}
 - closed: ${fmtLocalDate()}`;
-  const archiveContent = isRegularFile5(archivePath) ? readFileSync11(archivePath, "utf8") : ARCHIVE_TEMPLATE;
+  const archiveContent = isRegularFile5(archivePath) ? readFileSync12(archivePath, "utf8") : ARCHIVE_TEMPLATE;
   const archiveLines = ledgerLines(archiveContent);
   let firstEntry = 0;
   for (let index = 0; index < archiveLines.length; index++) {
@@ -7298,9 +7473,6 @@ ${entry}
     stderr: ""
   };
 }
-
-// src/engines/codex/verbs.ts
-import { closeSync as closeSync2, openSync as openSync2, rmSync as rmSync6, writeSync as writeSync2 } from "node:fs";
 
 // src/verbs/format.ts
 function teammateNotFound(name) {
@@ -7381,13 +7553,27 @@ function resolveEngine(engine) {
 function timeoutMsFromSeconds(timeoutSec) {
   return timeoutSec === null ? null : timeoutSec * 1e3;
 }
+function isCodexPrefixName(name) {
+  return name.startsWith("codex-") || name.startsWith("codex/");
+}
+function codexNameValidationError(name) {
+  const validation = validateTeammateName(name);
+  return validation.kind === "ok" ? null : `invalid codex teammate name '${name}': ${validation.reason}`;
+}
+function validateCodexName(name) {
+  const message = codexNameValidationError(name);
+  return message === null ? null : die3(message);
+}
 function isCodexTarget(name) {
-  if (name.startsWith("codex-") || name.startsWith("codex/")) return true;
+  if (codexNameValidationError(name) !== null) return false;
+  if (isCodexPrefixName(name)) return true;
   const base = readBaseRecord(name);
   if (base?.engine === "codex") return true;
   return false;
 }
 async function codexSpawn(name, opts = {}) {
+  const invalidName = validateCodexName(name);
+  if (invalidName !== null) return invalidName;
   const engine = resolveEngine(opts.engine);
   const result = await engine.spawn(
     {
@@ -7420,6 +7606,8 @@ async function codexSpawn(name, opts = {}) {
   }
 }
 async function codexSend(name, prompt, opts = {}) {
+  const invalidName = validateCodexName(name);
+  if (invalidName !== null) return invalidName;
   const result = await resolveEngine(opts.engine).send(
     {
       name,
@@ -7431,28 +7619,13 @@ async function codexSend(name, prompt, opts = {}) {
   return formatTurn(result);
 }
 async function codexWait(name, opts = {}) {
+  const invalidName = validateCodexName(name);
+  if (invalidName !== null) return invalidName;
   const result = await resolveEngine(opts.engine).wait(
     { name, recoverFor: null, timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null) },
     engineContext()
   );
   return formatTurn(result);
-}
-function tryBorrow(name) {
-  try {
-    const fd = openSync2(codexBorrowLockFile(name), "wx", 384);
-    try {
-      writeSync2(fd, `${process.pid}
-`);
-    } finally {
-      closeSync2(fd);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-function releaseBorrow(name) {
-  rmSync6(codexBorrowLockFile(name), { force: true });
 }
 async function codexAsk(prompt) {
   if (prompt.length === 0) return die3('usage: tm ask "<prompt>"');
@@ -7465,7 +7638,7 @@ async function codexAsk(prompt) {
   for (const name of candidates) {
     if (!daemonAlive(name)) continue;
     aliveCount += 1;
-    if (tryBorrow(name)) {
+    if (tryBorrowDaemon(name)) {
       borrowed = name;
       break;
     }
@@ -7498,7 +7671,7 @@ async function codexAsk(prompt) {
     );
   } finally {
     if (client !== null) client.close();
-    releaseBorrow(borrowedName);
+    releaseDaemonBorrow(borrowedName);
   }
 }
 
@@ -7550,98 +7723,6 @@ async function pollVerb(args, env) {
 function die4(message) {
   return { code: 1, stdout: "", stderr: `tm: ${message}
 ` };
-}
-
-// src/persistence/atomic-file.ts
-import {
-  closeSync as closeSync3,
-  mkdirSync as mkdirSync5,
-  openSync as openSync3,
-  readFileSync as readFileSync12,
-  renameSync as renameSync3,
-  rmSync as rmSync7,
-  statSync as statSync13,
-  writeFileSync as writeFileSync6
-} from "node:fs";
-function readIfPresent(path) {
-  try {
-    return readFileSync12(path, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw err;
-  }
-}
-function removeIfPresent(path) {
-  rmSync7(path, { force: true });
-}
-
-// src/persistence/identity-store.ts
-function identityRoot() {
-  return process.env["CLAUDEMUX_IDENTITY_ROOT"] || "/tmp";
-}
-function identityFile(name) {
-  return `${identityRoot()}/teammate-${name}.json`;
-}
-function read(name) {
-  const raw = readIfPresent(identityFile(name));
-  if (raw === null) return null;
-  return parse(raw);
-}
-function remove(name) {
-  removeIfPresent(identityFile(name));
-}
-function parse(raw) {
-  let value;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof value !== "object" || value === null) return null;
-  const obj = value;
-  if (obj["schema"] !== TEAMMATE_RECORD_SCHEMA) return null;
-  if (typeof obj["name"] !== "string") return null;
-  if (typeof obj["engine"] !== "string") return null;
-  if (typeof obj["cwd"] !== "string") return null;
-  if (typeof obj["createdAt"] !== "number") return null;
-  const displayName = obj["displayName"];
-  if (displayName !== null && typeof displayName !== "string") return null;
-  return {
-    schema: TEAMMATE_RECORD_SCHEMA,
-    name: obj["name"],
-    engine: obj["engine"],
-    cwd: obj["cwd"],
-    createdAt: obj["createdAt"],
-    displayName
-  };
-}
-
-// src/identity/name.ts
-var SEGMENT_REGEX = /^[A-Za-z0-9._-]+$/;
-function validateTeammateName(raw) {
-  if (raw.length === 0) return { kind: "invalid", reason: "empty" };
-  if (raw.startsWith("/") || raw.endsWith("/")) {
-    return { kind: "invalid", reason: "leading or trailing '/'" };
-  }
-  if (raw.includes("/") && raw.includes("__")) {
-    return {
-      kind: "invalid",
-      reason: "a nested name (containing '/') must not also contain '__' \u2014 the Claude engine encodes '/' \u2192 '__' for tmux"
-    };
-  }
-  const segments = raw.split("/");
-  for (const seg of segments) {
-    if (seg.length === 0) return { kind: "invalid", reason: "empty segment ('//' not allowed)" };
-    if (seg === "." || seg === "..") return { kind: "invalid", reason: `segment '${seg}' is reserved` };
-    if (seg.startsWith(".")) return { kind: "invalid", reason: `segment '${seg}' starts with '.'` };
-    if (!SEGMENT_REGEX.test(seg)) {
-      return {
-        kind: "invalid",
-        reason: `segment '${seg}' contains characters outside [A-Za-z0-9._-]`
-      };
-    }
-  }
-  return { kind: "ok", name: raw, segments };
 }
 
 // src/identity/router.ts
@@ -7899,7 +7980,10 @@ async function spawnDispatch(args, env) {
   const parsed = parseSpawnArgs(args.slice(1));
   if ("error" in parsed) return parsed.error;
   const { engine, resumeSid, task, prompt, hasPrompt, timeout } = parsed;
-  if (engine === "codex" || engine === null && isCodexTarget(repo)) {
+  const codexByPrefix = engine === null && isCodexPrefixName(repo);
+  if (engine === "codex" || codexByPrefix || engine === null && isCodexTarget(repo)) {
+    const invalidName = codexNameValidationError(repo);
+    if (invalidName !== null) return die5(invalidName);
     if (resumeSid.length > 0) return die5("tm spawn: --resume is not supported for codex teammates");
     if (task.length > 0) return die5("tm spawn: --task is not supported for codex teammates");
     if (timeout !== null && !isNonNegativeInteger(timeout)) {
@@ -7921,18 +8005,23 @@ async function sendDispatch(args, env) {
   const parsed = parseSendArgs(args);
   if ("error" in parsed) return parsed.error;
   const { repo, prompt, hasPrompt, paneQuiet, timeout } = parsed;
+  const codexByPrefix = isCodexPrefixName(repo);
+  if (codexByPrefix) {
+    const invalidName = codexNameValidationError(repo);
+    if (invalidName !== null) return die5(invalidName);
+  }
   if (repo !== "" && isCodexTarget(repo)) {
     if (!hasPrompt) {
       return die5(
         'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]'
       );
     }
-    if (!isNonNegativeInteger(timeout)) {
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
       return die5(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`);
     }
     if (paneQuiet) return die5("tm send: --pane-quiet is not supported for codex teammates");
     return codexSend(repo, prompt, {
-      timeoutSec: Number(timeout),
+      timeoutSec: timeout === null ? null : Number(timeout),
       engine: env.engines?.get("codex")
     });
   }
@@ -7942,13 +8031,21 @@ async function waitDispatch(args, env) {
   const parsed = parseWaitArgs(args);
   if ("error" in parsed) return parsed.error;
   const { repo, timeout, fresh, paneQuiet } = parsed;
+  const codexByPrefix = isCodexPrefixName(repo);
+  if (codexByPrefix) {
+    const invalidName = codexNameValidationError(repo);
+    if (invalidName !== null) return die5(invalidName);
+  }
   if (repo !== "" && isCodexTarget(repo)) {
-    if (!isNonNegativeInteger(timeout)) {
+    if (timeout !== null && !isNonNegativeInteger(timeout)) {
       return die5(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`);
     }
     if (fresh) return die5("tm wait: --fresh is not supported for codex teammates");
     if (paneQuiet) return die5("tm wait: --pane-quiet is not supported for codex teammates");
-    return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get("codex") });
+    return codexWait(repo, {
+      timeoutSec: timeout === null ? null : Number(timeout),
+      engine: env.engines?.get("codex")
+    });
   }
   return claudeWait(args, env);
 }

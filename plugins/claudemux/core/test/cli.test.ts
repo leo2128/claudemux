@@ -9,20 +9,29 @@
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import { runCli } from '../src/cli'
 import type { ColumnRunner } from '../src/column'
+import { CodexEngine } from '../src/engines/codex/engine'
+import type { Engine } from '../src/engines/engine'
 import type { GrepRunner } from '../src/grep'
 import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from '../src/help'
 import type { NativeEnv } from '../src/env'
 import {
+  CodexTeammateRecord,
   codexPidFile,
   codexStartedAtFile,
   codexTeammateDir,
+  removeBaseRecord,
+  writeBaseRecord,
 } from '../src/engines/codex/persistence'
+import { reapDaemon } from '../src/engines/codex/supervisor'
+import { EngineRegistry } from '../src/engines/registry'
+import { read as readIdentity } from '../src/persistence/identity-store'
 import {
   cwdFile,
   lastFileFor,
@@ -36,19 +45,29 @@ import { TM_VERBS } from '../src/verbs'
 const fakeTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 const fakeColumn: ColumnRunner = async (input) => ({ code: 0, stdout: input, stderr: '' })
 const fakeGrep: GrepRunner = async () => 1
+const HERE = dirname(fileURLToPath(import.meta.url))
+const FAKE_CODEX = resolve(HERE, 'fixtures', 'codex-fake', 'codex')
 let savedCodexRegistryRoot: string | undefined
+let savedIdentityRoot: string | undefined
 let codexRegistryRoot: string
+let identityRoot: string
 
 beforeAll(() => {
   savedCodexRegistryRoot = process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
+  savedIdentityRoot = process.env['CLAUDEMUX_IDENTITY_ROOT']
   codexRegistryRoot = mkdtempSync('/tmp/cmxcli-')
+  identityRoot = mkdtempSync('/tmp/cmxcli-id-')
   process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = codexRegistryRoot
+  process.env['CLAUDEMUX_IDENTITY_ROOT'] = identityRoot
 })
 
 afterAll(() => {
   if (savedCodexRegistryRoot === undefined) delete process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT']
   else process.env['CLAUDEMUX_CODEX_REGISTRY_ROOT'] = savedCodexRegistryRoot
+  if (savedIdentityRoot === undefined) delete process.env['CLAUDEMUX_IDENTITY_ROOT']
+  else process.env['CLAUDEMUX_IDENTITY_ROOT'] = savedIdentityRoot
   rmSync(codexRegistryRoot, { recursive: true, force: true })
+  rmSync(identityRoot, { recursive: true, force: true })
 })
 
 /** A `NativeEnv` with quiet fakes for every backend. */
@@ -287,6 +306,71 @@ describe('native dispatch', () => {
       rmSync(codexTeammateDir(repo), { recursive: true, force: true })
     }
   })
+
+  test.each([
+    ['spawn parent segment', ['spawn', '../escape', '--engine', 'codex']],
+    ['spawn dot segment', ['spawn', './bad', '--engine', 'codex']],
+    ['send nested traversal', ['send', 'codex/../../x', '--prompt', 'hello']],
+    ['wait nested traversal', ['wait', 'codex/../../x']],
+  ])('%s rejects invalid codex teammate names before filesystem routing', async (_label, argv) => {
+    const result = await runCli(argv, fakeEnv())
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('invalid codex teammate name')
+  })
+
+  test('codex spawn writes the base identity record so status and kill route through the identity router', async () => {
+    const name = `codex-router-${Date.now()}`
+    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
+    const registry = new EngineRegistry()
+    registry.register(new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 }))
+    const env = fakeEnv({ dispatcherDir, engines: registry })
+
+    try {
+      const spawned = await runCli(['spawn', name, '--engine', 'codex'], env)
+      expect(spawned.code).toBe(0)
+      expect(spawned.stderr).toMatch(/^spawned: .* \(pid=\d+, socket=.*\)\n$/)
+      expect(readIdentity(name)).toMatchObject({ name, engine: 'codex' })
+
+      const status = await runCli(['status', name], env)
+      expect(status.code).toBe(0)
+      expect(status.stderr).toBe('')
+
+      const killed = await runCli(['kill', name], env)
+      expect(killed).toEqual({ code: 0, stdout: `killed: ${name}\n`, stderr: '' })
+      expect(readIdentity(name)).toBeNull()
+    } finally {
+      await reapDaemon(name)
+      removeBaseRecord(name)
+      rmSync(dispatcherDir, { recursive: true, force: true })
+    }
+  })
+
+  test('codex send and wait keep omitted timeouts unbounded and preserve explicit timeouts', async () => {
+    const seenSend: Array<number | null> = []
+    const seenWait: Array<number | null> = []
+    const fakeCodex = {
+      kind: 'codex',
+      send: async (req: { timeoutMs: number | null }) => {
+        seenSend.push(req.timeoutMs)
+        return { kind: 'completed', text: 'ok\n', items: [], context: null }
+      },
+      wait: async (req: { timeoutMs: number | null }) => {
+        seenWait.push(req.timeoutMs)
+        return { kind: 'no-op', reason: 'captured timeout' }
+      },
+    } as unknown as Engine
+    const registry = new EngineRegistry()
+    registry.register(fakeCodex)
+    const env = fakeEnv({ engines: registry })
+
+    expect((await runCli(['send', 'codex-timeout', '--prompt', 'hi'], env)).code).toBe(0)
+    expect((await runCli(['send', 'codex-timeout', '--prompt', 'hi', '--timeout', '7'], env)).code).toBe(0)
+    expect((await runCli(['wait', 'codex-timeout'], env)).code).toBe(0)
+    expect((await runCli(['wait', 'codex-timeout', '--timeout', '7'], env)).code).toBe(0)
+
+    expect(seenSend).toEqual([null, 7000])
+    expect(seenWait).toEqual([null, 7000])
+  })
 })
 
 describe('engine-routed verbs (Phase 2a-1 fleet visibility)', () => {
@@ -296,10 +380,8 @@ describe('engine-routed verbs (Phase 2a-1 fleet visibility)', () => {
   // covered by ClaudeEngine's own unit tests + the conformance file
   // (which is updated when Phase 2a-2 inlines the verb bodies).
   //
-  // `tm kill` is NOT in this set yet: the legacy NATIVE_VERBS.kill carries
-  // an `isCodexTarget` codex hand-off that has no replacement until Phase
-  // 2b registers a CodexEngine. Routing `kill` through ClaudeEngine
-  // prematurely would silently regress `tm kill codex-<n>` callers.
+  // `tm kill` now joins this set because Phase 2b registers CodexEngine and
+  // codex spawn writes the base identity record the router needs.
 
   test('tm states returns code 0 with the empty-fleet pointer line', async () => {
     const result = await runCli(
@@ -387,6 +469,26 @@ describe('doctor — sections fire top-down, never raising', () => {
     const result = await runCli(['doctor'], fakeEnv())
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/codex teammates:\s*\n  \(none — use 'tm spawn codex-<n>' to launch one\)/)
+  })
+
+  test('reaping a dead codex daemon also removes its base identity record', async () => {
+    const name = `codex-dead-${Date.now()}`
+    mkdirSync(codexTeammateDir(name), { recursive: true })
+    writeFileSync(codexPidFile(name), '0\n')
+    writeFileSync(codexStartedAtFile(name), `${Math.floor(Date.now() / 1000)}\n`)
+    writeBaseRecord(new CodexTeammateRecord({
+      name,
+      cwd: '/tmp',
+      createdAt: 1,
+      displayName: null,
+    }))
+
+    const result = await runCli(['doctor'], fakeEnv())
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('reaped orphans')
+    expect(readIdentity(name)).toBeNull()
+    expect(existsSync(codexTeammateDir(name))).toBe(false)
   })
 
   test('the reported tm executable path is the production launcher, not the dev wrapper', async () => {

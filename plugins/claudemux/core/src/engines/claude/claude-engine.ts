@@ -69,6 +69,9 @@ import {
   sidFile,
   TMUX_SESSION_PREFIX,
 } from './persistence'
+import { claudeCtxUsage } from './ctx'
+import { claudeLast } from './last'
+import { claudeMem } from './mem'
 import { listingExtras } from './state'
 
 /** The Claude engine's capability report. */
@@ -334,25 +337,14 @@ export class ClaudeEngine implements Engine {
   }
 
   async last(req: LastRequest, _ctx: EngineContext): Promise<TextResult> {
-    const result = await callNative(this.env, 'last', [req.name])
-    if (result.code === 0) return { kind: 'text', text: result.stdout }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    return claudeLast(req.name)
   }
 
   async ctx(req: ContextRequest, _ctx: EngineContext): Promise<ContextResult> {
-    const result = await callNative(this.env, 'ctx', [req.name])
-    if (result.code === 0) {
-      // Parse the `tm ctx` line, which is intentionally not structured today.
-      // Phase 2a-2's claude-context.ts will return real numbers.
-      const match = /\b(\d+)\/(\d+)\b/.exec(result.stdout)
-      if (match) {
-        const used = Number(match[1])
-        const total = Number(match[2])
-        return { kind: 'usage', tokensUsed: used, tokensTotal: total, pct: Math.floor((used * 100) / total) }
-      }
-      return { kind: 'not-supported', reason: 'could not parse usage line' }
-    }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    return claudeCtxUsage(req.name, {
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir,
+    })
   }
 
   async history(req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
@@ -371,9 +363,10 @@ export class ClaudeEngine implements Engine {
   }
 
   async mem(req: MemoryRequest, _ctx: EngineContext): Promise<TextResult> {
-    const result = await callNative(this.env, 'mem', [req.name])
-    if (result.code === 0) return { kind: 'text', text: result.stdout }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    return claudeMem(req.name, {
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir,
+    })
   }
 
   async reload(req: ReloadRequest, _ctx: EngineContext): Promise<ReloadResult> {

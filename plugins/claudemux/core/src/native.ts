@@ -67,6 +67,9 @@ import {
   codexWait,
   isCodexTarget,
 } from './engines/codex/verbs'
+import { claudeCtxLine } from './engines/claude/ctx'
+import { claudeLast } from './engines/claude/last'
+import { claudeMem } from './engines/claude/mem'
 import {
   isProcessAlive as codexProcessAlive,
   listDaemons as listCodexDaemons,
@@ -186,32 +189,19 @@ function readIfNonEmpty(file: string): string | null {
 /**
  * `tm last` — reprint a teammate's last-turn reply.
  *
- * Resolves the repo's sid, then prints the `<sid>.last` marker verbatim. Two
- * empty states are both "no reply yet": the file missing, or the file present
- * but zero bytes (a fresh-spawn sentinel, or a turn that extracted no text).
+ * The body lives in `engines/claude/last.ts` (`claudeLast`); this is the
+ * thin wrapper that the NATIVE_VERBS dispatch path still calls. The
+ * structured result is rendered to a TmResult here so the wire format
+ * stays byte-identical with the cli dispatch path that calls
+ * `ClaudeEngine.last` directly.
  */
 const last: NativeVerb = async (args) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm last <repo>')
-
-  const sid = resolveSid(repo)
-  if (sid === null) {
-    return die(
-      `no sid file for ${repo} at ${sidFile(repo)} — was this teammate ` +
-        "spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)",
-    )
-  }
-
-  const file = lastFileFor(sid)
-  const reply = readIfNonEmpty(file)
-  if (reply === null) {
-    return die(
-      `no reply yet for ${repo} (sid=${sid}) — file is missing or empty at ` +
-        `${file}. Try 'tm wait ${repo}' to block for the next Stop, or ` +
-        `'tm send ${repo} --prompt "..."' to drive a turn.`,
-    )
-  }
-  return { code: 0, stdout: reply, stderr: '' }
+  const result = claudeLast(repo)
+  if (result.kind === 'text') return { code: 0, stdout: result.text, stderr: '' }
+  if (result.kind === 'failed') return die(result.message)
+  return die(`unexpected last result: ${(result as { kind: string }).kind}`)
 }
 
 /** A teammate's context-window usage, summed from its transcript. */
@@ -423,7 +413,7 @@ const ctx: NativeVerb = async (args, _options, env) => {
     return die('usage: tm ctx <repo> [<repo>...] | --all  [--window 200k|1m]')
   }
 
-  const lines = repos.map((repo) => ctxLine(repo, parsed.windowOverride, env))
+  const lines = repos.map((repo) => claudeCtxLine(repo, parsed.windowOverride, env))
   return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
 }
 
@@ -566,19 +556,15 @@ function projectDirForRepo(repo: string, env: NativeEnv): string {
 const mem: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
   if (repo.length === 0) return die('usage: tm mem <repo>')
-
-  const path = join(env.dispatcherDir, repo)
-  if (!isDirectory(path)) return dieRepoNotFound('mem', repo, path, env.dispatcherDir)
-
-  const mfile = join(projectDirForRepo(repo, env), 'memory', 'MEMORY.md')
-  if (!isRegularFile(mfile)) {
-    return {
-      code: 0,
-      stdout: '',
-      stderr: `tm mem: no auto-memory recorded for ${repo} (looked at ${mfile})\n`,
-    }
+  const result = claudeMem(repo, env)
+  switch (result.kind) {
+    case 'text':
+      return { code: 0, stdout: result.text, stderr: '' }
+    case 'failed':
+      return die(result.message)
+    case 'not-supported':
+      return { code: 0, stdout: '', stderr: `${result.reason}\n` }
   }
-  return { code: 0, stdout: readFileSync(mfile, 'utf8'), stderr: '' }
 }
 
 /**

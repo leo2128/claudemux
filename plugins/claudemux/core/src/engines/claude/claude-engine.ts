@@ -57,8 +57,18 @@ import type {
   WaitRequest,
 } from '../types'
 import type { Engine } from '../engine'
-import type { TmResult, TmRunOptions } from '../../tm'
-import { NATIVE_VERBS, type NativeEnv } from '../../native'
+import type { NativeEnv } from '../../native'
+import { claudeCompact } from './compact'
+import { claudeCtxUsage } from './ctx'
+import { claudeDoctor } from './doctor'
+import { claudeHistory } from './history'
+import { claudeLast } from './last'
+import { claudeMem } from './mem'
+import { claudeReload } from './reload'
+import { claudeResume } from './resume'
+import { claudeSend } from './send'
+import { claudeSpawn } from './spawn'
+import { claudeWait } from './wait'
 import {
   busyMarkerFor,
   cwdFile,
@@ -69,10 +79,10 @@ import {
   sidFile,
   TMUX_SESSION_PREFIX,
 } from './persistence'
-import { claudeCtxUsage } from './ctx'
-import { claudeLast } from './last'
-import { claudeMem } from './mem'
 import { listingExtras } from './state'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 /** The Claude engine's capability report. */
 export const CLAUDE_CAPABILITIES: EngineCapabilities = {
@@ -87,25 +97,6 @@ export const CLAUDE_CAPABILITIES: EngineCapabilities = {
   detachedTurn: 'replayable',
   events: 'synthesized',
 } as const
-
-/**
- * Adapter — call a `NATIVE_VERBS[verb]` handler with positional argv and
- * an env, return the raw `TmResult`. Phase 2a-1 routes the twelve
- * non-fleet methods through this; Phase 2a-2 will inline the underlying
- * code into engines/claude/* and drop this seam.
- */
-async function callNative(
-  env: NativeEnv,
-  verb: string,
-  argv: readonly string[],
-  options?: TmRunOptions,
-): Promise<TmResult> {
-  const handler = NATIVE_VERBS[verb]
-  if (handler === undefined) {
-    return { code: 1, stdout: '', stderr: `tm: native verb not registered: ${verb}\n` }
-  }
-  return handler(argv, options, env)
-}
 
 /** Trim trailing newlines without touching the rest of the string. */
 function rstrip(text: string): string {
@@ -286,14 +277,16 @@ export class ClaudeEngine implements Engine {
     return { kind: 'killed' }
   }
 
-  // ─── Hot path / session-shape — Phase 2a-1 delegate to NATIVE_VERBS ─
+  // ─── Hot path / session-shape — real bodies in engines/claude/<verb>.ts
 
   async spawn(req: SpawnRequest, _ctx: EngineContext): Promise<SpawnResult> {
     const argv: string[] = [req.name]
     if (req.displayName !== null) argv.push('--task', req.displayName)
     if (req.prompt !== null) argv.push('--prompt', req.prompt)
-    const result = await callNative(this.env, 'spawn', argv)
-    if (result.code !== 0) return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    const result = await claudeSpawn(argv, this.env)
+    if (result.code !== 0) {
+      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
+    }
     return {
       kind: 'spawned',
       name: req.name,
@@ -307,7 +300,7 @@ export class ClaudeEngine implements Engine {
   async send(req: SendRequest, _ctx: EngineContext): Promise<TurnResult> {
     const argv = [req.name, '--prompt', req.prompt]
     if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    const result = await callNative(this.env, 'send', argv)
+    const result = await claudeSend(argv, this.env)
     if (result.code !== 0) {
       return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: false }
     }
@@ -317,7 +310,7 @@ export class ClaudeEngine implements Engine {
   async wait(req: WaitRequest, _ctx: EngineContext): Promise<TurnResult> {
     const argv = [req.name]
     if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    const result = await callNative(this.env, 'wait', argv)
+    const result = await claudeWait(argv, this.env)
     if (result.code !== 0) {
       return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: true }
     }
@@ -325,13 +318,13 @@ export class ClaudeEngine implements Engine {
   }
 
   async compact(req: CompactRequest, _ctx: EngineContext): Promise<CompactResult> {
-    const result = await callNative(this.env, 'compact', [req.name])
+    const result = await claudeCompact([req.name], this.env)
     if (result.code === 0) return { kind: 'compacted' }
     return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
   }
 
   async resume(req: ResumeRequest, _ctx: EngineContext): Promise<ResumeResult> {
-    const result = await callNative(this.env, 'resume', [req.name, '--sid', req.checkpoint])
+    const result = await claudeResume([req.name, req.checkpoint], this.env)
     if (result.code === 0) return { kind: 'resumed', checkpoint: req.checkpoint }
     return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
   }
@@ -350,10 +343,11 @@ export class ClaudeEngine implements Engine {
   async history(req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
     const argv = [req.name]
     if (req.index !== null) argv.push(String(req.index))
-    const result = await callNative(this.env, 'history', argv)
+    const result = await claudeHistory(argv, this.env)
     if (result.code === 0) {
-      // Phase 2a-1 hands the raw text back via the `list` arm with one synthetic
-      // turn; Phase 2a-2 replaces this with real parsing.
+      // Engine adapter still hands the raw text back via the `list` arm
+      // with one synthetic turn; a richer parse on the structured side
+      // is a separate change.
       return {
         kind: 'list',
         turns: [{ index: req.index ?? 0, startedAt: 0, summary: rstrip(result.stdout) }],
@@ -370,7 +364,7 @@ export class ClaudeEngine implements Engine {
   }
 
   async reload(req: ReloadRequest, _ctx: EngineContext): Promise<ReloadResult> {
-    const result = await callNative(this.env, 'reload', [req.name])
+    const result = await claudeReload([req.name], this.env)
     if (result.code === 0) return { kind: 'reloaded' }
     return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) }
   }
@@ -390,7 +384,13 @@ export class ClaudeEngine implements Engine {
   }
 
   async doctor(_ctx: EngineContext): Promise<DoctorSection> {
-    const result = await callNative(this.env, 'doctor', [])
+    // Same path math the legacy doctor wrapper computed: this module
+    // lives at `core/src/engines/claude/claude-engine.ts`, four levels
+    // below the plugin root.
+    const moduleDir = dirname(fileURLToPath(import.meta.url))
+    const tmWrapper = join(moduleDir, '..', '..', '..', '..', 'bin', 'tm')
+    const pluginJson = join(moduleDir, '..', '..', '..', '..', '.claude-plugin', 'plugin.json')
+    const result = await claudeDoctor([], this.env, { tmWrapper, pluginJson })
     return {
       engine: 'claude',
       findings: [

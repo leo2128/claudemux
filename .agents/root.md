@@ -91,6 +91,10 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 
 - [research/index.md](/.agents/research/index.md) — frozen, point-in-time research snapshots (Feishu channel survey, `tm` architecture audits). Read them as history: dated, not maintained, and not authoritative where they disagree with a decision record.
 
+**Proposals** — current design proposals that have not become decisions:
+
+- [Codex multi-client live sync](/.agents/proposals/codex-multiclient-live-sync.md) — options for making claudemux Codex teammates visible to Desktop and VS Code clients.
+
 **Rules & meta:**
 
 - [CONTRIBUTING.md](/.agents/CONTRIBUTING.md) — how to use and extend this KB; the knowledge-delta protocol.

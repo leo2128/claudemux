@@ -45,7 +45,12 @@ export function noEngineRegistered(): TmResult {
 }
 
 export function formatListing(rows: readonly TeammateListing[]): TmResult {
-  if (rows.length === 0) return { code: 0, stdout: '', stderr: '' }
+  if (rows.length === 0) {
+    // Legacy `tm ls` printed a one-line "use spawn" pointer when the fleet
+    // was empty; the cli path keeps that affordance so an empty `tm ls`
+    // is informative rather than silent.
+    return { code: 0, stdout: "(no teammate sessions; use 'tm spawn <repo>')\n", stderr: '' }
+  }
   const lines = rows.map((r) => `${r.name}\t${r.engine}\t${r.state}\t${r.cwd}`)
   return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
 }

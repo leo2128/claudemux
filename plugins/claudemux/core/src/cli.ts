@@ -77,6 +77,7 @@ function productionVerbContext(env: NativeEnv): VerbContext {
     router,
     engineContext,
     identity: new ProductionIdentityStore(),
+    runColumn: env.runColumn,
   }
 }
 

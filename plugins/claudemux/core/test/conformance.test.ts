@@ -53,9 +53,9 @@ import {
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { runCli } from '../src/cli'
 import { runColumn } from '../src/column'
 import { runGrep } from '../src/grep'
-import { NATIVE_VERBS } from '../src/native'
 import {
   busyMarkerFor,
   cwdFile,
@@ -210,17 +210,24 @@ afterEach(() => {
   }
 })
 
-/** Run the native handler for the given args; the only runner the harness drives. */
-function runNative(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
-  const handler = NATIVE_VERBS[verb]
-  if (!handler) throw new Error(`no native handler for ${verb}`)
-  return handler(args, stdin != null ? { stdin } : undefined, {
+/**
+ * Run a verb through the production CLI dispatcher with a fake environment.
+ *
+ * The harness drives `runCli` rather than the per-verb handler directly so
+ * the differential check covers the routing layer (`triggersHelp`, removed
+ * verbs, the engine/legacy dispatch fork) in addition to the verb body.
+ * This is the regression net the Phase 2a-2 body migration moves under:
+ * a verb that fans out to an Engine method must still produce the exact
+ * `TmResult` the previous direct-NATIVE_VERBS path produced, byte for byte.
+ */
+function runVerb(verb: string, args: readonly string[], stdin?: string): Promise<TmResult> {
+  return runCli([verb, ...args], {
     runTmux,
     runColumn,
     runGrep,
     dispatcherDir,
     projectsDir,
-  })
+  }, stdin)
 }
 
 /**
@@ -1906,7 +1913,7 @@ for (const { verb, scenarios } of CONFORMANCE) {
         const { args, stdin, snapshot } = scenario.setup()
         if (snapshot === undefined) {
           // Read-only verb — just compare the result.
-          const result = sanitizeResult(await runNative(verb, args, stdin))
+          const result = sanitizeResult(await runVerb(verb, args, stdin))
           assertOrUpdate(goldenPath(verb, scenario.name), result)
           return
         }
@@ -1915,7 +1922,7 @@ for (const { verb, scenarios } of CONFORMANCE) {
         // (and `afterEach`'s `tmpFiles` cleanup, and the file-suite
         // `afterAll`'s `scratchDir` wipe) sees a clean slate.
         const before = snapshot()
-        const result = sanitizeResult(await runNative(verb, args, stdin))
+        const result = sanitizeResult(await runVerb(verb, args, stdin))
         const after = sanitizeSnapshot(snapshot())
         assertOrUpdate(goldenPath(verb, scenario.name), result)
         assertOrUpdate(fsGoldenPath(verb, scenario.name), after)

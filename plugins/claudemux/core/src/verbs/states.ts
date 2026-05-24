@@ -1,23 +1,34 @@
 /**
- * `tm states` — rich fleet listing. Decision 0024 amend §"Fleet-
- * visibility verbs" and the target tree (`states.ts: default impl:
- * aggregate Engine.status snapshots (rich)`) put this verb on
- * `Engine.list()` + per-teammate `Engine.status(name)` fan-out.
+ * `tm states` — rich fleet listing.
  *
- * The Phase 1 default below mirrors the `tm ls` shape: each row is
- * tab-delimited, with the per-teammate status appended. Phase 2's
- * `presentation/format-state.ts` will turn this into the column-aligned
- * rich view today's `tm states` produces; the verb-side wiring stays.
+ * Each row carries five cells: `REPO SID BUSY LAST PREVIEW`. The cells
+ * come from `Engine.list()`'s per-row `extras` map (decision 0024
+ * §"Engines extend row shape, not the verb"); an engine that omits a
+ * key surfaces a `-` placeholder, matching legacy `cmd_states`.
+ *
+ * The verb owns the column alignment via `runColumn` so the table reads
+ * the same way the legacy `tm states | column -t` did, byte for byte.
  */
 
 import type { TmResult } from '../tm'
 import { noEngineRegistered } from './format'
 import type { VerbContext } from './context'
 
+/** The five-cell row shape `tm states` renders. */
+type StatesRow = readonly [string, string, string, string, string]
+
+const HEADER: StatesRow = ['REPO', 'SID', 'BUSY', 'LAST', 'PREVIEW']
+
+/** Pull a string-typed extra; missing or non-string falls back to `-`. */
+function cell(extras: Readonly<Record<string, string>>, key: string): string {
+  const value = extras[key]
+  return typeof value === 'string' && value.length > 0 ? value : '-'
+}
+
 export async function statesVerb(ctx: VerbContext): Promise<TmResult> {
   // Same rule as `lsVerb`: an empty registry is a wiring failure, not a
-  // fleet state. Surface it explicitly so a Phase 2 production process
-  // that forgets to register an engine fails loudly here.
+  // fleet state. Surface it explicitly so a production process that forgets
+  // to register an engine fails loudly here.
   const engines = ctx.engines.registered()
   if (engines.length === 0) return noEngineRegistered()
 
@@ -25,19 +36,21 @@ export async function statesVerb(ctx: VerbContext): Promise<TmResult> {
     await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))
   ).flat()
 
-  if (listings.length === 0) return { code: 0, stdout: '', stderr: '' }
+  if (listings.length === 0) return { code: 0, stdout: '(no teammate sessions)\n', stderr: '' }
 
-  const rows = await Promise.all(
-    listings.map(async (row) => {
-      const engine = ctx.engines.get(row.engine)
-      if (engine === undefined) return `${row.name}\t${row.engine}\t${row.state}\t${row.cwd}`
-      const status = await engine.status({ name: row.name, lines: null }, ctx.engineContext)
-      if (status.kind !== 'present') {
-        return `${row.name}\t${row.engine}\t${row.state}\t${row.cwd}`
-      }
-      return `${status.name}\t${status.engine}\t${status.state}\t${status.cwd}`
-    }),
-  )
+  const rows: StatesRow[] = [
+    HEADER,
+    ...listings.map<StatesRow>((row) => [
+      row.name,
+      cell(row.extras, 'sidShort'),
+      cell(row.extras, 'busy'),
+      cell(row.extras, 'last'),
+      cell(row.extras, 'preview'),
+    ]),
+  ]
 
-  return { code: 0, stdout: `${rows.join('\n')}\n`, stderr: '' }
+  // The `runColumn` result *is* the verb's result — legacy `cmd_states` ends
+  // in `| column -t`, so `column`'s exit code, stdout, and stderr are what
+  // `tm states` produces.
+  return ctx.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
 }

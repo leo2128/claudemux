@@ -20,6 +20,7 @@
  * Phase 1 implementations land them on the "not found" branch.
  */
 
+import type { ColumnRunner } from '../column'
 import type { EngineRegistryView } from '../engines/registry'
 import type { EngineContext, TeammateName } from '../engines/types'
 import type { TeammateRouter } from '../identity/router'
@@ -40,6 +41,12 @@ export interface VerbContext {
   readonly router: TeammateRouter
   readonly engineContext: EngineContext
   readonly identity: IdentityStore
+  /**
+   * Column-aligner. `tm states` owns the table layout, so the verb layer
+   * — not the engine — holds the `column -t` runner. Engines stay in
+   * the structured-row business.
+   */
+  readonly runColumn: ColumnRunner
 }
 
 /** Phase 1 no-op identity store — Phase 2 ships the real writer. */

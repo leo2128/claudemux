@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "killed: claudemux-conftest-64f0c0ff0e9a (tmux=teammate-claudemux-conftest-64f0c0ff0e9a)\n",
+  "stdout": "killed: claudemux-conftest-64f0c0ff0e9a\n",
   "stderr": ""
 }

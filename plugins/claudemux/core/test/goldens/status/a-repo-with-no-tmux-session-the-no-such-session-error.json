@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: no such teammate session: claudemux-conftest-b52dca7eb044 (tmux=teammate-claudemux-conftest-b52dca7eb044; try 'tm ls')\n"
+  "stderr": "tm: no such teammate: claudemux-conftest-b52dca7eb044\n"
 }

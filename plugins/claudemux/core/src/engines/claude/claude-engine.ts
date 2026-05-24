@@ -69,6 +69,7 @@ import {
   sidFile,
   TMUX_SESSION_PREFIX,
 } from './persistence'
+import { listingExtras } from './state'
 
 /** The Claude engine's capability report. */
 export const CLAUDE_CAPABILITIES: EngineCapabilities = {
@@ -160,13 +161,17 @@ export class ClaudeEngine implements Engine {
 
   // ─── Fleet visibility — Phase 2a-1 real impls ──────────────────────
 
-  async list(_ctx: EngineContext): Promise<readonly TeammateListing[]> {
+  async list(ctx: EngineContext): Promise<readonly TeammateListing[]> {
     let listing = ''
     try {
       listing = (await this.env.runTmux(['ls'])).stdout
     } catch {
       listing = ''
     }
+    // Sample `now` once per `list()` call so a multi-row scan reports the
+    // same clock reading across every teammate's LAST age, matching the
+    // legacy `cmd_states`'s pre-loop `now=$(date +%s)`.
+    const now = Math.floor(ctx.now() / 1000)
     const out: TeammateListing[] = []
     for (const line of listing.split('\n')) {
       const colon = line.indexOf(':')
@@ -175,17 +180,22 @@ export class ClaudeEngine implements Engine {
       // Strip the tmux prefix but keep the raw session-name suffix as the
       // listing's `name`. Decoding `__` → `/` here would mis-identify a
       // legacy single-segment teammate like `flow__1` as a nested name
-      // `flow/1`; Phase 2a-1 listings therefore surface tmux session names
-      // verbatim. Phase 2a-2 reads the base TeammateRecord JSON which
-      // holds the unambiguous raw name and replaces this fallback.
+      // `flow/1`; listings therefore surface tmux session names verbatim.
+      // A future iteration may read the base TeammateRecord JSON instead.
       const name = session.slice(TMUX_SESSION_PREFIX.length)
+      const extras = listingExtras(name, now)
       out.push({
         name,
         engine: 'claude',
         state: deriveState(name),
         cwd: readCwd(name) ?? '',
         displayName: null,
-        extras: {},
+        extras: {
+          sidShort: extras.sidShort,
+          busy: extras.busy,
+          last: extras.last,
+          preview: extras.preview,
+        },
       })
     }
     return out

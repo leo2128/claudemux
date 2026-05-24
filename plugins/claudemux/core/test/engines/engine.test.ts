@@ -139,6 +139,7 @@ function emptyVerbContext(): VerbContext {
     router: new EmptyTeammateRouter(),
     engineContext: ENGINE_CONTEXT,
     identity: new NoopIdentityStore(),
+    runColumn: async (input) => ({ code: 0, stdout: input, stderr: '' }),
   }
 }
 
@@ -262,9 +263,12 @@ describe('Verb-layer default impls — Phase 1 wiring', () => {
     expect(result.stderr).toContain('no such teammate')
   })
 
-  test('killVerb falls through to teammate-not-found with the empty router', async () => {
+  test('killVerb is idempotent when the registry has no claude engine fallback', async () => {
+    // The empty registry has no claude engine to fall back to, so the verb
+    // emits the same "not running" shape `formatKill.not-found` produces.
+    // Exit code 0 keeps `tm kill <name>` script-safe before respawning.
     const result = await killVerb('missing', emptyVerbContext())
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain('no such teammate')
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('not running: missing')
   })
 })

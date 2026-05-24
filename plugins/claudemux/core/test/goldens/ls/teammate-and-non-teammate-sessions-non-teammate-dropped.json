@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "teammate-alpha: 1 windows\nteammate-beta: 3 windows\n",
+  "stdout": "alpha\tclaude\tunknown\t\nbeta\tclaude\tunknown\t\n",
   "stderr": ""
 }

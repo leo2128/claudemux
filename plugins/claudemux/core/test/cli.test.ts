@@ -301,13 +301,13 @@ describe('engine-routed verbs (Phase 2a-1 fleet visibility)', () => {
   // 2b registers a CodexEngine. Routing `kill` through ClaudeEngine
   // prematurely would silently regress `tm kill codex-<n>` callers.
 
-  test('tm states returns code 0 on an empty fleet', async () => {
+  test('tm states returns code 0 with the empty-fleet pointer line', async () => {
     const result = await runCli(
       ['states'],
       fakeEnv({ runTmux: async () => ({ code: 0, stdout: '', stderr: '' }) }),
     )
     expect(result.code).toBe(0)
-    expect(result.stdout).toBe('')
+    expect(result.stdout).toBe('(no teammate sessions)\n')
   })
 
   test('tm status without a repo fails with a usage line', async () => {

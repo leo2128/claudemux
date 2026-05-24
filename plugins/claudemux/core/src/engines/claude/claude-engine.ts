@@ -80,9 +80,7 @@ import {
   TMUX_SESSION_PREFIX,
 } from './persistence'
 import { listingExtras } from './state'
-import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
+import { pluginJsonPath, tmWrapperPath } from '../../plugin-root'
 
 /** The Claude engine's capability report. */
 export const CLAUDE_CAPABILITIES: EngineCapabilities = {
@@ -384,13 +382,12 @@ export class ClaudeEngine implements Engine {
   }
 
   async doctor(_ctx: EngineContext): Promise<DoctorSection> {
-    // Same path math the legacy doctor wrapper computed: this module
-    // lives at `core/src/engines/claude/claude-engine.ts`, four levels
-    // below the plugin root.
-    const moduleDir = dirname(fileURLToPath(import.meta.url))
-    const tmWrapper = join(moduleDir, '..', '..', '..', '..', 'bin', 'tm')
-    const pluginJson = join(moduleDir, '..', '..', '..', '..', '.claude-plugin', 'plugin.json')
-    const result = await claudeDoctor([], this.env, { tmWrapper, pluginJson })
+    // Path math must run from a module that sits at the same depth as
+    // the bundled `core/dist/cli.mjs`; `plugin-root.ts` is that module.
+    const result = await claudeDoctor([], this.env, {
+      tmWrapper: tmWrapperPath(),
+      pluginJson: pluginJsonPath(),
+    })
     return {
       engine: 'claude',
       findings: [

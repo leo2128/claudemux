@@ -16,12 +16,12 @@
 
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 import { runColumn } from './column'
 import { runGrep } from './grep'
 import { HELP_TEXTS, OVERVIEW_HELP, REMOVED_VERB_MESSAGES } from './help'
+import { pluginJsonPath, tmWrapperPath } from './plugin-root'
 import type { TmResult } from './tm'
 import { runTmux } from './tmux'
 import { productionRegistry } from './engines/production'
@@ -253,17 +253,11 @@ function memDispatch(args: readonly string[], env: NativeEnv): TmResult {
   }
 }
 
-/**
- * `tm doctor` — compute the plugin-root paths here (this module lives
- * at `core/src/cli.ts`, which is two directories below the plugin
- * root, same as the bundled `core/dist/cli.mjs`), then hand off to
- * `claudeDoctor`.
- */
 async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  const moduleDir = dirname(fileURLToPath(import.meta.url))
-  const tmWrapper = join(moduleDir, '..', '..', 'bin', 'tm')
-  const pluginJson = join(moduleDir, '..', '..', '.claude-plugin', 'plugin.json')
-  return claudeDoctor(args, env, { tmWrapper, pluginJson })
+  return claudeDoctor(args, env, {
+    tmWrapper: tmWrapperPath(),
+    pluginJson: pluginJsonPath(),
+  })
 }
 
 // ─── spawn / send / wait — codex fork at the dispatcher layer ─────────────

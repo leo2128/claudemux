@@ -3714,8 +3714,7 @@ var require_websocket_server = __commonJS({
 // src/cli.ts
 import { realpathSync as realpathSync4 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname8, join as join12 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { join as join12 } from "node:path";
 
 // src/proc.ts
 import { spawn } from "node:child_process";
@@ -4070,6 +4069,20 @@ var REMOVED_VERB_MESSAGES = {
 `
 };
 
+// src/plugin-root.ts
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+function tmWrapperPath() {
+  return join(pluginRoot(), "bin", "tm");
+}
+function pluginJsonPath() {
+  return join(pluginRoot(), ".claude-plugin", "plugin.json");
+}
+function pluginRoot() {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  return join(moduleDir, "..", "..");
+}
+
 // src/tmux.ts
 function resolveTmuxBinary() {
   const override = process.env.CLAUDEMUX_TMUX;
@@ -4087,13 +4100,13 @@ import { existsSync } from "node:fs";
 // src/engines/claude/keys.ts
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname as dirname2 } from "node:path";
 
 // src/engines/claude/idle.ts
 import { rmSync, statSync, readFileSync } from "node:fs";
 
 // src/engines/claude/persistence.ts
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // src/engines/teammate-record.ts
 var TEAMMATE_RECORD_SCHEMA = 1;
@@ -4132,28 +4145,28 @@ var TeammateRecord = class {
 // src/engines/claude/persistence.ts
 var TEAMMATE_ROOT = "/tmp";
 function cwdFile(name) {
-  return join(TEAMMATE_ROOT, `teammate-${name}.cwd`);
+  return join2(TEAMMATE_ROOT, `teammate-${name}.cwd`);
 }
 function sidFile(name) {
-  return join(TEAMMATE_ROOT, `teammate-${name}.sid`);
+  return join2(TEAMMATE_ROOT, `teammate-${name}.sid`);
 }
 function readyFile(name) {
-  return join(TEAMMATE_ROOT, `teammate-${name}.ready`);
+  return join2(TEAMMATE_ROOT, `teammate-${name}.ready`);
 }
 function sendAtFile(name) {
-  return join(TEAMMATE_ROOT, `teammate-${name}.send-at`);
+  return join2(TEAMMATE_ROOT, `teammate-${name}.send-at`);
 }
 function idleDir() {
   return "/tmp/claude-idle";
 }
 function idleMarkerFor(sid) {
-  return join(idleDir(), sid);
+  return join2(idleDir(), sid);
 }
 function busyMarkerFor(sid) {
-  return join(idleDir(), `${sid}.busy`);
+  return join2(idleDir(), `${sid}.busy`);
 }
 function lastFileFor(sid) {
-  return join(idleDir(), `${sid}.last`);
+  return join2(idleDir(), `${sid}.last`);
 }
 var TMUX_SESSION_PREFIX = "teammate-";
 function tmuxSessionName(name) {
@@ -4315,7 +4328,7 @@ async function sendKeys(name, prompt, runTmux2, processEnv) {
   const sid = resolveSid(name);
   if (sid !== null) clearIdle(sid);
   const sa = sendAtFile(name);
-  mkdirSync(dirname(sa), { recursive: true });
+  mkdirSync(dirname2(sa), { recursive: true });
   writeFileSync(sa, "");
   const n = prompt.length;
   const inlinePath = n <= cfg.inlineMax && !prompt.includes("\n");
@@ -4453,7 +4466,7 @@ async function claudeCompact(args, env) {
 
 // src/engines/claude/ctx.ts
 import { readFileSync as readFileSync3, statSync as statSync3 } from "node:fs";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 
 // src/paths.ts
 function idleDir2() {
@@ -4550,7 +4563,7 @@ function isRegularFile3(path) {
   }
 }
 function transcriptFile(projectsDir, cwd, sid) {
-  return join2(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
+  return join3(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`);
 }
 function readCtxUsage(jsonl) {
   let content;
@@ -4644,7 +4657,7 @@ import { readdirSync as readdirSync2, readFileSync as readFileSync6, statSync as
 import {
   spawn as spawnChild
 } from "node:child_process";
-import { dirname as dirname3, join as join4 } from "node:path";
+import { dirname as dirname4, join as join5 } from "node:path";
 import {
   closeSync,
   existsSync as existsSync2,
@@ -4668,39 +4681,39 @@ import {
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 function codexRegistryRoot() {
   return process.env["CLAUDEMUX_CODEX_REGISTRY_ROOT"] || "/tmp/teammate-codex";
 }
 function codexTeammateDir(name) {
-  return join3(codexRegistryRoot(), name);
+  return join4(codexRegistryRoot(), name);
 }
 function codexSocketPath(name) {
-  return join3(codexTeammateDir(name), "socket");
+  return join4(codexTeammateDir(name), "socket");
 }
 function codexPidFile(name) {
-  return join3(codexTeammateDir(name), "pid");
+  return join4(codexTeammateDir(name), "pid");
 }
 function codexStartedAtFile(name) {
-  return join3(codexTeammateDir(name), "started-at");
+  return join4(codexTeammateDir(name), "started-at");
 }
 function codexThreadFile(name) {
-  return join3(codexTeammateDir(name), "thread");
+  return join4(codexTeammateDir(name), "thread");
 }
 function codexLastSeenFile(name) {
-  return join3(codexTeammateDir(name), "last-seen");
+  return join4(codexTeammateDir(name), "last-seen");
 }
 function codexStdoutLogFile(name) {
-  return join3(codexTeammateDir(name), "stdout.log");
+  return join4(codexTeammateDir(name), "stdout.log");
 }
 function codexStderrLogFile(name) {
-  return join3(codexTeammateDir(name), "stderr.log");
+  return join4(codexTeammateDir(name), "stderr.log");
 }
 function codexMetaFile(name) {
-  return join3(codexTeammateDir(name), "meta.json");
+  return join4(codexTeammateDir(name), "meta.json");
 }
 function codexBorrowLockFile(name) {
-  return join3(codexTeammateDir(name), "lock");
+  return join4(codexTeammateDir(name), "lock");
 }
 function codexExtension(name) {
   const root = codexTeammateDir(name);
@@ -4718,7 +4731,7 @@ function codexExtension(name) {
   };
 }
 function atomicWrite(path, content) {
-  mkdirSync2(dirname2(path), { recursive: true });
+  mkdirSync2(dirname3(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync2(tmp, content, { mode: 384 });
   renameSync(tmp, path);
@@ -4881,11 +4894,11 @@ function listDaemons() {
     const root = codexRegistryRoot();
     const names = [];
     const walk = (dir, prefix) => {
-      if (prefix.length > 0 && existsSync2(join4(dir, "pid"))) names.push(prefix);
+      if (prefix.length > 0 && existsSync2(join5(dir, "pid"))) names.push(prefix);
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const childPrefix = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
-        walk(join4(dir, entry.name), childPrefix);
+        walk(join5(dir, entry.name), childPrefix);
       }
     };
     walk(root, "");
@@ -4922,7 +4935,7 @@ async function spawnDaemon(opts) {
   const socketPath = codexSocketPath(name);
   const readyTimeoutMs = opts.readyTimeoutMs ?? 1e4;
   const spawnLock = `${dir}.spawn.lock`;
-  mkdirSync3(dirname3(spawnLock), { recursive: true });
+  mkdirSync3(dirname4(spawnLock), { recursive: true });
   let lockFd = null;
   try {
     lockFd = openSync(spawnLock, "wx", 384);
@@ -5206,21 +5219,21 @@ async function claudeDoctor(args, env, paths) {
 
 // src/engines/claude/history.ts
 import { readdirSync as readdirSync3, readFileSync as readFileSync7, statSync as statSync6 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/engines/claude/repo-fs.ts
 import { realpathSync } from "node:fs";
-import { dirname as dirname4, join as join5 } from "node:path";
+import { dirname as dirname5, join as join6 } from "node:path";
 function projectDirForRepo(name, env) {
-  const phys = realpathSync(join5(env.dispatcherDir, name));
-  return join5(env.projectsDir, encodeProjectDir(phys));
+  const phys = realpathSync(join6(env.dispatcherDir, name));
+  return join6(env.projectsDir, encodeProjectDir(phys));
 }
 function dieRepoNotFound(verb, name, expected, dispatcherDir) {
-  if (isDirectory(join5(dispatcherDir, ".git"))) {
+  if (isDirectory(join6(dispatcherDir, ".git"))) {
     return die(
       `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
     The dispatcher dir should be the PARENT of your sibling repos.
-    Try:  cd "${dirname4(dispatcherDir)}" && tm ${verb} ${name}
+    Try:  cd "${dirname5(dispatcherDir)}" && tm ${verb} ${name}
     (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
     \u2014 run /claudemux:setup to wire it up automatically.)`
     );
@@ -5418,7 +5431,7 @@ async function historyList(repo, projectDir, env) {
   const files = names.map((name) => {
     let mtime = 0;
     try {
-      mtime = Math.floor(statSync6(join6(projectDir, name)).mtimeMs / 1e3);
+      mtime = Math.floor(statSync6(join7(projectDir, name)).mtimeMs / 1e3);
     } catch {
       mtime = 0;
     }
@@ -5429,7 +5442,7 @@ async function historyList(repo, projectDir, env) {
   const now = Math.floor(Date.now() / 1e3);
   const rows = [[" ", "SID", "AGE", "SIZE", "TOPIC"]];
   for (const { name, mtime } of files) {
-    const full = join6(projectDir, name);
+    const full = join7(projectDir, name);
     const sidFull = name.replace(/\.jsonl$/, "");
     let size = 0;
     try {
@@ -5465,7 +5478,7 @@ function historyDetail(repo, projectDir, prefix) {
   let names;
   try {
     names = readdirSync3(projectDir).filter(
-      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile(join6(projectDir, name2))
+      (name2) => name2.startsWith(prefix) && name2.endsWith(".jsonl") && isRegularFile(join7(projectDir, name2))
     );
   } catch {
     names = [];
@@ -5481,7 +5494,7 @@ function historyDetail(repo, projectDir, prefix) {
     );
   }
   const name = names[0];
-  const file = join6(projectDir, name);
+  const file = join7(projectDir, name);
   const sidFull = name.replace(/\.jsonl$/, "");
   let size = 0;
   let mtime = 0;
@@ -5540,7 +5553,7 @@ resume: tm resume ${repo} ${sidFull}
 async function claudeHistory(args, env) {
   const repo = args[0] ?? "";
   if (repo.length === 0) return die("usage: tm history <repo> [<sid-or-prefix>]");
-  const path = join6(env.dispatcherDir, repo);
+  const path = join7(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("history", repo, path, env.dispatcherDir);
   const projectDir = projectDirForRepo(repo, env);
   const sidArg = args[1] ?? "";
@@ -5578,7 +5591,7 @@ function claudeLast(name) {
 
 // src/engines/claude/mem.ts
 import { readFileSync as readFileSync9, realpathSync as realpathSync2, statSync as statSync8 } from "node:fs";
-import { dirname as dirname5, join as join7 } from "node:path";
+import { dirname as dirname6, join as join8 } from "node:path";
 function isRegularFile4(path) {
   try {
     return statSync8(path).isFile();
@@ -5594,25 +5607,25 @@ function isDirectory2(path) {
   }
 }
 function projectDirForName(name, env) {
-  const phys = realpathSync2(join7(env.dispatcherDir, name));
-  return join7(env.projectsDir, encodeProjectDir(phys));
+  const phys = realpathSync2(join8(env.dispatcherDir, name));
+  return join8(env.projectsDir, encodeProjectDir(phys));
 }
 function repoNotFoundMessage(verb, name, expected, dispatcherDir) {
-  if (isDirectory2(join7(dispatcherDir, ".git"))) {
+  if (isDirectory2(join8(dispatcherDir, ".git"))) {
     return `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.
     The dispatcher dir should be the PARENT of your sibling repos.
-    Try:  cd "${dirname5(dispatcherDir)}" && tm ${verb} ${name}
+    Try:  cd "${dirname6(dispatcherDir)}" && tm ${verb} ${name}
     (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json
     \u2014 run /claudemux:setup to wire it up automatically.)`;
   }
   return `repo not found at ${expected} \u2014 <repo> must be a direct subdirectory of the dispatcher dir (${dispatcherDir}). Dispatcher dir is read from TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or run tm from the right place.`;
 }
 function claudeMem(name, env) {
-  const path = join7(env.dispatcherDir, name);
+  const path = join8(env.dispatcherDir, name);
   if (!isDirectory2(path)) {
     return { kind: "failed", message: repoNotFoundMessage("mem", name, path, env.dispatcherDir) };
   }
-  const mfile = join7(projectDirForName(name, env), "memory", "MEMORY.md");
+  const mfile = join8(projectDirForName(name, env), "memory", "MEMORY.md");
   if (!isRegularFile4(mfile)) {
     return {
       kind: "not-supported",
@@ -5653,11 +5666,11 @@ async function claudeReload(args, env) {
 
 // src/engines/claude/resume.ts
 import { readdirSync as readdirSync4, statSync as statSync10 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // src/engines/claude/spawn.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync4, realpathSync as realpathSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
+import { dirname as dirname7 } from "node:path";
 
 // src/engines/claude/wait-signals.ts
 import { existsSync as existsSync3, statSync as statSync9 } from "node:fs";
@@ -5836,7 +5849,7 @@ function sanitizeTaskSlug(task) {
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // src/engines/claude/spawn.ts
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 function parseSpawnArgs(rest) {
   const SILENT = { code: 1, stdout: "", stderr: "" };
   let resumeSid = "";
@@ -5913,7 +5926,7 @@ async function claudeSpawn(args, env) {
   const parsed = parseSpawnArgs(args.slice(1));
   if ("error" in parsed) return parsed.error;
   const { resumeSid, task, prompt, hasPrompt } = parsed;
-  const path = join8(env.dispatcherDir, repo);
+  const path = join9(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("spawn", repo, path, env.dispatcherDir);
   const cwdPhys = realpathSync3(path);
   const dispatcherPhys = realpathSync3(env.dispatcherDir);
@@ -5952,7 +5965,7 @@ async function claudeSpawn(args, env) {
   const rf = readyFile(repo);
   rmSync4(rf, { force: true });
   const cf = cwdFile(repo);
-  mkdirSync4(dirname6(cf), { recursive: true });
+  mkdirSync4(dirname7(cf), { recursive: true });
   writeFileSync4(cf, `${cwdPhys}
 `);
   let paneId = "";
@@ -5994,7 +6007,7 @@ async function claudeSpawn(args, env) {
 `;
   }
   const sf = sidFile(repo);
-  mkdirSync4(dirname6(sf), { recursive: true });
+  mkdirSync4(dirname7(sf), { recursive: true });
   writeFileSync4(sf, `${sid}
 `);
   clearIdle(sid);
@@ -6081,7 +6094,7 @@ async function claudeResume(args, env) {
       'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."]  (sid from ledger preferred; auto-pick on omit; --task relabels the resumed conversation)'
     );
   }
-  const path = join9(env.dispatcherDir, repo);
+  const path = join10(env.dispatcherDir, repo);
   if (!isDirectory(path)) return dieRepoNotFound("resume", repo, path, env.dispatcherDir);
   const name = tmuxSessionName(repo);
   if (await sessionExists(name, env.runTmux)) {
@@ -6109,7 +6122,7 @@ async function claudeResume(args, env) {
     const stats = names.map((file) => {
       let mtime = 0;
       try {
-        mtime = Math.floor(statSync10(join9(projectDir, file)).mtimeMs / 1e3);
+        mtime = Math.floor(statSync10(join10(projectDir, file)).mtimeMs / 1e3);
       } catch {
         mtime = 0;
       }
@@ -6121,7 +6134,7 @@ async function claudeResume(args, env) {
     autoPickStderr = `tm resume: no sid given \u2014 auto-picked ${sid} (jsonl mtime ${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.
 `;
   } else {
-    const target = join9(projectDir, `${sid}.jsonl`);
+    const target = join10(projectDir, `${sid}.jsonl`);
     if (!isRegularFile(target)) {
       return die(
         `no transcript at ${target} \u2014 wrong repo for this sid, or sid does not exist. Check 'ls ${projectDir}/'.`
@@ -6212,9 +6225,6 @@ async function claudeWait(args, env) {
 }
 
 // src/engines/claude/claude-engine.ts
-import { dirname as dirname7 } from "node:path";
-import { fileURLToPath } from "node:url";
-import { join as join10 } from "node:path";
 var CLAUDE_CAPABILITIES = {
   atomicSend: true,
   atomicSpawnPrompt: true,
@@ -6460,10 +6470,10 @@ var ClaudeEngine = class {
     };
   }
   async doctor(_ctx) {
-    const moduleDir = dirname7(fileURLToPath(import.meta.url));
-    const tmWrapper = join10(moduleDir, "..", "..", "..", "..", "bin", "tm");
-    const pluginJson = join10(moduleDir, "..", "..", "..", "..", ".claude-plugin", "plugin.json");
-    const result = await claudeDoctor([], this.env, { tmWrapper, pluginJson });
+    const result = await claudeDoctor([], this.env, {
+      tmWrapper: tmWrapperPath(),
+      pluginJson: pluginJsonPath()
+    });
     return {
       engine: "claude",
       findings: [
@@ -7853,10 +7863,10 @@ function memDispatch(args, env) {
   }
 }
 async function doctorDispatch(args, env) {
-  const moduleDir = dirname8(fileURLToPath2(import.meta.url));
-  const tmWrapper = join12(moduleDir, "..", "..", "bin", "tm");
-  const pluginJson = join12(moduleDir, "..", "..", ".claude-plugin", "plugin.json");
-  return claudeDoctor(args, env, { tmWrapper, pluginJson });
+  return claudeDoctor(args, env, {
+    tmWrapper: tmWrapperPath(),
+    pluginJson: pluginJsonPath()
+  });
 }
 async function spawnDispatch(args, env) {
   const repo = args[0] ?? "";

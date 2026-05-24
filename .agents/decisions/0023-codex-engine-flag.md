@@ -13,9 +13,10 @@
 prefix** as the fork: a teammate whose first positional matches `^codex-`
 routes into [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts);
 every other name stays on the tmux + hooks path. The contract is enforced by
-`isCodexTarget(name)` and read at four sites in
-[`native.ts`](/plugins/claudemux/core/src/native.ts) (the heads of `spawn`,
-`send`, `wait`, `kill`) and in `codexAsk`'s pool filter.
+`isCodexTarget(name)` and read at four sites in the dispatcher (then in
+`core/src/native.ts`; today in [`core/src/cli.ts`](/plugins/claudemux/core/src/cli.ts)
+at the heads of `spawn`, `send`, `wait`, `kill`) and in `codexAsk`'s pool
+filter.
 
 That choice paid off as a stage-4 shortcut — one helper, four call sites, no
 new state — but the cost has accumulated:

@@ -10,7 +10,8 @@
 a resident, **MCP-native orchestration core** to replace `tm`, with per-agent
 teammate drivers. Its strangler migration was under way and had reached Phase
 B: 11 of 17 `tm` verbs were reimplemented as native TypeScript inside the core
-([`core/src/native.ts`](/plugins/claudemux/core/src/native.ts)).
+(then in `core/src/native.ts`; now split per-engine under
+[`core/src/engines/claude/`](/plugins/claudemux/core/src/engines/claude)).
 
 With the implementation in hand and the Codex integration being scoped, two
 properties of the MCP-native shape became load-bearing — and a third, separate,
@@ -45,11 +46,12 @@ Node — still a per-invocation command-line tool, with no resident process, no
 MCP server, and no socket.
 
 - **`tm` stays a CLI; it stops being Bash.** The native-TypeScript verb
-  implementations written for Phase B of 0018's migration
-  ([`core/src/native.ts`](/plugins/claudemux/core/src/native.ts)) are **kept**
-  and become the body of the new CLI. What is dropped is the MCP wrapper around
-  them — the resident server, the socket transport, and the in-memory teammate
-  registry.
+  implementations written for Phase B of 0018's migration (then in
+  `core/src/native.ts`; later split per-engine — see
+  [decision 0024](/.agents/decisions/0024-multi-engine-tui-architecture.md))
+  are **kept** and become the body of the new CLI. What is dropped is the
+  MCP wrapper around them — the resident server, the socket transport,
+  and the in-memory teammate registry.
 - **Runtime: Bun → Node.** The `core/` package runs on Bun today; the rewritten
   `tm` runs on Node, the broader-installed runtime for a tool shipped onto
   users' machines. The Bun → Node move that 0018's spec had parked on its

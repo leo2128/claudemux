@@ -45,7 +45,8 @@ codex prefix > SessionStart hook > MCP > anything else.
     by `tm spawn`).
   - `/tmp/teammate-claudemux-doc.ready` mtime `2026-05-23 21:17:20`.
     Only the hook touches this file (`tm spawn` only `rm`s it — see
-    [`native.ts:2124`](/plugins/claudemux/core/src/native.ts) and
+    [`engines/claude/spawn.ts`](/plugins/claudemux/core/src/engines/claude/spawn.ts)
+    and
     [`hooks/on-session-start.sh:90`](/plugins/claudemux/hooks/on-session-start.sh)),
     so its 19-second-later mtime is direct evidence of the hook running.
   - Hook produces `/tmp/claude-idle/_on-stop.log` actively — on-stop is
@@ -53,8 +54,8 @@ codex prefix > SessionStart hook > MCP > anything else.
     loaded cleanly (the bundle is "all or nothing"; the same JSON wires
     SessionStart and Stop).
 - **Root cause.** `pollReady` in
-  [`native.ts:2022`](/plugins/claudemux/core/src/native.ts) loops 60 × 300
-  ms = **18 s**. Booting Opus 4.7 on a 1 M context window with a stack of
+  [`engines/claude/spawn.ts`](/plugins/claudemux/core/src/engines/claude/spawn.ts)
+  loops 60 × 300 ms = **18 s**. Booting Opus 4.7 on a 1 M context window with a stack of
   user-scope plugins consistently takes ~19 s on this machine, so the
   poll loses by a single iteration. The WARN copy then misleads by
   hypothesising a load failure.

@@ -22,3 +22,34 @@ export function nowSec(): number {
 export function isNonNegativeInteger(value: string): boolean {
   return /^[0-9]+$/.test(value)
 }
+
+/** The current date as `YYYY-MM-DD` in local time — `tm`'s `date +%Y-%m-%d`. */
+export function fmtLocalDate(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * Format an epoch-seconds value as `YYYY-MM-DD HH:MM:SS` in local time
+ * — the `tm` `history_detail` `last_seen` field. `tm` does this with
+ * BSD `date -r`, so this rendering matches `tm` on macOS; `date -r
+ * <epoch>` is not portable to GNU, which is why `history`'s detail-
+ * mode conformance is macOS-gated.
+ */
+export function fmtLocalDateTime(epochSec: number): string {
+  const d = new Date(epochSec * 1000)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  )
+}
+
+/** Format a second-count as a short relative age — `tm`'s `fmt_age`. */
+export function fmtAge(age: number): string {
+  if (age < 60) return `${age}s`
+  if (age < 3600) return `${Math.floor(age / 60)}m`
+  if (age < 86400) return `${Math.floor(age / 3600)}h`
+  return `${Math.floor(age / 86400)}d`
+}

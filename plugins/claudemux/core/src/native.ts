@@ -26,9 +26,6 @@
  */
 
 import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -43,8 +40,6 @@ import {
   busyMarkerFor,
   cwdFile,
   encodeProjectDir,
-  idleDir,
-  idleMarkerFor,
   lastFileFor,
   readyFile,
   sendAtFile,
@@ -75,37 +70,18 @@ import {
   iterTeammates,
   requireSession,
   resolvePaneTarget,
-  sessionExists,
   sessionField,
 } from './engines/claude/tmux'
-import {
-  clearIdle,
-  isDirectory,
-  isRegularFile,
-  resolveSid,
-  resolveSidOrDie,
-} from './engines/claude/idle'
-import {
-  isNonNegativeInteger,
-  nowSec,
-  sleepMs,
-} from './engines/claude/clock'
-import {
-  newSid,
-  randSuffix,
-  sanitizeTaskSlug,
-  UUID_RE,
-} from './engines/claude/identifiers'
-import { sendKeys } from './engines/claude/keys'
-import { waitIdleSignal, waitPaneQuiet } from './engines/claude/wait-signals'
-import { echoCtxToStderr, printLastOrEmpty } from './engines/claude/post-turn'
-import { dieRepoNotFound, projectDirForRepo } from './engines/claude/repo-fs'
-import {
-  isProcessAlive as codexProcessAlive,
-  listDaemons as listCodexDaemons,
-  readDaemonState as readCodexState,
-  reapDaemon as reapCodexDaemon,
-} from './engines/codex/supervisor'
+import { clearIdle, isDirectory, isRegularFile, resolveSid } from './engines/claude/idle'
+import { isNonNegativeInteger, sleepMs } from './engines/claude/clock'
+import { claudeCompact } from './engines/claude/compact'
+import { claudeDoctor } from './engines/claude/doctor'
+import { claudeHistory } from './engines/claude/history'
+import { claudeReload } from './engines/claude/reload'
+import { claudeResume } from './engines/claude/resume'
+import { claudeSend, parseSendArgs } from './engines/claude/send'
+import { claudeSpawn, parseSpawnArgs } from './engines/claude/spawn'
+import { claudeWait, parseWaitArgs } from './engines/claude/wait'
 
 /** Backwards-compat alias for the historic `SESSION_PREFIX` constant. */
 const SESSION_PREFIX = TMUX_SESSION_PREFIX
@@ -186,10 +162,6 @@ const last: NativeVerb = async (args) => {
   return die(`unexpected last result: ${(result as { kind: string }).kind}`)
 }
 
-/** Whether a value is a plain JSON object — not a primitive, not an array. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /** The running teammate repo names — `tm`'s `iter_repos` via `iterTeammates`. */
 const iterRepos = iterTeammates
@@ -359,449 +331,11 @@ const mem: NativeVerb = async (args, _options, env) => {
 }
 
 /**
- * One-decimal string of `value`, rounding a `.x5` tie to even — C `printf`'s
- * `%.1f`, which `fmt_size`'s `awk` uses. `Number.toFixed` rounds half away
- * from zero, so it would print `1.3M` where `awk` prints `1.2M` for a file of
- * exactly 1.25 MiB; this keeps the size cells byte-identical to `tm`.
+ * `tm history` — thin wrapper over `engines/claude/history.ts`. The
+ * body now lives there together with the jsonl parser helpers; this
+ * arm only routes the NATIVE_VERBS dispatch.
  */
-function toFixed1HalfEven(value: number): string {
-  const tenths = value * 10
-  const floor = Math.floor(tenths)
-  const frac = tenths - floor
-  let rounded: number
-  if (frac < 0.5) rounded = floor
-  else if (frac > 0.5) rounded = floor + 1
-  else rounded = floor % 2 === 0 ? floor : floor + 1
-  return (rounded / 10).toFixed(1)
-}
-
-/** Format a byte count as a short human size — `tm`'s `fmt_size`. */
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1048576) return `${Math.trunc(bytes / 1024)}K`
-  if (bytes < 1073741824) return `${toFixed1HalfEven(bytes / 1048576)}M`
-  return `${toFixed1HalfEven(bytes / 1073741824)}G`
-}
-
-/**
- * Format an epoch-seconds value as `YYYY-MM-DD HH:MM:SS` in local time — the
- * `tm` `history_detail` `last_seen` field. `tm` does this with BSD `date -r`,
- * so this rendering matches `tm` on macOS; `date -r <epoch>` is not portable
- * to GNU, which is why `history`'s detail-mode conformance is macOS-gated.
- */
-function fmtLocalDateTime(epochSec: number): string {
-  const d = new Date(epochSec * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return (
-    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
-    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-  )
-}
-
-/** `tm`'s `sed -E 's/T/ /; s/\.[0-9]+Z?$//; s/Z$//'` on a transcript timestamp. */
-function mungeCreated(ts: string): string {
-  return ts.replace('T', ' ').replace(/\.[0-9]+Z?$/, '').replace(/Z$/, '')
-}
-
-/** Prefix every line of `text` with two spaces — `tm`'s `sed 's/^/  /'`. */
-function indent(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => `  ${line}`)
-    .join('\n')
-}
-
-/** A bare-integer string's numeric value, as bash arithmetic reads it (`null` → 0). */
-function bashNum(value: string): number {
-  const n = Number(value)
-  return Number.isInteger(n) ? n : 0
-}
-
-/**
- * The `text`-typed items of a transcript entry's `content` array. Returns the
- * list of their `.text` values when the array has at least one text item, or
- * `null` when it has none (not a selectable entry). Throws on a shape `jq`
- * errors on — a non-object array item, or a non-string non-null `.text`.
- */
-function contentTextItems(content: readonly unknown[]): string[] | null {
-  let hasText = false
-  const texts: string[] = []
-  for (const item of content) {
-    if (!isPlainObject(item)) throw new Error('jq-fail')
-    if (item.type === 'text') {
-      hasText = true
-      const t = item.text
-      if (t === null || t === undefined) texts.push('')
-      else if (typeof t === 'string') texts.push(t)
-      else throw new Error('jq-fail')
-    }
-  }
-  return hasText ? texts : null
-}
-
-/**
- * The prompt text of a `user` transcript entry — `tm`'s shared filter: a
- * string `content` is the text itself; an array `content` joins its `text`
- * items with a space. Returns `null` when the entry is not a selectable user
- * prompt. Throws on a shape `jq` errors on (a non-object `.message`, or a
- * non-object content-array item).
- */
-function userPromptText(entry: Record<string, unknown>): string | null {
-  const message = entry.message
-  if (message === null || message === undefined) return null
-  if (!isPlainObject(message)) throw new Error('jq-fail')
-  if (message.role !== 'user') return null
-  const content = message.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    const texts = contentTextItems(content)
-    return texts === null ? null : texts.join(' ')
-  }
-  return null
-}
-
-/** A `message.usage` object's cache-inclusive input total — `null` when every field is absent. */
-function historyUsageSum(usage: unknown): number | null {
-  if (!isPlainObject(usage)) throw new Error('jq-fail')
-  let sum: number | null = null
-  for (const key of [
-    'input_tokens',
-    'cache_creation_input_tokens',
-    'cache_read_input_tokens',
-  ] as const) {
-    const value = usage[key]
-    if (value === null || value === undefined) continue
-    if (typeof value !== 'number') throw new Error('jq-fail')
-    sum = (sum ?? 0) + value
-  }
-  return sum
-}
-
-/** `jq`'s `tostring` on a usage sum: a number, or the literal `null`. */
-function historyUsageStr(sum: number | null): string {
-  return sum === null ? 'null' : String(sum)
-}
-
-/** First-line-of-first-user-prompt — `tm`'s `history_first_prompt` (`jq` without `-s`). */
-function historyFirstPrompt(content: string): string {
-  // `head -200`: a human first prompt sits near the file head, so the scan is
-  // capped there. `jq` without `-s` reports a bad line and moves on, so a
-  // parse error or a filter error skips that line rather than failing.
-  for (const line of content.split('\n').slice(0, 200)) {
-    if (line.trim() === '') continue
-    let entry: unknown
-    try {
-      entry = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (!isPlainObject(entry) || entry.type !== 'user') continue
-    let text: string | null
-    try {
-      text = userPromptText(entry)
-    } catch {
-      continue
-    }
-    if (text === null) continue
-    // `jq -r` prints the value, `head -1` keeps its first line.
-    return text.split('\n')[0] ?? ''
-  }
-  return ''
-}
-
-/** The `TOPIC` cell for a `history` row — first prompt, control chars stripped, 60 chars. */
-function historyTopic(content: string): string {
-  // `tr -d '\000-\037'` then `perl -CSD substr 0,60` — strip control code
-  // points, then take the first 60 by code point, as `tm` counts them.
-  const stripped = [...historyFirstPrompt(content)].filter(
-    (ch) => (ch.codePointAt(0) ?? 0) > 0x1f,
-  )
-  const topic = stripped.slice(0, 60).join('')
-  return topic.length > 0 ? topic : '(no user prompt)'
-}
-
-/** The five fields `history_detail`'s `jq -s` pass yields, after base64 decode. */
-interface HistoryData {
-  /** `$u_prompts[0]` — the first user prompt, trailing newlines stripped. */
-  firstPrompt: string
-  /** `$a_texts[-1]` — the last assistant text, trailing newlines stripped. */
-  lastAssistant: string
-  /** `$ts[0]` — the first entry timestamp. */
-  createdTs: string
-  /** The last assistant turn's cache-inclusive input total — `tostring`'d. */
-  used: string
-  /** The largest such total across the transcript — `tostring`'d. */
-  peak: string
-}
-
-/** The all-empty `HistoryData` — `tm`'s `jq` failure sentinel (`echo $'\t\t\t\t\t'`). */
-const EMPTY_HISTORY: HistoryData = {
-  firstPrompt: '',
-  lastAssistant: '',
-  createdTs: '',
-  used: '',
-  peak: '',
-}
-
-/**
- * Read a transcript's `history_detail` data — the native form of `tm`'s
- * `jq -r -s` pass. `jq -s` slurps the whole file: one unparseable line, or any
- * line `jq` errors while indexing, fails the entire pass — `tm` catches that
- * with `|| echo $'\t\t\t\t\t'`, six empty fields. So any such failure here
- * returns `EMPTY_HISTORY`, which renders identically to a transcript that
- * simply has no prompts, assistant text, or usage.
- *
- * One `tm` quirk is deliberately not reproduced. `tm` joins the six fields
- * with tabs and re-splits them with `IFS=$'\t' read`; tab is IFS whitespace,
- * so an empty field mid-row collapses and shifts every field after it. That
- * is unreachable on a real Claude Code transcript — every entry carries a
- * `.timestamp`, so the timestamp field is never empty — and a clean native
- * parse is a strict improvement, the same call as the `date -r` handling.
- */
-function readHistoryData(content: string): HistoryData {
-  try {
-    const uPrompts: string[] = []
-    const aTexts: string[] = []
-    const usages: unknown[] = []
-    const timestamps: unknown[] = []
-    for (const line of content.split('\n')) {
-      if (line.trim() === '') continue
-      const entry: unknown = JSON.parse(line)
-      if (entry === null) continue
-      if (!isPlainObject(entry)) throw new Error('jq-fail')
-      if (entry.type === 'user') {
-        const text = userPromptText(entry)
-        if (text !== null) uPrompts.push(text)
-      } else if (entry.type === 'assistant') {
-        const message = entry.message
-        if (message !== null && message !== undefined) {
-          if (!isPlainObject(message)) throw new Error('jq-fail')
-          if (Array.isArray(message.content)) {
-            const texts = contentTextItems(message.content)
-            if (texts !== null) aTexts.push(texts.join('\n'))
-          }
-          if (message.usage !== null && message.usage !== undefined) {
-            usages.push(message.usage)
-          }
-        }
-      }
-      const ts = entry.timestamp
-      if (ts !== null && ts !== undefined) timestamps.push(ts)
-    }
-
-    let createdTs = ''
-    if (timestamps.length > 0) {
-      const first = timestamps[0]
-      if (first === false) createdTs = ''
-      else if (typeof first === 'string') createdTs = first
-      else throw new Error('jq-fail') // jq: a non-string timestamp + "\t" errors
-    }
-
-    let used = ''
-    let peak = ''
-    if (usages.length > 0) {
-      const sums = usages.map(historyUsageSum)
-      used = historyUsageStr(sums[sums.length - 1] ?? null)
-      let peakNum: number | null = null
-      for (const sum of sums) {
-        if (sum !== null && (peakNum === null || sum > peakNum)) peakNum = sum
-      }
-      peak = historyUsageStr(peakNum)
-    }
-
-    return {
-      firstPrompt: (uPrompts[0] ?? '').replace(/\n+$/, ''),
-      lastAssistant: (aTexts[aTexts.length - 1] ?? '').replace(/\n+$/, ''),
-      createdTs,
-      used,
-      peak,
-    }
-  } catch {
-    return EMPTY_HISTORY
-  }
-}
-
-/**
- * `tm history <repo>` — list a teammate repo's past Claude Code sessions, one
- * per transcript jsonl, newest first. The rows are built natively and aligned
- * by the real `column -t`, exactly as `tm`'s `history_list` does.
- */
-async function historyList(repo: string, projectDir: string, env: NativeEnv): Promise<TmResult> {
-  if (!isDirectory(projectDir)) {
-    return { code: 0, stdout: `(no past sessions for ${repo})\n`, stderr: '' }
-  }
-  let names: string[]
-  try {
-    names = readdirSync(projectDir).filter((name) => name.endsWith('.jsonl'))
-  } catch {
-    names = []
-  }
-  if (names.length === 0) {
-    return { code: 0, stdout: `(no past sessions for ${repo})\n`, stderr: '' }
-  }
-
-  const files = names.map((name) => {
-    let mtime = 0
-    try {
-      mtime = Math.floor(statSync(join(projectDir, name)).mtimeMs / 1000)
-    } catch {
-      mtime = 0
-    }
-    return { name, mtime }
-  })
-  // `ls -t` — newest first; equal mtimes break by name (a `<`/`>` compare,
-  // not `localeCompare`, so the tie order is the same on every CI runner).
-  files.sort((a, b) => b.mtime - a.mtime || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-
-  const liveSid = resolveSid(repo) ?? ''
-  const now = Math.floor(Date.now() / 1000)
-  const rows: string[][] = [[' ', 'SID', 'AGE', 'SIZE', 'TOPIC']]
-  for (const { name, mtime } of files) {
-    const full = join(projectDir, name)
-    const sidFull = name.replace(/\.jsonl$/, '')
-    let size = 0
-    try {
-      size = statSync(full).size
-    } catch {
-      size = 0
-    }
-    let content = ''
-    try {
-      content = readFileSync(full, 'utf8')
-    } catch {
-      content = ''
-    }
-    const mark = liveSid !== '' && sidFull === liveSid ? '*' : ' '
-    rows.push([
-      mark,
-      sidFull.slice(0, 8),
-      fmtAge(now - mtime),
-      fmtSize(size),
-      historyTopic(content),
-    ])
-  }
-  return env.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
-}
-
-/**
- * `tm history <repo> <sid-or-prefix>` — the detail view of one past session.
- * Resolves the prefix to a unique transcript, then prints `tm`'s
- * `history_detail` block: identity, size, timestamps, ctx usage, and the
- * first prompt / last assistant text (the latter truncated past 1500 chars).
- */
-function historyDetail(repo: string, projectDir: string, prefix: string): TmResult {
-  if (!/^[0-9a-f-]{1,36}$/.test(prefix)) {
-    return die(
-      `tm history: invalid sid prefix '${prefix}' — must match ^[0-9a-f-]{1,36}$`,
-    )
-  }
-  if (!isDirectory(projectDir)) {
-    return die(`tm history: no project dir at ${projectDir} for ${repo} (no sessions yet)`)
-  }
-
-  let names: string[]
-  try {
-    names = readdirSync(projectDir).filter(
-      (name) =>
-        name.startsWith(prefix) &&
-        name.endsWith('.jsonl') &&
-        isRegularFile(join(projectDir, name)),
-    )
-  } catch {
-    names = []
-  }
-  names.sort()
-  if (names.length === 0) {
-    return die(`tm history: no session matching '${prefix}' in ${repo}`)
-  }
-  if (names.length > 1) {
-    const cands = `${names.map((name) => name.replace(/\.jsonl$/, '')).join(' ')} `
-    return die(
-      `tm history: prefix '${prefix}' matches ${names.length} sessions — ` +
-        `be more specific: ${cands}`,
-    )
-  }
-
-  const name = names[0]!
-  const file = join(projectDir, name)
-  const sidFull = name.replace(/\.jsonl$/, '')
-  let size = 0
-  let mtime = 0
-  try {
-    const stat = statSync(file)
-    size = stat.size
-    mtime = Math.floor(stat.mtimeMs / 1000)
-  } catch {
-    size = 0
-    mtime = 0
-  }
-  let content = ''
-  try {
-    content = readFileSync(file, 'utf8')
-  } catch {
-    content = ''
-  }
-  const lineCount = (content.match(/\n/g) ?? []).length
-  const now = Math.floor(Date.now() / 1000)
-  const data = readHistoryData(content)
-
-  const createdStr = data.createdTs !== '' ? mungeCreated(data.createdTs) : ''
-  let ctxStr = '(no usage data)'
-  if (data.used !== '' && data.peak !== '') {
-    const window = bashNum(data.peak) > 210000 ? 1000000 : 200000
-    const pct = Math.trunc((bashNum(data.used) * 100) / window)
-    const wlabel = window >= 1000000 ? '1M' : '200k'
-    const note = window >= 1000000 ? 'detected 1M' : 'assumed 200k'
-    ctxStr = `${data.used} tokens · ${pct}% of ${wlabel} (${note})`
-  }
-
-  let laDisplay = data.lastAssistant !== '' ? data.lastAssistant : '(no assistant text)'
-  if (data.lastAssistant !== '') {
-    const cps = [...data.lastAssistant]
-    if (cps.length > 1500) {
-      laDisplay =
-        `${cps.slice(0, 1500).join('')}\n` +
-        `... (${cps.length - 1500} chars truncated; full text in jsonl)`
-    }
-  }
-  const fpDisplay = data.firstPrompt !== '' ? data.firstPrompt : '(no user prompt)'
-
-  const stdout =
-    `sid:        ${sidFull}\n` +
-    `file:       ${file}\n` +
-    `            (${fmtSize(size)} · ${lineCount} lines)\n` +
-    `created:    ${createdStr !== '' ? createdStr : '(unknown)'}\n` +
-    `last_seen:  ${fmtLocalDateTime(mtime)}  (${fmtAge(now - mtime)} ago)\n` +
-    `ctx:        ${ctxStr}\n` +
-    '\n' +
-    'first prompt:\n' +
-    `${indent(fpDisplay)}\n` +
-    '\n' +
-    'last assistant:\n' +
-    `${indent(laDisplay)}\n` +
-    '\n' +
-    `resume: tm resume ${repo} ${sidFull}\n`
-  return { code: 0, stdout, stderr: '' }
-}
-
-/**
- * `tm history` — inspect a teammate repo's past sessions. With no second
- * argument it lists every past session; with a sid or sid-prefix it prints
- * that session's detail view.
- */
-const history: NativeVerb = async (args, _options, env) => {
-  const repo = args[0] ?? ''
-  if (repo.length === 0) return die('usage: tm history <repo> [<sid-or-prefix>]')
-
-  const path = join(env.dispatcherDir, repo)
-  if (!isDirectory(path)) return dieRepoNotFound('history', repo, path, env.dispatcherDir)
-
-  const projectDir = projectDirForRepo(repo, env)
-  const sidArg = args[1] ?? ''
-  return sidArg === ''
-    ? historyList(repo, projectDir, env)
-    : historyDetail(repo, projectDir, sidArg)
-}
+const history: NativeVerb = async (args, _options, env) => claudeHistory(args, env)
 
 
 /**
@@ -1114,36 +648,7 @@ const archive: NativeVerb = async (args, options, env) => {
  * `reload` reproduces what `tm reload` *does* — stop at the first send that
  * exits non-zero, and propagate that exit code — not the unreachable intent.
  */
-const reload: NativeVerb = async (args, _options, env) => {
-  let all = false
-  const repos: string[] = []
-  for (const arg of args) {
-    if (arg === '--all') all = true
-    else if (arg === '-h' || arg === '--help') return die('usage: tm reload <repo>... | --all')
-    else if (arg.startsWith('-')) return die(`tm reload: unknown flag: ${arg}`)
-    else repos.push(arg)
-  }
-
-  if (all) {
-    if (repos.length > 0) return die('tm reload: --all conflicts with explicit repos')
-    repos.push(...(await iterRepos(env.runTmux)))
-    if (repos.length === 0) {
-      return { code: 0, stdout: '(no teammate sessions to reload)\n', stderr: '' }
-    }
-  } else if (repos.length === 0) {
-    return die('usage: tm reload <repo>... | --all')
-  }
-
-  let stdout = ''
-  for (const repo of repos) {
-    stdout += `→ ${repo}: /reload-plugins\n`
-    const sent = await send(['--no-wait', repo, '--prompt', '/reload-plugins'], undefined, env)
-    // A non-zero `tm send` is the `_send_keys` `die` that ends `tm reload`;
-    // its own stderr went to `cmd_reload`'s `>/dev/null`, so it is dropped.
-    if (sent.code !== 0) return { code: sent.code, stdout, stderr: '' }
-  }
-  return { code: 0, stdout, stderr: '' }
-}
+const reload: NativeVerb = async (args, _options, env) => claudeReload(args, env)
 
 // --- doctor ---------------------------------------------------------------
 
@@ -1158,311 +663,29 @@ const reload: NativeVerb = async (args, _options, env) => {
  * stage-3 oracle; once stage 3c retires it, the Node CLI is the only `tm`
  * binary that exists.
  */
+/**
+ * `tm doctor` — thin wrapper over `engines/claude/doctor.ts`. The path
+ * to `<plugin-root>/bin/tm` and the manifest is computed here because
+ * `import.meta.url` of this `core/src/native.ts` is two directories
+ * below the plugin root (same as the bundled `core/dist/cli.mjs`);
+ * the engines/claude/doctor.ts module is two more levels deep, so its
+ * own `import.meta.url` cannot do the math.
+ */
 const doctor: NativeVerb = async (args, _options, env) => {
-  if (args.length > 0) {
-    return die(`tm doctor: takes no arguments (got: ${args.join(' ')})`)
-  }
-
-  // The kv row: a 20-character padded label, then the value — matches
-  // `cmd_doctor`'s `printf '  %-20s%s\n'`. One source of truth here keeps
-  // alignment immune to label renames.
-  const kv = (label: string, value: string): string => {
-    const padded = `${label}:`.padEnd(20, ' ')
-    return `  ${padded}${value}\n`
-  }
-
-  let out = ''
-
-  // --- tm executable ---
-  // This module lives at `core/src/native.ts` (source) or, in the production
-  // bundle, at `core/dist/cli.mjs` — both are one directory below `core/`.
-  // The user-facing PATH entry is the launcher at
-  // `<plugin-root>/bin/tm`, two `..` segments above either of those. The
-  // plugin manifest lives at `<plugin-root>/.claude-plugin/plugin.json`,
-  // also two `..` up. Resolving both relative to this file means the answer
-  // survives a renamed plugin directory and reaches the same path whether
-  // the bundle or the source file is the entry.
   const moduleDir = dirname(fileURLToPath(import.meta.url))
   const tmWrapper = join(moduleDir, '..', '..', 'bin', 'tm')
   const pluginJson = join(moduleDir, '..', '..', '.claude-plugin', 'plugin.json')
-  let version = 'unknown'
-  let pluginJsonPresent = false
-  try {
-    if (statSync(pluginJson).isFile()) {
-      pluginJsonPresent = true
-      const parsed = JSON.parse(readFileSync(pluginJson, 'utf8')) as { version?: unknown }
-      if (typeof parsed.version === 'string' && parsed.version.length > 0) {
-        version = parsed.version
-      }
-    }
-  } catch {
-    pluginJsonPresent = false
-  }
-  out += 'tm executable:\n'
-  out += kv('path', tmWrapper)
-  out += kv('version', version)
-  if (!pluginJsonPresent) out += kv('note', `plugin.json not found at ${pluginJson}`)
-  out += '\n'
-
-  // --- dispatcher dir ---
-  out += 'dispatcher dir:\n'
-  out += kv('resolved', env.dispatcherDir)
-  const envSet = process.env.TM_DISPATCHER_DIR
-  if (envSet !== undefined && envSet.length > 0) {
-    out += kv('TM_DISPATCHER_DIR', `set (= ${envSet})`)
-  } else {
-    out += kv(
-      'TM_DISPATCHER_DIR',
-      'unset — falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)',
-    )
-  }
-  const pwd = process.cwd()
-  out += kv('$PWD', pwd)
-  if (env.dispatcherDir !== pwd) {
-    out += kv(
-      'status',
-      'DIVERGED — dispatcher dir != $PWD; env override is currently keeping tm correct despite the drifted PWD',
-    )
-  } else {
-    out += kv('status', 'matched')
-  }
-  if (!isDirectory(env.dispatcherDir)) {
-    out += kv('warning', `${env.dispatcherDir} does not exist as a directory`)
-  }
-  out += '\n'
-
-  // --- tmux ---
-  out += 'tmux:\n'
-  let tmuxVersionOk = false
-  let tmuxVersionLine = ''
-  try {
-    const versionResult = await env.runTmux(['-V'])
-    if (versionResult.code === 0) {
-      tmuxVersionOk = true
-      tmuxVersionLine = versionResult.stdout.split('\n')[0] ?? '?'
-    }
-  } catch {
-    tmuxVersionOk = false
-  }
-  if (!tmuxVersionOk) {
-    out += kv('installed', 'no (tmux not on PATH — claudemux teammate workflow needs it)')
-  } else {
-    out += kv('installed', `yes (${tmuxVersionLine})`)
-    let serverRunning = false
-    try {
-      serverRunning = (await env.runTmux(['info'])).code === 0
-    } catch {
-      serverRunning = false
-    }
-    if (serverRunning) out += kv('server', 'running')
-    else out += kv('server', "not running (no sessions exist yet — that's fine pre-spawn)")
-    const insideTmux = process.env.TMUX ?? ''
-    if (insideTmux.length > 0) out += kv('in tmux', `yes (TMUX=${insideTmux})`)
-    else out += kv('in tmux', 'no — tm is being run from outside a tmux session')
-  }
-  out += '\n'
-
-  // --- idle dir ---
-  out += `idle dir (${idleDir()}):\n`
-  if (isDirectory(idleDir())) {
-    let count = 0
-    try {
-      count = readdirSync(idleDir()).length
-    } catch {
-      count = 0
-    }
-    out += kv('exists', `yes (${count} file(s))`)
-  } else {
-    out += kv('exists', 'no — gets created on first tm spawn / scripts/setup.sh')
-  }
-  out += '\n'
-
-  // --- active teammates ---
-  // `cmd_doctor` projects each `tmux ls` row to its session field (`awk -F:
-  // ... {print $1}`) and prints it with a two-space indent — bare session
-  // name, not the full row. Mirror that exactly so the report stays
-  // byte-compatible with the bash form for this section.
-  out += 'active teammates:\n'
-  let listing = ''
-  try {
-    listing = (await env.runTmux(['ls'])).stdout
-  } catch {
-    listing = ''
-  }
-  const sessionRows = listing
-    .split('\n')
-    .map((line) => sessionField(line))
-    .filter((name) => name.startsWith(SESSION_PREFIX))
-  if (sessionRows.length === 0) {
-    out += "  (none — use 'tm spawn <repo>' to launch one)\n"
-  } else {
-    out += kv('count', String(sessionRows.length))
-    for (const name of sessionRows) out += `  ${name}\n`
-  }
-  out += '\n'
-
-  // --- codex teammates ---
-  // The codex driver does not run inside tmux, so its teammates are
-  // enumerated from the FS registry under `codexRegistryRoot()`. A live
-  // entry (pid still answering signal 0) is reported as such; a dead-pid
-  // entry is an orphan from a crashed daemon or an unclean reboot — those
-  // are reaped here as part of the report, because a dead pid file
-  // misleads every subsequent `daemonAlive` check.
-  out += 'codex teammates:\n'
-  const codexNames = listCodexDaemons()
-  if (codexNames.length === 0) {
-    out += "  (none — use 'tm spawn codex-<n>' to launch one)\n"
-  } else {
-    const reaped: string[] = []
-    const live: { name: string; pid: number; startedAt: number }[] = []
-    for (const name of codexNames) {
-      const state = readCodexState(name)
-      if (state === null) {
-        // No usable state — treat as orphan.
-        reaped.push(name)
-        await reapCodexDaemon(name)
-      } else if (!codexProcessAlive(state.pid)) {
-        reaped.push(name)
-        await reapCodexDaemon(name)
-      } else {
-        live.push({ name, pid: state.pid, startedAt: state.startedAt })
-      }
-    }
-    out += kv('count', String(live.length))
-    for (const t of live) {
-      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})\n`
-    }
-    if (reaped.length > 0) {
-      out += kv('reaped orphans', String(reaped.length))
-      for (const name of reaped) out += `  ${name}\n`
-    }
-  }
-
-  return { code: 0, stdout: out, stderr: '' }
+  return claudeDoctor(args, env, { tmWrapper, pluginJson })
 }
 
 // --- spawn ----------------------------------------------------------------
 
-/** Parsed arg vector for `tm spawn`, after `parseSpawnArgs`. */
-interface SpawnArgs {
-  engine: 'claude' | 'codex' | null
-  resumeSid: string
-  task: string
-  prompt: string
-  hasPrompt: boolean
-  noWait: boolean
-  timeout: string | null
-}
-
 /**
- * `cmd_spawn`'s arg loop. `--prompt` is the only value-bearing flag bash
- * validates explicitly (`[[ $# -ge 2 ]] || die`); `--task` and `--resume`
- * use `"${2:-}"; shift 2`, which under `set -e` exits silently when the
- * value is missing because `shift 2` past the end returns non-zero — the
- * conformance ledger calls this the "tm exits 1 with no output" shape.
- */
-function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult } {
-  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
-  let resumeSid = ''
-  let task = ''
-  let prompt = ''
-  let hasPrompt = false
-  let noWait = false
-  let timeout: string | null = null
-  let engine: 'claude' | 'codex' | null = null
-  for (let i = 0; i < rest.length; i++) {
-    const arg = rest[i]!
-    if (arg === '--resume') {
-      if (i + 1 >= rest.length) return { error: SILENT }
-      resumeSid = rest[i + 1]!
-      i++
-    } else if (arg === '--engine') {
-      if (i + 1 >= rest.length) return { error: die('tm spawn: --engine requires a value') }
-      const value = rest[i + 1]!
-      if (value !== 'claude' && value !== 'codex') {
-        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) }
-      }
-      engine = value
-      i++
-    } else if (arg.startsWith('--engine=')) {
-      const value = arg.slice('--engine='.length)
-      if (value !== 'claude' && value !== 'codex') {
-        return { error: die(`tm spawn: --engine must be 'claude' or 'codex' (got: '${value}')`) }
-      }
-      engine = value
-    } else if (arg === '--task') {
-      if (i + 1 >= rest.length) return { error: SILENT }
-      task = rest[i + 1]!
-      i++
-    } else if (arg === '--timeout') {
-      if (i + 1 >= rest.length) return { error: die('tm spawn: --timeout requires a value') }
-      timeout = rest[i + 1]!
-      i++
-    } else if (arg.startsWith('--timeout=')) {
-      timeout = arg.slice('--timeout='.length)
-    } else if (arg.startsWith('--task=')) {
-      task = arg.slice('--task='.length)
-    } else if (arg === '--prompt') {
-      if (i + 1 >= rest.length) return { error: die('tm spawn: --prompt requires a value') }
-      prompt = rest[i + 1]!
-      hasPrompt = true
-      i++
-    } else if (arg.startsWith('--prompt=')) {
-      prompt = arg.slice('--prompt='.length)
-      hasPrompt = true
-    } else if (arg === '--no-wait') {
-      noWait = true
-    } else {
-      return { error: die(`unknown flag: ${arg}`) }
-    }
-  }
-  return { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout }
-}
-
-/**
- * Single-quote-escape a string for safe embedding in a bash command line.
- * `tm`'s shell-out builds the `claude --session-id ... -n '...'` string and
- * passes it to `tmux send-keys`; the native form constructs the same string
- * so the running REPL's argv is byte-equal to bash's.
- */
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-/**
- * `tm`'s `teammate_launch_flags`: the flag string between `claude --session-id|
- * --resume <sid>` and an optional `-n '<name>'`. A bare tool name in
- * `--disallowedTools` drops it from the model's context entirely — see the
- * `help_spawn` text for the AskUserQuestion rationale.
- */
-function teammateLaunchFlags(mdExcludes: string): string {
-  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion`
-}
-
-/**
- * Run `tm spawn`'s readiness poll: block until `<repo>.ready` appears or 18s
- * (60 × 0.3s) elapse. Returns the ms it took to fire, or `null` on timeout —
- * the caller prints the verb's stderr accordingly.
- */
-async function pollReady(repo: string): Promise<number | null> {
-  const rf = readyFile(repo)
-  for (let i = 1; i <= 60; i++) {
-    if (existsSync(rf)) return i * 300
-    await sleepMs(300)
-  }
-  return null
-}
-
-/**
- * `tm spawn` — launch a teammate (or relaunch via `--resume <sid>`), record
- * its sid + cwd, and either return as soon as `SessionStart` fires or hand
- * off to a sync `tm send` when `--prompt` is set.
- *
- * Repository discipline: this verb writes the `<repo>.cwd` / `<repo>.sid`
- * markers and the empty `<sid>.last` sentinel; the SessionStart hook
- * separately produces the `<repo>.ready` marker the poll above blocks on.
- * Tearing those apart is what makes `tm spawn --prompt` atomic — the
- * pre-send sleep happens against a REPL that has already booted.
+ * `tm spawn` — codex fork on this layer, claude body in
+ * `engines/claude/spawn.ts`. The codex branch is the only reason this
+ * wrapper still parses the args here; once the dispatcher gains its
+ * router (cli.ts dispatch flip) the codex fork moves out and this arm
+ * disappears.
  */
 const spawn: NativeVerb = async (args, _options, env) => {
   const repo = args[0] ?? ''
@@ -1472,10 +695,6 @@ const spawn: NativeVerb = async (args, _options, env) => {
   const parsed = parseSpawnArgs(args.slice(1))
   if ('error' in parsed) return parsed.error
   const { engine, resumeSid, task, prompt, hasPrompt, noWait, timeout } = parsed
-
-  // Codex teammates run as per-teammate daemons and are not tmux sessions.
-  // Route explicit `--engine codex`, the legacy `codex-<n>` pool names, and
-  // the nested `codex/<name>` shape through the CodexEngine adapter.
   if (engine === 'codex' || (engine === null && isCodexTarget(repo))) {
     if (resumeSid.length > 0) return die('tm spawn: --resume is not supported for codex teammates')
     if (task.length > 0) return die('tm spawn: --task is not supported for codex teammates')
@@ -1493,690 +712,76 @@ const spawn: NativeVerb = async (args, _options, env) => {
       engine: env.engines?.get('codex'),
     })
   }
-
-  if (noWait && !hasPrompt) {
-    return die(
-      'tm spawn: --no-wait is only valid with --prompt (a fresh spawn without ' +
-        'a prompt already returns as soon as the REPL is ready)',
-    )
-  }
-
-  const path = join(env.dispatcherDir, repo)
-  if (!isDirectory(path)) return dieRepoNotFound('spawn', repo, path, env.dispatcherDir)
-
-  // Physical-path normalization (`cd && pwd -P`) — the SessionStart hook
-  // byte-matches against the cwd Claude Code emits in its hook payload,
-  // which is always the physical path (macOS resolves `/tmp` → `/private/
-  // tmp` at that level), so the recorded `.cwd` must be physical too.
-  const cwdPhys = realpathSync(path)
-  const dispatcherPhys = realpathSync(env.dispatcherDir)
-  const mdExcludes = JSON.stringify({
-    claudeMdExcludes: [
-      `${dispatcherPhys}/CLAUDE.md`,
-      `${dispatcherPhys}/CLAUDE.local.md`,
-    ],
-  })
-
-  // Display-name selection: `--task` → `<repo>-<sanitized>`, else
-  // `<repo>-<rand4>` for a fresh spawn, else empty (preserve on `--resume`).
-  let displayName = ''
-  if (task.length > 0) {
-    const slug = sanitizeTaskSlug(task)
-    if (slug.length === 0) {
-      return die(
-        `tm spawn: --task '${task}' has no usable characters after sanitization ` +
-          '(allowlist: ASCII letters/digits + CJK Unified Ideographs)',
-      )
-    }
-    displayName = `${repo}-${slug}`
-  } else if (resumeSid.length === 0) {
-    displayName = `${repo}-${randSuffix()}`
-  }
-
-  const name = `${SESSION_PREFIX}${repo}`
-  if (await sessionExists(name, env.runTmux)) {
-    if (hasPrompt) {
-      return die(
-        `${repo} already exists (tmux=${name}) — atomic bootstrap rejected ` +
-          'because the teammate is already running. Use ' +
-          `'tm send ${repo} --prompt "…"' to drive an existing teammate, or ` +
-          `'tm kill ${repo}' first to start over.`,
-      )
-    }
-    return {
-      code: 0,
-      stdout:
-        `${repo} already exists (tmux=${name}; use 'tm status ${repo}' to view, ` +
-        `or 'tm kill ${repo}' first)\n`,
-      stderr: '',
-    }
-  }
-
-  // Clear the readiness signal BEFORE launching `claude`. The SessionStart
-  // hook re-touches the file once the REPL is up; the poll below blocks on it.
-  const rf = readyFile(repo)
-  rmSync(rf, { force: true })
-
-  // Record the teammate's physical cwd in place *before* spawning so the
-  // hook fires can find it on its first attempt.
-  const cf = cwdFile(repo)
-  mkdirSync(dirname(cf), { recursive: true })
-  writeFileSync(cf, `${cwdPhys}\n`)
-
-  // `-P -F '#{session_id}'` returns the new session's internal id; use it
-  // as the subsequent `send-keys` target so prefix-match cannot wrong-route.
-  // `-e CLAUDEMUX_TEAMMATE_REPO=...` is the positive identity gate the
-  // on-session-start hook reads to discriminate "this teammate" from "the
-  // dispatcher happens to share the cwd".
-  let paneId = ''
-  try {
-    const newSession = await env.runTmux([
-      'new-session',
-      '-d',
-      '-s',
-      name,
-      '-c',
-      cwdPhys,
-      '-e',
-      `CLAUDEMUX_TEAMMATE_REPO=${repo}`,
-      '-P',
-      '-F',
-      '#{session_id}',
-    ])
-    if (newSession.code !== 0) {
-      return die(`tmux new-session failed: ${newSession.stderr.trim() || newSession.stdout.trim()}`)
-    }
-    paneId = newSession.stdout.split('\n')[0] ?? ''
-  } catch (err) {
-    return die(`tmux new-session failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
-  if (paneId.length === 0) return die(`tmux new-session returned no session id for ${repo}`)
-
-  const sid = resumeSid.length > 0 ? resumeSid : newSid()
-  const launchFlags = teammateLaunchFlags(mdExcludes)
-  const nameArg = displayName.length > 0 ? ` -n ${shellSingleQuote(displayName)}` : ''
-  const launchCmd =
-    resumeSid.length > 0
-      ? `claude --resume ${sid} ${launchFlags}${nameArg}`
-      : `claude --session-id ${sid} ${launchFlags}${nameArg}`
-  await env.runTmux(['send-keys', '-t', paneId, launchCmd, 'Enter'])
-
-  let stderr = ''
-  if (resumeSid.length > 0) {
-    const nameNote = displayName.length > 0 ? `, name=${displayName}` : ''
-    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, resumed sid=${sid}${nameNote})\n`
-  } else {
-    const nameNote = displayName.length > 0 ? `, name=${displayName}` : ''
-    stderr += `spawned: ${repo} (tmux=${name}, cwd=${cwdPhys}, sid=${sid}${nameNote})\n`
-  }
-
-  const sf = sidFile(repo)
-  mkdirSync(dirname(sf), { recursive: true })
-  writeFileSync(sf, `${sid}\n`)
-  clearIdle(sid)
-
-  // Fresh-spawn `.last` sentinel — keeps `tm last` reporting "no reply yet"
-  // until the first real Stop. Resume mode skips this: the resumed session's
-  // last-turn text is context the dispatcher may want to re-read.
-  if (resumeSid.length === 0) {
-    mkdirSync(idleDir(), { recursive: true })
-    writeFileSync(lastFileFor(sid), '')
-  }
-
-  const readyAfter = await pollReady(repo)
-  if (readyAfter !== null) {
-    stderr += `ready: ${repo} (tmux=${name}, SessionStart fired after ~${readyAfter} ms)\n`
-  } else {
-    stderr +=
-      `WARN: ${repo} (tmux=${name}) did not signal ready within 18s ` +
-      "(no SessionStart hook fire — the plugin's on-session-start.sh may not " +
-      'be loaded, or claude failed to boot). Continuing, but if the REPL is ' +
-      "actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / " +
-      "'tm compact' will block until its --timeout expires (default 1800s). " +
-      `'tm status ${repo}' shows the live pane if you need to verify.\n`
-  }
-
-  if (!hasPrompt) {
-    return { code: 0, stdout: '', stderr }
-  }
-
-  // Atomic bootstrap: settle, then hand off to `tm send`. `cmd_send`'s
-  // stdout (and its `ctx:` stderr echo) become the spawn verb's stdout/stderr
-  // so the dispatcher sees one round-trip's worth of output for the whole
-  // sequence.
-  await sleepMs(3000)
-  const sendArgs: string[] = []
-  if (noWait) sendArgs.push('--no-wait')
-  sendArgs.push(repo, '--prompt', prompt)
-  const sendResult = await send(sendArgs, undefined, env)
-  return {
-    code: sendResult.code,
-    stdout: sendResult.stdout,
-    stderr: stderr + sendResult.stderr,
-  }
+  return claudeSpawn(args, env)
 }
 
 // --- send -----------------------------------------------------------------
 
-/** Parsed arg vector for `tm send`, after `parseSendArgs`. */
-interface SendArgs {
-  repo: string
-  prompt: string
-  hasPrompt: boolean
-  noWait: boolean
-  paneQuiet: boolean
-  timeout: string
-}
-
 /**
- * `cmd_send`'s arg loop. Catches the legacy "tm send repo run tests" form
- * with a dedicated error — pre-0.3.0 callers passed prompts as positional
- * args, and this catches that habit explicitly rather than swallowing the
- * trailing positionals as a confusing "unknown arg".
- */
-function parseSendArgs(args: readonly string[]): SendArgs | { error: TmResult } {
-  let noWait = false
-  let paneQuiet = false
-  let timeout = '1800'
-  let repo = ''
-  let prompt = ''
-  let hasPrompt = false
-  let i = 0
-  while (i < args.length) {
-    const arg = args[i]!
-    if (arg === '--no-wait') {
-      noWait = true
-      i++
-    } else if (arg === '--pane-quiet') {
-      paneQuiet = true
-      i++
-    } else if (arg === '--timeout') {
-      if (i + 1 >= args.length) return { error: die('tm send: --timeout requires a value') }
-      timeout = args[i + 1]!
-      i += 2
-    } else if (arg.startsWith('--timeout=')) {
-      timeout = arg.slice('--timeout='.length)
-      i++
-    } else if (arg === '--prompt') {
-      if (i + 1 >= args.length) return { error: die('tm send: --prompt requires a value') }
-      prompt = args[i + 1]!
-      hasPrompt = true
-      i += 2
-    } else if (arg.startsWith('--prompt=')) {
-      prompt = arg.slice('--prompt='.length)
-      hasPrompt = true
-      i++
-    } else if (arg === '--') {
-      i++
-      repo = args[i] ?? ''
-      i++
-      break
-    } else if (arg.startsWith('-')) {
-      return { error: die(`tm send: unknown flag: ${arg}`) }
-    } else if (repo === '') {
-      repo = arg
-      i++
-    } else {
-      // Legacy form: `tm send <repo> <free text>`. Echo the whole remaining
-      // argv so the suggested rewrite preserves every token. The escape uses
-      // POSIX-safe shell single-quoting (no `printf %q` portable equivalent).
-      const tail = args.slice(i).join(' ')
-      return {
-        error: die(
-          'tm send: prompt is now a --prompt flag, not a positional arg. ' +
-            `Did you mean: tm send ${repo} --prompt ${shellSingleQuote(tail)} ?`,
-        ),
-      }
-    }
-  }
-  return { repo, prompt, hasPrompt, noWait, paneQuiet, timeout }
-}
-
-/**
- * `tm send` — atomic round-trip by default: send a prompt, block on the
- * Stop hook (or pane-quiet fallback), print the reply to stdout. The
- * stdout/stderr split is load-bearing for piping: status lines (the "sent
- * to ..." preamble, the post-turn ctx echo) ride stderr exclusively.
+ * `tm send` — codex fork on this layer, claude body in
+ * `engines/claude/send.ts`. The codex branch is the only reason this
+ * wrapper still parses the args here.
  */
 const send: NativeVerb = async (args, _options, env) => {
   const parsed = parseSendArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, prompt, hasPrompt, noWait, paneQuiet, timeout } = parsed
-  if (repo === '') {
-    return die(
-      'tm send: missing <repo>. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
-        '[--pane-quiet] [--timeout N]',
-    )
-  }
-  if (!hasPrompt) {
-    return die(
-      'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
-        '[--pane-quiet] [--timeout N]',
-    )
-  }
-  if (!isNonNegativeInteger(timeout)) {
-    return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
-  }
-
-  if (isCodexTarget(repo)) {
+  if (repo !== '' && isCodexTarget(repo)) {
+    if (!hasPrompt) {
+      return die(
+        'tm send: missing --prompt. Usage: tm send <repo> --prompt "..." [--no-wait] ' +
+          '[--pane-quiet] [--timeout N]',
+      )
+    }
+    if (!isNonNegativeInteger(timeout)) {
+      return die(`tm send: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
     if (noWait) return die('tm send: --no-wait is not supported for codex teammates')
     if (paneQuiet) return die('tm send: --pane-quiet is not supported for codex teammates')
-    return codexSend(repo, prompt, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
+    return codexSend(repo, prompt, {
+      timeoutSec: Number(timeout),
+      engine: env.engines?.get('codex'),
+    })
   }
-
-  const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env)
-  if (sentResult.code !== 0) return sentResult
-
-  if (noWait) return sentResult
-
-  const timeoutSec = Number(timeout)
-  const verdict = paneQuiet
-    ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
-    : await waitIdleSignal(repo, timeoutSec, false, env.runTmux)
-  if ('code' in verdict) return verdict
-  if (!verdict.ok) {
-    const kind = paneQuiet ? 'pane-quiet' : 'Stop hook'
-    return {
-      code: 1,
-      stdout: printLastOrEmpty(repo),
-      stderr: sentResult.stderr + `tm send: timed out after ${timeout}s waiting for ${kind} on ${repo}\n`,
-    }
-  }
-
-  let trailingStderr = ''
-  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env)
-  return {
-    code: 0,
-    stdout: printLastOrEmpty(repo),
-    stderr: sentResult.stderr + trailingStderr,
-  }
+  return claudeSend(args, env)
 }
 
 // --- wait -----------------------------------------------------------------
 
-/** Parsed arg vector for `tm wait`, after `parseWaitArgs`. */
-interface WaitArgs {
-  repo: string
-  timeout: string
-  fresh: boolean
-  paneQuiet: boolean
-}
-
 /**
- * `cmd_wait`'s arg loop; positional after `<repo>` is a positional timeout.
- * `--timeout` with no value is bash's silent-exit-1 case (`${2:-}; shift 2`
- * trips `set -e`); mirror it so the conformance differential stays clean.
- */
-function parseWaitArgs(args: readonly string[]): WaitArgs | { error: TmResult } {
-  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
-  let repo = ''
-  let timeout = '1800'
-  let fresh = false
-  let paneQuiet = false
-  let i = 0
-  while (i < args.length) {
-    const arg = args[i]!
-    if (arg === '--fresh') {
-      fresh = true
-      i++
-    } else if (arg === '--pane-quiet') {
-      paneQuiet = true
-      i++
-    } else if (arg === '--timeout') {
-      if (i + 1 >= args.length) return { error: SILENT }
-      timeout = args[i + 1]!
-      i += 2
-    } else if (arg.startsWith('--timeout=')) {
-      timeout = arg.slice('--timeout='.length)
-      i++
-    } else if (arg.startsWith('-')) {
-      return { error: die(`tm wait: unknown flag: ${arg}`) }
-    } else if (repo === '') {
-      repo = arg
-      i++
-    } else {
-      timeout = arg
-      i++
-    }
-  }
-  return { repo, timeout, fresh, paneQuiet }
-}
-
-/**
- * `tm wait` — block on the Stop-hook idle marker (default) or pane-quiet
- * fallback, then print the teammate's reply. Same output contract as
- * `tm send`. `--fresh` clears the baseline up front so it is the *next*
- * Stop that wakes the wait, not a prior one.
+ * `tm wait` — codex fork on this layer, claude body in
+ * `engines/claude/wait.ts`.
  */
 const wait: NativeVerb = async (args, _options, env) => {
   const parsed = parseWaitArgs(args)
   if ('error' in parsed) return parsed.error
   const { repo, timeout, fresh, paneQuiet } = parsed
-  if (repo === '') {
-    return die(
-      'usage: tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]',
-    )
-  }
-  if (!isNonNegativeInteger(timeout)) {
-    return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
-  }
-
-  if (isCodexTarget(repo)) {
+  if (repo !== '' && isCodexTarget(repo)) {
+    if (!isNonNegativeInteger(timeout)) {
+      return die(`tm wait: --timeout must be a non-negative integer (got: '${timeout}')`)
+    }
     if (fresh) return die('tm wait: --fresh is not supported for codex teammates')
     if (paneQuiet) return die('tm wait: --pane-quiet is not supported for codex teammates')
     return codexWait(repo, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
   }
-
-  const timeoutSec = Number(timeout)
-  const verdict = paneQuiet
-    ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
-    : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux)
-  if ('code' in verdict) return verdict
-  if (!verdict.ok) {
-    return {
-      code: 1,
-      stdout: printLastOrEmpty(repo),
-      stderr: `tm wait: timed out after ${timeout}s on ${repo}\n`,
-    }
-  }
-
-  let trailingStderr = ''
-  if (!paneQuiet) trailingStderr = echoCtxToStderr(repo, env)
-  return {
-    code: 0,
-    stdout: printLastOrEmpty(repo),
-    stderr: trailingStderr,
-  }
+  return claudeWait(args, env)
 }
 
 // --- compact --------------------------------------------------------------
 
-/** Parsed arg vector for `tm compact`, after `parseCompactArgs`. */
-interface CompactArgs {
-  repo: string
-  timeout: string
-}
-
 /**
- * `cmd_compact`'s arg loop: same positional-then-flag rule as `wait`.
- * `--timeout` with no value is bash's silent-exit-1 case; mirror that.
+ * `tm compact` — pure claude verb, no codex fork. Thin wrapper over
+ * `engines/claude/compact.ts`.
  */
-function parseCompactArgs(args: readonly string[]): CompactArgs | { error: TmResult } {
-  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
-  let repo = ''
-  let timeout = '1800'
-  let i = 0
-  while (i < args.length) {
-    const arg = args[i]!
-    if (arg === '--timeout') {
-      if (i + 1 >= args.length) return { error: SILENT }
-      timeout = args[i + 1]!
-      i += 2
-    } else if (arg.startsWith('--timeout=')) {
-      timeout = arg.slice('--timeout='.length)
-      i++
-    } else if (arg.startsWith('-')) {
-      return { error: die(`tm compact: unknown flag: ${arg}`) }
-    } else if (repo === '') {
-      repo = arg
-      i++
-    } else {
-      timeout = arg
-      i++
-    }
-  }
-  return { repo, timeout }
-}
-
-/** The visible pane line `cmd_compact` anchors its "too short" detection on. */
-const COMPACT_REFUSAL_MARK = '⎿  Error: Not enough messages to compact'
-
-/**
- * `tm compact` — send `/compact` and verify PostCompact fired. Reports the
- * one-line `compacted` on stdout when it did. Two failure modes, both exit 1:
- *
- * - Claude Code refuses with the "Not enough messages to compact" tool-result
- *   block. That path fires no Stop/PostCompact hook, so the visible pane is
- *   scanned alongside the idle-marker poll to detect it.
- * - PostCompact never fires within `--timeout` — compaction hung or the hook
- *   is misconfigured.
- */
-const compact: NativeVerb = async (args, _options, env) => {
-  const parsed = parseCompactArgs(args)
-  if ('error' in parsed) return parsed.error
-  const { repo, timeout } = parsed
-  if (repo === '') return die('usage: tm compact <repo> [timeout=1800] [--timeout N]')
-  if (!isNonNegativeInteger(timeout)) {
-    return die(`tm compact: --timeout must be a non-negative integer (got: '${timeout}')`)
-  }
-
-  const sessionMissing = await requireSession(repo, env.runTmux)
-  if (sessionMissing !== null) return sessionMissing
-  const sidR = resolveSidOrDie(repo)
-  if ('error' in sidR) return sidR.error
-  const sid = sidR.sid
-  const pane = await resolvePaneTarget(repo, env.runTmux)
-  if (pane === '') return die(`could not resolve pane target for ${repo}`)
-
-  let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)\n`
-
-  const sent = await sendKeys(repo, '/compact', env.runTmux, process.env)
-  // `bin/tm:1139` runs `_send_keys >/dev/null`, redirecting *stdout* only;
-  // the `sent to ...` / `sid=...` lines `_send_keys` writes to stderr reach
-  // the user. Preserve them by carrying `sent.stderr` on every return path.
-  stderr += sent.stderr
-  if (sent.code !== 0) {
-    return { code: sent.code, stdout: sent.stdout, stderr }
-  }
-
-  const timeoutSec = Number(timeout)
-  const end = nowSec() + timeoutSec
-  const marker = idleMarkerFor(sid)
-  while (nowSec() < end) {
-    if (existsSync(marker)) {
-      return { code: 0, stdout: 'compacted\n', stderr }
-    }
-    // `bin/tm`'s refusal scan is `[[ -n "$pane" ]] && tmux capture-pane ...`
-    // — if the pane is gone the verb silently disables refusal detection and
-    // keeps polling the idle marker. Mirror that.
-    if (pane.length > 0) {
-      try {
-        const captured = await env.runTmux(['capture-pane', '-t', pane, '-p'])
-        if (captured.code === 0 && captured.stdout.includes(COMPACT_REFUSAL_MARK)) {
-          return {
-            code: 1,
-            stdout: '',
-            stderr:
-              stderr +
-              `tm compact: ${repo} refused /compact — Claude Code reported ` +
-              "'Not enough messages to compact' (transcript too short).\n",
-          }
-        }
-      } catch {
-        // A capture failure is a transient tmux error; the idle marker is
-        // the primary signal — keep polling.
-      }
-    }
-    await sleepMs(3000)
-  }
-  return {
-    code: 1,
-    stdout: '',
-    stderr:
-      stderr +
-      `tm compact: ${repo} did not signal PostCompact within ${timeout}s — ` +
-      "compaction may still be running, or the Stop hook is misconfigured. " +
-      `Check 'tm status ${repo}' and ${marker}.\n`,
-  }
-}
+const compact: NativeVerb = async (args, _options, env) => claudeCompact(args, env)
 
 // --- resume ---------------------------------------------------------------
 
-/** Parsed arg vector for `tm resume`, after `parseResumeArgs`. */
-interface ResumeArgs {
-  repo: string
-  sid: string
-  task: string
-  prompt: string
-  hasPrompt: boolean
-  noWait: boolean
-}
-
 /**
- * `cmd_resume`'s arg loop; two positionals (`<repo> [<sid>]`) plus flags.
- * Like `cmd_spawn`, `--task` is bash's silent-exit-1 path (no `[[ $# -ge 2 ]]`
- * guard); `--prompt` is the explicit-die path.
+ * `tm resume` — pure claude verb, no codex fork. Thin wrapper over
+ * `engines/claude/resume.ts`.
  */
-function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResult } {
-  const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
-  let repo = ''
-  let sid = ''
-  let task = ''
-  let prompt = ''
-  let hasPrompt = false
-  let noWait = false
-  let i = 0
-  while (i < args.length) {
-    const arg = args[i]!
-    if (arg === '--prompt') {
-      if (i + 1 >= args.length) return { error: die('tm resume: --prompt requires a value') }
-      prompt = args[i + 1]!
-      hasPrompt = true
-      i += 2
-    } else if (arg.startsWith('--prompt=')) {
-      prompt = arg.slice('--prompt='.length)
-      hasPrompt = true
-      i++
-    } else if (arg === '--task') {
-      if (i + 1 >= args.length) return { error: SILENT }
-      task = args[i + 1]!
-      i += 2
-    } else if (arg.startsWith('--task=')) {
-      task = arg.slice('--task='.length)
-      i++
-    } else if (arg === '--no-wait') {
-      noWait = true
-      i++
-    } else if (arg === '--') {
-      i++
-      break
-    } else if (arg.startsWith('-')) {
-      return { error: die(`unknown flag: ${arg}`) }
-    } else if (repo === '') {
-      repo = arg
-      i++
-    } else if (sid === '') {
-      sid = arg
-      i++
-    } else {
-      return {
-        error: die(
-          `tm resume: too many positional args (got '${arg}' after ` +
-            `repo='${repo}' sid='${sid}')`,
-        ),
-      }
-    }
-  }
-  return { repo, sid, task, prompt, hasPrompt, noWait }
-}
-
-/**
- * `tm resume` — relaunch a prior conversation. With no sid the verb falls
- * back to "newest jsonl by mtime" (a stderr warning prompts the caller to
- * pass an explicit sid from the dispatcher's task ledger). With a sid it
- * proves the transcript exists, then delegates to `spawn --resume`.
- */
-const resume: NativeVerb = async (args, _options, env) => {
-  const parsed = parseResumeArgs(args)
-  if ('error' in parsed) return parsed.error
-  let { sid } = parsed
-  const { repo, task, prompt, hasPrompt, noWait } = parsed
-  if (repo === '') {
-    return die(
-      'usage: tm resume <repo> [<sid>] [--task <slug>] [--prompt "..."] [--no-wait]  ' +
-        '(sid from ledger preferred; auto-pick on omit; --task relabels the resumed ' +
-        'conversation; --no-wait only with --prompt)',
-    )
-  }
-  if (noWait && !hasPrompt) {
-    return die('tm resume: --no-wait is only valid with --prompt')
-  }
-
-  const path = join(env.dispatcherDir, repo)
-  if (!isDirectory(path)) return dieRepoNotFound('resume', repo, path, env.dispatcherDir)
-
-  const name = `${SESSION_PREFIX}${repo}`
-  if (await sessionExists(name, env.runTmux)) {
-    return die(
-      `${repo} already running (tmux=${name}) — 'tm kill ${repo}' first ` +
-        'if you really want to start over',
-    )
-  }
-
-  const projectDir = projectDirForRepo(repo, env)
-  let autoPickStderr = ''
-
-  if (sid === '') {
-    if (!isDirectory(projectDir)) {
-      return die(
-        `no project dir at ${projectDir} — has anyone ever run claude inside ` +
-          `${path}? Try 'tm spawn ${repo}' first.`,
-      )
-    }
-    let names: string[] = []
-    try {
-      names = readdirSync(projectDir).filter((file) => file.endsWith('.jsonl'))
-    } catch {
-      names = []
-    }
-    if (names.length === 0) {
-      return die(`no .jsonl transcripts under ${projectDir} — try 'tm spawn ${repo}' to start fresh.`)
-    }
-    const stats = names.map((file) => {
-      let mtime = 0
-      try {
-        mtime = Math.floor(statSync(join(projectDir, file)).mtimeMs / 1000)
-      } catch {
-        mtime = 0
-      }
-      return { file, mtime }
-    })
-    stats.sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
-    const latest = stats[0]!
-    sid = latest.file.replace(/\.jsonl$/, '')
-    autoPickStderr =
-      `tm resume: no sid given — auto-picked ${sid} (jsonl mtime ` +
-      `${fmtLocalDateTime(latest.mtime)}). Prefer passing the sid from your task ledger.\n`
-  } else {
-    const target = join(projectDir, `${sid}.jsonl`)
-    if (!isRegularFile(target)) {
-      return die(
-        `no transcript at ${target} — wrong repo for this sid, or sid does not ` +
-          `exist. Check 'ls ${projectDir}/'.`,
-      )
-    }
-  }
-
-  if (!UUID_RE.test(sid)) return die(`sid is not a valid uuid: ${sid}`)
-
-  // Delegate the rest of the launch to `spawn` via its `--resume` path. This
-  // mirrors `cmd_resume`'s `cmd_spawn` recursion: the launch flags and the
-  // optional `--prompt` follow-up are spawn's concern, not resume's.
-  const spawnArgs: string[] = [repo, '--resume', sid]
-  if (task.length > 0) {
-    spawnArgs.push('--task', task)
-  }
-  if (hasPrompt) {
-    if (noWait) spawnArgs.push('--no-wait')
-    spawnArgs.push('--prompt', prompt)
-  }
-  const result = await spawn(spawnArgs, undefined, env)
-  return {
-    code: result.code,
-    stdout: result.stdout,
-    stderr: autoPickStderr + result.stderr,
-  }
-}
+const resume: NativeVerb = async (args, _options, env) => claudeResume(args, env)
 
 /** Every natively-migrated verb, keyed by verb name. */
 /**

@@ -36,7 +36,6 @@ import {
   writeFileSync,
   type Stats,
 } from 'node:fs'
-import { randomBytes, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -70,6 +69,37 @@ import {
 import { claudeCtxLine } from './engines/claude/ctx'
 import { claudeLast } from './engines/claude/last'
 import { claudeMem } from './engines/claude/mem'
+import { TMUX_SESSION_PREFIX } from './engines/claude/persistence'
+import {
+  die,
+  iterTeammates,
+  requireSession,
+  resolvePaneTarget,
+  sessionExists,
+  sessionField,
+} from './engines/claude/tmux'
+import {
+  clearIdle,
+  isDirectory,
+  isRegularFile,
+  resolveSid,
+  resolveSidOrDie,
+} from './engines/claude/idle'
+import {
+  isNonNegativeInteger,
+  nowSec,
+  sleepMs,
+} from './engines/claude/clock'
+import {
+  newSid,
+  randSuffix,
+  sanitizeTaskSlug,
+  UUID_RE,
+} from './engines/claude/identifiers'
+import { sendKeys } from './engines/claude/keys'
+import { waitIdleSignal, waitPaneQuiet } from './engines/claude/wait-signals'
+import { echoCtxToStderr, printLastOrEmpty } from './engines/claude/post-turn'
+import { dieRepoNotFound, projectDirForRepo } from './engines/claude/repo-fs'
 import {
   isProcessAlive as codexProcessAlive,
   listDaemons as listCodexDaemons,
@@ -77,8 +107,8 @@ import {
   reapDaemon as reapCodexDaemon,
 } from './engines/codex/supervisor'
 
-/** The teammate session-name prefix — `tm`'s `PREFIX`, mirrored here. */
-const SESSION_PREFIX = 'teammate-'
+/** Backwards-compat alias for the historic `SESSION_PREFIX` constant. */
+const SESSION_PREFIX = TMUX_SESSION_PREFIX
 
 /** Everything a native verb may need beyond its arguments; injectable for tests. */
 export interface NativeEnv {
@@ -106,24 +136,6 @@ export type NativeVerb = (
   options: TmRunOptions | undefined,
   env: NativeEnv,
 ) => Promise<TmResult>
-
-/**
- * `tm`'s `die`: one `tm: <message>` line on stderr, exit 1. Native error
- * paths reproduce it verbatim so a conformance check is byte-exact.
- */
-function die(message: string): TmResult {
-  return { code: 1, stdout: '', stderr: `tm: ${message}\n` }
-}
-
-/**
- * The session field of one `tmux ls` line — the text before the first `:`,
- * or the whole line when there is no `:`. This mirrors `awk -F:` `$1`, which
- * `tm ls` uses to pick out teammate sessions.
- */
-function sessionField(line: string): string {
-  const colon = line.indexOf(':')
-  return colon >= 0 ? line.slice(0, colon) : line
-}
 
 /**
  * `tm ls` — list running teammate tmux sessions.
@@ -157,36 +169,6 @@ const ls: NativeVerb = async (_args, _options, env) => {
 }
 
 /**
- * Read the recorded sid for a repo — `tm`'s `resolve_sid`. The `.sid` file
- * must exist and be non-empty (`-s`); its content is the sid with trailing
- * newlines stripped (the effect of bash `$(cat ...)`). Returns `null` when
- * there is no usable sid file.
- */
-function resolveSid(repo: string): string | null {
-  try {
-    const file = sidFile(repo)
-    if (statSync(file).size === 0) return null
-    return readFileSync(file, 'utf8').replace(/\n+$/, '')
-  } catch {
-    return null
-  }
-}
-
-/**
- * Read a file only if it exists and is non-empty — `tm`'s `[[ -s file ]]`
- * test. The size check is on bytes, like `-s`, so a file holding only
- * whitespace still counts as present. Returns the raw content, or `null`.
- */
-function readIfNonEmpty(file: string): string | null {
-  try {
-    if (statSync(file).size === 0) return null
-    return readFileSync(file, 'utf8')
-  } catch {
-    return null
-  }
-}
-
-/**
  * `tm last` — reprint a teammate's last-turn reply.
  *
  * The body lives in `engines/claude/last.ts` (`claudeLast`); this is the
@@ -204,162 +186,13 @@ const last: NativeVerb = async (args) => {
   return die(`unexpected last result: ${(result as { kind: string }).kind}`)
 }
 
-/** A teammate's context-window usage, summed from its transcript. */
-interface CtxUsage {
-  /** Tokens in the last assistant turn — input plus both cache reads. */
-  used: number
-  /** Output tokens of the last assistant turn. */
-  out: number
-  /** The largest `used`-style total across every assistant turn. */
-  peak: number
-}
-
-/** Sum the cache-inclusive input tokens of one `message.usage` object. */
-function usageInput(usage: Record<string, unknown>): number {
-  const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
-  return (
-    num(usage.input_tokens) +
-    num(usage.cache_creation_input_tokens) +
-    num(usage.cache_read_input_tokens)
-  )
-}
-
 /** Whether a value is a plain JSON object — not a primitive, not an array. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/**
- * Read a teammate's ctx usage from its transcript jsonl — the native form of
- * the `jq -s` pass in `tm`'s `_ctx_format_line`. It collects the
- * `message.usage` of every assistant entry: `used`/`out` come from the last
- * one, `peak` is the max input across all. Returns `null` when there is no
- * usable usage — which includes the cases where `jq -s` fails:
- *
- * `jq -s` slurps the *whole* file, then its filter indexes `.type` on every
- * entry and `.message.usage` on the assistant ones. A line `jq` cannot index
- * — a non-object (a bare number/string/array), or an assistant entry whose
- * `.message`/`.message.usage` is a non-object — errors the entire pass, which
- * `tm` reports as the `?` diagnostic. So such a line *fails the file* here
- * too; it is not silently skipped. (`jq` does tolerate a bare `null` line and
- * a missing/`null` `.message`/`.usage` — those drop out without an error.)
- */
-function readCtxUsage(jsonl: string): CtxUsage | null {
-  let content: string
-  try {
-    content = readFileSync(jsonl, 'utf8')
-  } catch {
-    return null
-  }
-  const inputs: number[] = []
-  let lastOut = 0
-  for (const line of content.split('\n')) {
-    if (line.trim() === '') continue
-    let entry: unknown
-    try {
-      entry = JSON.parse(line)
-    } catch {
-      return null
-    }
-    if (entry === null) continue
-    if (!isPlainObject(entry)) return null
-    if (entry.type !== 'assistant') continue
-    const message = entry.message
-    if (message === null || message === undefined) continue
-    if (!isPlainObject(message)) return null
-    const usage = message.usage
-    if (usage === null || usage === undefined) continue
-    if (!isPlainObject(usage)) return null
-    inputs.push(usageInput(usage))
-    lastOut = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
-  }
-  if (inputs.length === 0) return null
-  // A plain reduce, not `Math.max(...inputs)` — a long transcript can hold
-  // more entries than the argument-spread limit, and `jq`'s `max` has none.
-  let peak = inputs[0]!
-  for (const value of inputs) if (value > peak) peak = value
-  return { used: inputs[inputs.length - 1]!, out: lastOut, peak }
-}
-
-/** The Claude Code transcript file for a teammate session under `projectsDir`. */
-function transcriptFile(projectsDir: string, cwd: string, sid: string): string {
-  return join(projectsDir, encodeProjectDir(cwd), `${sid}.jsonl`)
-}
-
-/** Whether a path exists and is a regular file — `tm`'s `[[ -f ]]` test. */
-function isRegularFile(path: string): boolean {
-  try {
-    return statSync(path).isFile()
-  } catch {
-    return false
-  }
-}
-
-/** Whether a path exists and is a directory — `tm`'s `[[ -d ]]` test. */
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
-}
-
-/**
- * One teammate's `ctx` line. Soft-fails to a `? (...)` diagnostic line — like
- * `tm`'s `ctx_one` — so `ctx --all` keeps going across teammates with no
- * readable transcript. `windowOverride` is `''`, `'200k'`, or `'1m'`.
- */
-function ctxLine(repo: string, windowOverride: string, env: NativeEnv): string {
-  const sid = resolveSid(repo)
-  if (sid === null) return `${repo}: ? (no sid file)`
-
-  // The teammate's cwd: its recorded `.cwd` file, else `<dispatcher>/<repo>`.
-  const recordedCwd = readIfNonEmpty(cwdFile(repo))
-  const cwd =
-    recordedCwd !== null ? recordedCwd.replace(/\n+$/, '') : `${env.dispatcherDir}/${repo}`
-  const jsonl = transcriptFile(env.projectsDir, cwd, sid)
-  if (!isRegularFile(jsonl)) return `${repo}: ? (no transcript at ${jsonl})`
-
-  const usage = readCtxUsage(jsonl)
-  if (usage === null) return `${repo}: ? (no assistant usage in transcript)`
-
-  const next = usage.used + usage.out
-  let window: number
-  let note: string
-  if (windowOverride === '1m') {
-    window = 1000000
-    note = 'flag'
-  } else if (windowOverride === '200k') {
-    window = 200000
-    note = 'flag'
-  } else if (usage.peak > 210000) {
-    // A peak above ~210k can only have happened on a 1M-token window.
-    window = 1000000
-    note = 'detected 1M'
-  } else {
-    window = 200000
-    note = 'assumed 200k'
-  }
-  const pct = Math.floor((usage.used * 100) / window)
-  const wlabel = window >= 1000000 ? '1M' : '200k'
-  return `${repo}: ${usage.used} tokens · ~${next} next turn · ${pct}% of ${wlabel} (${note})`
-}
-
-/** The running teammate repo names, from `tmux ls` — `tm`'s `iter_repos`. */
-async function iterRepos(runTmux: TmuxRunner): Promise<string[]> {
-  let listing = ''
-  try {
-    listing = (await runTmux(['ls'])).stdout
-  } catch {
-    listing = ''
-  }
-  const repos: string[] = []
-  for (const line of listing.split('\n')) {
-    const field = sessionField(line)
-    if (field.startsWith(SESSION_PREFIX)) repos.push(field.slice(SESSION_PREFIX.length))
-  }
-  return repos
-}
+/** The running teammate repo names — `tm`'s `iter_repos` via `iterTeammates`. */
+const iterRepos = iterTeammates
 
 /** The outcome of parsing `ctx`'s arguments: a plan, or an early-exit result. */
 type CtxArgs = { repos: string[]; windowOverride: string; all: boolean } | { error: TmResult }
@@ -500,48 +333,6 @@ const states: NativeVerb = async (_args, _options, env) => {
   return env.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
 }
 
-/**
- * `tm`'s `die_repo_not_found` — the shared "`<repo>` is not under the
- * dispatcher dir" failure for the repo-keyed verbs. When the dispatcher dir is
- * itself a git working tree, `tm` assumes the user pointed at a single repo
- * instead of the parent of sibling repos and steers them to `cd` up;
- * otherwise it prints the generic "repo not found" line. Both are a `die`.
- */
-function dieRepoNotFound(
-  verb: string,
-  repo: string,
-  path: string,
-  dispatcherDir: string,
-): TmResult {
-  if (isDirectory(join(dispatcherDir, '.git'))) {
-    return die(
-      `${dispatcherDir} looks like a git working tree (.git exists), not a dispatcher root.\n` +
-        '    The dispatcher dir should be the PARENT of your sibling repos.\n' +
-        `    Try:  cd "${dirname(dispatcherDir)}" && tm ${verb} ${repo}\n` +
-        "    (Or set TM_DISPATCHER_DIR in your dispatcher's .claude/settings.json\n" +
-        '    — run /claudemux:setup to wire it up automatically.)',
-    )
-  }
-  return die(
-    `repo not found at ${path} — <repo> must be a direct subdirectory of the ` +
-      `dispatcher dir (${dispatcherDir}). Dispatcher dir is read from ` +
-      "TM_DISPATCHER_DIR (env) or $PWD; if it's wrong, set TM_DISPATCHER_DIR or " +
-      'run tm from the right place.',
-  )
-}
-
-/**
- * The Claude Code project directory for a teammate repo — `tm`'s
- * `project_dir_for_repo`. The repo's *physical* path (symlinks resolved, as
- * `cd && pwd -P` does) is encoded, so a symlinked dispatcher tree still
- * addresses the directory Claude Code actually wrote on disk. The caller must
- * have already confirmed `<dispatcherDir>/<repo>` exists — `realpathSync`
- * needs a real path — which `tm`'s callers likewise check up front.
- */
-function projectDirForRepo(repo: string, env: NativeEnv): string {
-  const phys = realpathSync(join(env.dispatcherDir, repo))
-  return join(env.projectsDir, encodeProjectDir(phys))
-}
 
 /**
  * `tm mem` — print a sibling repo's auto-memory index.
@@ -1012,47 +803,6 @@ const history: NativeVerb = async (args, _options, env) => {
     : historyDetail(repo, projectDir, sidArg)
 }
 
-/**
- * `tm`'s `require_session`: a `die` `TmResult` when the teammate's tmux
- * session does not exist, or `null` when it does. `tm` checks with
- * `has-session -t "=<name>"` — the `=` is tmux's exact-match modifier.
- */
-async function requireSession(repo: string, runTmux: TmuxRunner): Promise<TmResult | null> {
-  const name = `${SESSION_PREFIX}${repo}`
-  let exists = false
-  try {
-    exists = (await runTmux(['has-session', '-t', `=${name}`])).code === 0
-  } catch {
-    exists = false
-  }
-  return exists ? null : die(`no such teammate session: ${repo} (tmux=${name}; try 'tm ls')`)
-}
-
-/**
- * `tm`'s `resolve_pane_target`: the tmux internal session id of a teammate's
- * session, or `''` when none matches. `tm` matches the session name exactly
- * against `list-sessions -F '#{session_id} #{session_name}'` — a pane-target
- * call cannot take the `=NAME` modifier, so the id is resolved instead.
- */
-async function resolvePaneTarget(repo: string, runTmux: TmuxRunner): Promise<string> {
-  const name = `${SESSION_PREFIX}${repo}`
-  let listing = ''
-  try {
-    listing = (await runTmux(['list-sessions', '-F', '#{session_id} #{session_name}'])).stdout
-  } catch {
-    listing = ''
-  }
-  for (const line of listing.split('\n')) {
-    const space = line.indexOf(' ')
-    if (space >= 0 && line.slice(space + 1) === name) return line.slice(0, space)
-  }
-  return ''
-}
-
-/** Pause for `ms` milliseconds — `tm poll`'s inter-poll `sleep 3`. */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 /**
  * `tm status` — capture a teammate's live pane (a diagnostic verb).
@@ -1111,25 +861,12 @@ const poll: NativeVerb = async (args, _options, env) => {
     if (capture.code === 0 && (await env.runGrep(pattern, capture.stdout)) === 0) {
       return { code: 0, stdout: `matched: ${pattern}\n`, stderr: '' }
     }
-    await sleep(3000)
+    await sleepMs(3000)
   }
   return {
     code: 1,
     stdout: '',
     stderr: `tm: timeout after ${timeoutArg}s waiting for /${pattern}/ in ${repo}\n`,
-  }
-}
-
-/**
- * `tm`'s `clear_idle`: drop a sid's three hook artifacts together — the idle
- * marker, the `.last` text, and the `.busy` marker — so a later wait/last
- * sees the next turn, not a stale one. A no-op for an empty sid, mirroring
- * `clear_idle`'s `[[ -n "$1" ]]` guard.
- */
-function clearIdle(sid: string): void {
-  if (sid === '') return
-  for (const file of [idleMarkerFor(sid), lastFileFor(sid), busyMarkerFor(sid)]) {
-    rmSync(file, { force: true })
   }
 }
 
@@ -1406,331 +1143,6 @@ const reload: NativeVerb = async (args, _options, env) => {
     if (sent.code !== 0) return { code: sent.code, stdout, stderr: '' }
   }
   return { code: 0, stdout, stderr: '' }
-}
-
-// --- shared helpers for the hot-path verbs --------------------------------
-//
-// `spawn`, `send`, `wait`, `compact`, and `resume` drive a real `claude` REPL
-// through tmux and the `/tmp/claude-idle` protocol. They share three building
-// blocks that mirror `bin/tm`'s `_send_keys`, `_wait_idle_signal`, and
-// `_print_last_or_empty` — kept in one place so a future fix lands across
-// every verb that composes them.
-
-/** `resolveSid` that dies with `tm`'s shared error when the sid is missing. */
-function resolveSidOrDie(repo: string): { sid: string } | { error: TmResult } {
-  const sid = resolveSid(repo)
-  if (sid === null) {
-    return {
-      error: die(
-        `no sid file for ${repo} at ${sidFile(repo)} — was this teammate ` +
-          "spawned via 'tm spawn'? (raw 'tmux new-session' won't seed the sid)",
-      ),
-    }
-  }
-  return { sid }
-}
-
-/** `tm`'s `new_sid`: a lowercase UUID — Claude Code normalizes sids to lower. */
-function newSid(): string {
-  return randomUUID().toLowerCase()
-}
-
-/** `tm`'s `rand_suffix`: 4 chars drawn from `[a-z0-9]`. */
-function randSuffix(): string {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  const bytes = randomBytes(4)
-  let out = ''
-  for (let i = 0; i < 4; i++) out += alphabet[bytes[i]! % alphabet.length]
-  return out
-}
-
-/**
- * `tm`'s `sanitize_task_slug`: lowercase ASCII alnum + CJK Unified Ideographs
- * (U+4E00–U+9FFF) survive; every other code point collapses to a single `-`.
- * Leading/trailing `-` stripped, capped at 30 code points (re-trimmed if the
- * cap landed inside a run of separators). Empty result → empty string; the
- * caller checks for that and rejects the slug.
- */
-function sanitizeTaskSlug(task: string): string {
-  let s = task.toLowerCase()
-  // The character class mirrors the perl regex: ASCII a-z0-9 plus the CJK
-  // Unified Ideographs block. Any other code point — punctuation, whitespace,
-  // hiragana, katakana, hangul, emoji — becomes a single `-`.
-  s = s.replace(/[^a-z0-9一-鿿]+/g, '-')
-  s = s.replace(/^-+|-+$/g, '')
-  const cps = [...s]
-  if (cps.length > 30) {
-    s = cps.slice(0, 30).join('')
-    s = s.replace(/-+$/, '')
-  }
-  return s
-}
-
-/** Resolve after `ms` milliseconds — same helper poll-based verbs reach for. */
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/** Epoch seconds, sampled once — `tm`'s `$(date +%s)`. */
-function nowSec(): number {
-  return Math.floor(Date.now() / 1000)
-}
-
-/**
- * Whether `value` is a valid non-negative integer string (the shape `tm`'s
- * `[[ "$timeout" =~ ^[0-9]+$ ]]` accepts). `tm` does not validate timeouts
- * itself before passing them to `date +%s` / `sleep`; the native check is a
- * narrower guard so a malformed `--timeout` does not become a NaN loop.
- */
-function isNonNegativeInteger(value: string): boolean {
-  return /^[0-9]+$/.test(value)
-}
-
-/**
- * The runtime knobs `_send_keys` reads from the environment — the bounded
- * defaults are the same constants `bin/tm` uses, and the env vars override
- * them at the same names (`TM_SEND_INLINE_MAX`, `TM_SEND_GAP`).
- */
-interface SendKeysConfig {
-  /** Max prompt size (in chars) to take the inline `send-keys -l + Enter` path. */
-  inlineMax: number
-  /** Optional override (in seconds) for the post-paste settle gap. */
-  gapOverride: string | null
-}
-
-/**
- * Parse the env knobs for `_send_keys` once per call — `tm`'s validation
- * mirrored verbatim: a malformed value dies up front rather than crashing
- * the script mid-flow (which would strand the prompt in the input box).
- */
-function readSendKeysConfig(): SendKeysConfig | TmResult {
-  const inlineRaw = process.env.TM_SEND_INLINE_MAX ?? ''
-  const inlineMax = inlineRaw === '' ? 200 : Number(inlineRaw)
-  if (inlineRaw !== '' && !/^[0-9]+$/.test(inlineRaw)) {
-    return die(
-      `TM_SEND_INLINE_MAX must be a non-negative integer (got: '${inlineRaw}')`,
-    )
-  }
-  const gapRaw = process.env.TM_SEND_GAP ?? ''
-  if (gapRaw !== '' && !/^[0-9]+(\.[0-9]+)?$/.test(gapRaw)) {
-    return die(
-      `TM_SEND_GAP must be a non-negative number of seconds (got: '${gapRaw}')`,
-    )
-  }
-  return {
-    inlineMax,
-    gapOverride: gapRaw === '' ? null : gapRaw,
-  }
-}
-
-/** `tm`'s size-based default paste-buffer settle gap, in seconds. */
-function defaultPasteGapSec(promptLength: number): number {
-  if (promptLength <= 256) return 0.2
-  if (promptLength <= 1024) return 0.5
-  if (promptLength <= 4096) return 1.0
-  if (promptLength <= 16384) return 2.0
-  return 4.0
-}
-
-/**
- * `tm`'s `_send_keys`: push a prompt into the teammate's pane.
- *
- * Two delivery modes by size — short single-line prompts take the inline
- * `send-keys -l + Enter` fast path; larger or multi-line prompts stage the
- * bytes in a named tmux buffer and `paste-buffer -p -r` them in a single
- * bracketed-paste sequence, then send Enter after the trailing `\e[201~`
- * marker so the TUI submits the buffered text as one prompt. Both modes
- * clear the idle/.last/.busy baseline first and touch `<repo>.send-at`.
- *
- * Returns the `TmResult` that `cmd_send`'s "sent to ..." preamble plus the
- * "sid=..." line make up; the verb wrapper appends its own follow-on lines.
- */
-async function sendKeys(
-  repo: string,
-  prompt: string,
-  env: NativeEnv,
-): Promise<TmResult> {
-  const sessionMissing = await requireSession(repo, env.runTmux)
-  if (sessionMissing !== null) return sessionMissing
-
-  const pane = await resolvePaneTarget(repo, env.runTmux)
-  if (pane === '') return die(`could not resolve pane target for ${repo}`)
-
-  const cfg = readSendKeysConfig()
-  if ('code' in cfg) return cfg
-
-  // Clear the idle baseline before sending so the subsequent wait reflects
-  // THIS turn, not a prior one. A no-sid case is the fresh-spawn path where
-  // there is no prior turn to clear.
-  const sid = resolveSid(repo)
-  if (sid !== null) clearIdle(sid)
-
-  // `tm`'s `: > "$(send_at_file "$repo")"` — touch the marker. mkdir the
-  // parent in case /tmp/teammate-*.send-at is somehow on a non-/tmp path.
-  const sa = sendAtFile(repo)
-  mkdirSync(dirname(sa), { recursive: true })
-  writeFileSync(sa, '')
-
-  const n = prompt.length
-  const inlinePath = n <= cfg.inlineMax && !prompt.includes('\n')
-
-  const name = `${SESSION_PREFIX}${repo}`
-  let stderr = `sent to ${repo} (tmux=${name})\n`
-  if (sid !== null) stderr += `sid=${sid}\n`
-
-  // `bin/tm` runs under `set -euo pipefail`, so a failed `tmux send-keys` /
-  // `load-buffer` / `paste-buffer` aborts the script before the verb claims
-  // success. Mirror that: any non-zero tmux exit fails the verb so the
-  // dispatcher does not later block on a Stop hook that will never fire.
-  const tmuxOk = (result: { code: number; stderr: string }, what: string): TmResult | null =>
-    result.code === 0
-      ? null
-      : die(`tmux ${what} failed: ${result.stderr.trim() || 'non-zero exit'}`)
-
-  if (inlinePath) {
-    const sent = await env.runTmux(['send-keys', '-t', pane, '-l', prompt])
-    const sentErr = tmuxOk(sent, 'send-keys')
-    if (sentErr !== null) return sentErr
-    const enter = await env.runTmux(['send-keys', '-t', pane, 'Enter'])
-    const enterErr = tmuxOk(enter, 'send-keys Enter')
-    if (enterErr !== null) return enterErr
-    return { code: 0, stdout: '', stderr }
-  }
-
-  const gap = cfg.gapOverride !== null ? Number(cfg.gapOverride) : defaultPasteGapSec(n)
-  const buf = `tm-send-${process.pid}-${randomBytes(2).toString('hex')}`
-  let loaded = false
-  try {
-    const loadResult = await env.runTmux(['load-buffer', '-b', buf, '-'], { stdin: prompt })
-    const loadErr = tmuxOk(loadResult, 'load-buffer')
-    if (loadErr !== null) return loadErr
-    loaded = true
-    const pasteResult = await env.runTmux([
-      'paste-buffer',
-      '-p',
-      '-r',
-      '-d',
-      '-b',
-      buf,
-      '-t',
-      pane,
-    ])
-    const pasteErr = tmuxOk(pasteResult, 'paste-buffer')
-    if (pasteErr !== null) return pasteErr
-    // `paste-buffer -d` deletes the buffer on success; `loaded` is reset so
-    // the finally block's defensive delete is a no-op for the normal path.
-    loaded = false
-    await sleepMs(Math.round(gap * 1000))
-    const enter = await env.runTmux(['send-keys', '-t', pane, 'Enter'])
-    const enterErr = tmuxOk(enter, 'send-keys Enter')
-    if (enterErr !== null) return enterErr
-  } finally {
-    // Mirror `tm`'s RETURN trap: a `paste-buffer` that failed after
-    // `load-buffer` succeeded would otherwise leak a named buffer entry.
-    if (loaded) {
-      try {
-        await env.runTmux(['delete-buffer', '-b', buf])
-      } catch {
-        // Best effort — `tm` swallows this too (`2>/dev/null || true`).
-      }
-    }
-  }
-  return { code: 0, stdout: '', stderr }
-}
-
-/**
- * `tm`'s `_wait_idle_signal`: block until `/tmp/claude-idle/<sid>` exists, or
- * `timeoutSec` elapses. Returns the resolved `TmResult` on early-out
- * (no-such-session / no-sid), or `{ ok }` once the loop has its verdict.
- */
-async function waitIdleSignal(
-  repo: string,
-  timeoutSec: number,
-  fresh: boolean,
-  env: NativeEnv,
-): Promise<TmResult | { ok: boolean }> {
-  const sessionMissing = await requireSession(repo, env.runTmux)
-  if (sessionMissing !== null) return sessionMissing
-  const sidR = resolveSidOrDie(repo)
-  if ('error' in sidR) return sidR.error
-  if (fresh) clearIdle(sidR.sid)
-
-  const end = nowSec() + timeoutSec
-  const marker = idleMarkerFor(sidR.sid)
-  while (nowSec() < end) {
-    if (existsSync(marker)) return { ok: true }
-    await sleepMs(3000)
-  }
-  return { ok: false }
-}
-
-/**
- * `tm`'s `_wait_pane_quiet`: block until the teammate's pane has shown no
- * busy marker for ~4s AND at least 3s have passed since the last send.
- * Returns the resolved `TmResult` on early-out or `{ ok }` once decided.
- */
-async function waitPaneQuiet(
-  repo: string,
-  timeoutSec: number,
-  env: NativeEnv,
-): Promise<TmResult | { ok: boolean }> {
-  const sessionMissing = await requireSession(repo, env.runTmux)
-  if (sessionMissing !== null) return sessionMissing
-
-  let sendAt = 0
-  try {
-    const sa = sendAtFile(repo)
-    sendAt = Math.floor(statSync(sa).mtimeMs / 1000)
-  } catch {
-    sendAt = 0
-  }
-
-  const end = nowSec() + timeoutSec
-  let quietStreak = 0
-  while (nowSec() < end) {
-    const sid = resolveSid(repo)
-    const isBusy = sid !== null && isRegularFile(busyMarkerFor(sid))
-    if (isBusy) quietStreak = 0
-    else quietStreak += 1
-    if (quietStreak >= 2 && nowSec() - sendAt >= 3) return { ok: true }
-    await sleepMs(2000)
-  }
-  return { ok: false }
-}
-
-/**
- * `tm`'s `_print_last_or_empty`: print the teammate's `<sid>.last` to stdout,
- * or — when the file is missing or zero-byte — the documented sentinel line.
- * Always exit 0; the verb wrapper decides what code to ship.
- */
-function printLastOrEmpty(repo: string): string {
-  const sid = resolveSid(repo)
-  if (sid === null) return `(no sid for ${repo})\n`
-  const reply = readIfNonEmpty(lastFileFor(sid))
-  if (reply === null) {
-    return '(no text reply this turn — tool-only, /compact, /clear, or fresh spawn)\n'
-  }
-  // `cat` does not append a newline; the file's own trailing newline is what
-  // shapes the printed line. Reproduce that verbatim.
-  return reply
-}
-
-/**
- * `tm`'s `_echo_ctx_to_stderr`: the teammate's post-turn ctx line, prefixed
- * with `ctx: `, on stderr. Soft-fails: an unreadable transcript or a sid that
- * cannot be resolved drops the line silently (`tm`'s `2>/dev/null`).
- */
-function echoCtxToStderr(repo: string, env: NativeEnv): string {
-  // Reuse `ctxLine` — its `?` diagnostic shape would also be a soft-fail, so
-  // any `repo:` prefix indicates an unreadable transcript; only the formatted
-  // success line is echoed (the part after `<repo>: `).
-  const body = ctxLine(repo, '', env)
-  // The diagnostic forms always start with `<repo>: ?`; the success form
-  // starts with `<repo>: <digits> tokens · ...`.
-  if (body.includes(': ? (')) return ''
-  const prefix = `${repo}: `
-  const data = body.startsWith(prefix) ? body.slice(prefix.length) : body
-  return `ctx: ${data}\n`
 }
 
 // --- doctor ---------------------------------------------------------------
@@ -2025,15 +1437,6 @@ function shellSingleQuote(value: string): string {
  */
 function teammateLaunchFlags(mdExcludes: string): string {
   return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion`
-}
-
-/** Whether a session of this name is currently up — `has-session -t "=NAME"`. */
-async function sessionExists(name: string, runTmux: TmuxRunner): Promise<boolean> {
-  try {
-    return (await runTmux(['has-session', '-t', `=${name}`])).code === 0
-  } catch {
-    return false
-  }
 }
 
 /**
@@ -2361,15 +1764,15 @@ const send: NativeVerb = async (args, _options, env) => {
     return codexSend(repo, prompt, { timeoutSec: Number(timeout), engine: env.engines?.get('codex') })
   }
 
-  const sentResult = await sendKeys(repo, prompt, env)
+  const sentResult = await sendKeys(repo, prompt, env.runTmux, process.env)
   if (sentResult.code !== 0) return sentResult
 
   if (noWait) return sentResult
 
   const timeoutSec = Number(timeout)
   const verdict = paneQuiet
-    ? await waitPaneQuiet(repo, timeoutSec, env)
-    : await waitIdleSignal(repo, timeoutSec, false, env)
+    ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
+    : await waitIdleSignal(repo, timeoutSec, false, env.runTmux)
   if ('code' in verdict) return verdict
   if (!verdict.ok) {
     const kind = paneQuiet ? 'pane-quiet' : 'Stop hook'
@@ -2466,8 +1869,8 @@ const wait: NativeVerb = async (args, _options, env) => {
 
   const timeoutSec = Number(timeout)
   const verdict = paneQuiet
-    ? await waitPaneQuiet(repo, timeoutSec, env)
-    : await waitIdleSignal(repo, timeoutSec, fresh, env)
+    ? await waitPaneQuiet(repo, timeoutSec, env.runTmux)
+    : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux)
   if ('code' in verdict) return verdict
   if (!verdict.ok) {
     return {
@@ -2557,7 +1960,7 @@ const compact: NativeVerb = async (args, _options, env) => {
 
   let stderr = `tm compact: sending /compact to ${repo} (sid=${sid}, timeout=${timeout}s)\n`
 
-  const sent = await sendKeys(repo, '/compact', env)
+  const sent = await sendKeys(repo, '/compact', env.runTmux, process.env)
   // `bin/tm:1139` runs `_send_keys >/dev/null`, redirecting *stdout* only;
   // the `sent to ...` / `sid=...` lines `_send_keys` writes to stderr reach
   // the user. Preserve them by carrying `sent.stderr` on every return path.
@@ -2676,10 +2079,6 @@ function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResul
   }
   return { repo, sid, task, prompt, hasPrompt, noWait }
 }
-
-/** A UUID — the format `tm resume` requires for a resolved sid. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * `tm resume` — relaunch a prior conversation. With no sid the verb falls

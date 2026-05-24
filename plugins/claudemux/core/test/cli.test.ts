@@ -313,9 +313,83 @@ describe('native dispatch', () => {
     ['send nested traversal', ['send', 'codex/../../x', '--prompt', 'hello']],
     ['wait nested traversal', ['wait', 'codex/../../x']],
   ])('%s rejects invalid codex teammate names before filesystem routing', async (_label, argv) => {
-    const result = await runCli(argv, fakeEnv())
+    const result = await runCli(argv, fakeEnv({ dispatcherDir: '/tmp/cmxcli-missing-dispatcher' }))
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('invalid codex teammate name')
+    expect(result.stderr).not.toContain('spawn:')
+  })
+
+  test('codex spawn --prompt prints the atomic first-turn result', async () => {
+    const name = 'codex-x'
+    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
+    const registry = new EngineRegistry()
+    registry.register(new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 }))
+    const env = fakeEnv({ dispatcherDir, engines: registry })
+
+    try {
+      await reapDaemon(name)
+      removeBaseRecord(name)
+      const result = await runCli(['spawn', name, '--prompt', 'hi'], env)
+      expect(result.code).toBe(0)
+      expect(result.stderr).toMatch(/^spawned: codex-x \(pid=\d+, socket=.*\)\n$/)
+      expect(result.stdout).toContain('fake reply: hi')
+    } finally {
+      await reapDaemon(name)
+      removeBaseRecord(name)
+      rmSync(dispatcherDir, { recursive: true, force: true })
+    }
+  })
+
+  test('codex spawn --prompt returns the first-turn failure instead of reporting success', async () => {
+    const name = `codex-failed-${Date.now()}`
+    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
+    const registry = new EngineRegistry()
+    registry.register(new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 }))
+    const savedStatus = process.env['CODEX_FAKE_TURN_STATUS']
+    process.env['CODEX_FAKE_TURN_STATUS'] = 'failed'
+
+    try {
+      const result = await runCli(
+        ['spawn', name, '--engine', 'codex', '--prompt', 'hi'],
+        fakeEnv({ dispatcherDir, engines: registry }),
+      )
+      expect(result.code).toBe(1)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toMatch(new RegExp(`^spawned: ${name} \\(pid=\\d+, socket=.*\\)\\n`))
+      expect(result.stderr).toContain('tm: turn failed: fake failure\n')
+    } finally {
+      if (savedStatus === undefined) delete process.env['CODEX_FAKE_TURN_STATUS']
+      else process.env['CODEX_FAKE_TURN_STATUS'] = savedStatus
+      await reapDaemon(name)
+      removeBaseRecord(name)
+      rmSync(dispatcherDir, { recursive: true, force: true })
+    }
+  })
+
+  test('codex spawn --prompt returns the first-turn timeout instead of reporting success', async () => {
+    const name = `codex-timeout-${Date.now()}`
+    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
+    const registry = new EngineRegistry()
+    registry.register(new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 }))
+    const savedDelay = process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS']
+    process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS'] = '250'
+
+    try {
+      const result = await runCli(
+        ['spawn', name, '--engine', 'codex', '--prompt', 'slow', '--timeout', '0'],
+        fakeEnv({ dispatcherDir, engines: registry }),
+      )
+      expect(result.code).toBe(1)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toMatch(new RegExp(`^spawned: ${name} \\(pid=\\d+, socket=.*\\)\\n`))
+      expect(result.stderr).toContain('tm: turn timed out after 0ms\n')
+    } finally {
+      if (savedDelay === undefined) delete process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS']
+      else process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS'] = savedDelay
+      await reapDaemon(name)
+      removeBaseRecord(name)
+      rmSync(dispatcherDir, { recursive: true, force: true })
+    }
   })
 
   test('codex spawn writes the base identity record so status and kill route through the identity router', async () => {
@@ -330,6 +404,13 @@ describe('native dispatch', () => {
       expect(spawned.code).toBe(0)
       expect(spawned.stderr).toMatch(/^spawned: .* \(pid=\d+, socket=.*\)\n$/)
       expect(readIdentity(name)).toMatchObject({ name, engine: 'codex' })
+
+      const duplicate = await runCli(['spawn', name, '--engine', 'codex'], env)
+      expect(duplicate).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: `tm: codex teammate '${name}' already exists (engine=codex)\n`,
+      })
 
       const status = await runCli(['status', name], env)
       expect(status.code).toBe(0)

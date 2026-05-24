@@ -6972,6 +6972,32 @@ function codexNameFailure(name) {
   const validation = validateTeammateName(name);
   return validation.kind === "ok" ? null : `invalid codex teammate name '${name}': ${validation.reason}`;
 }
+function codexSpawnHeader(name) {
+  const state = readDaemonState(name);
+  return state === null ? `spawned: ${name}
+` : `spawned: ${name} (pid=${state.pid}, socket=${state.socketPath})
+`;
+}
+function formatFirstTurn(turn) {
+  if (turn.tmResult !== void 0) return turn.tmResult;
+  switch (turn.kind) {
+    case "completed":
+      return { code: 0, stdout: turn.text.endsWith("\n") ? turn.text : `${turn.text}
+`, stderr: "" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: turn failed: ${turn.message}
+` };
+    case "timed-out":
+      return { code: 1, stdout: "", stderr: `tm: turn timed out after ${turn.elapsedMs}ms
+` };
+    case "not-supported":
+      return { code: 0, stdout: "", stderr: `  not supported: ${turn.reason}
+` };
+    case "no-op":
+      return { code: 0, stdout: "", stderr: `  no-op: ${turn.reason}
+` };
+  }
+}
 function fmtAge3(age) {
   if (age < 60) return `${age}s`;
   if (age < 3600) return `${Math.floor(age / 60)}m`;
@@ -7059,22 +7085,28 @@ var CodexEngine = class {
       });
       await this.healthCheck(req.name);
       if (req.prompt === null) {
-        const state = readDaemonState(req.name);
-        const stderr = state === null ? `spawned: ${req.name}
-` : `spawned: ${req.name} (pid=${state.pid}, socket=${state.socketPath})
-`;
         return {
           kind: "spawned",
           name: req.name,
           firstTurn: null,
-          tmResult: { code: 0, stdout: "", stderr }
+          tmResult: { code: 0, stdout: "", stderr: codexSpawnHeader(req.name) }
         };
       }
       const firstTurn = await this.send(
         { name: req.name, prompt: req.prompt, timeoutMs: req.timeoutMs, paneQuiet: false },
         ctx
       );
-      return { kind: "spawned", name: req.name, firstTurn };
+      const turn = formatFirstTurn(firstTurn);
+      return {
+        kind: "spawned",
+        name: req.name,
+        firstTurn,
+        tmResult: {
+          code: turn.code,
+          stdout: turn.stdout,
+          stderr: codexSpawnHeader(req.name) + turn.stderr
+        }
+      };
     } catch (e) {
       removeBaseRecord(req.name);
       if (e instanceof CodexDaemonAlreadyAliveError) {
@@ -7922,14 +7954,22 @@ async function spawnVerb(args, ctx) {
       return { code: 0, stdout: `spawned: ${result.name}
 `, stderr: "" };
     case "already-exists":
+      if (args.engine === "codex") {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: `tm: codex teammate '${args.name}' already exists (engine=${result.existingEngine})
+`
+        };
+      }
       return {
         code: 1,
         stdout: "",
-        stderr: `tm: spawn: '${args.name}' already exists as a ${result.existingEngine} teammate
+        stderr: `tm: '${args.name}' already exists as a ${result.existingEngine} teammate
 `
       };
     case "failed":
-      return { code: 1, stdout: "", stderr: `tm: spawn: ${result.message}
+      return { code: 1, stdout: "", stderr: `tm: ${result.message}
 ` };
   }
 }
@@ -8162,6 +8202,10 @@ function parseTimeoutMs(label, value) {
 function isCodexPrefixName2(name) {
   return name.startsWith("codex-") || name.startsWith("codex/");
 }
+function codexNameFailure2(name) {
+  const validation = validateTeammateName(name);
+  return validation.kind === "ok" ? null : `invalid codex teammate name '${name}': ${validation.reason}`;
+}
 async function inferSpawnEngine(name, requested, ctx) {
   if (requested !== null) return requested;
   const resolved = await ctx.router.resolve(name);
@@ -8248,6 +8292,10 @@ async function dispatchEngineVerb(verb, rest, ctx, env) {
       const timeoutMs = parseTimeoutMs("tm spawn", parsed.timeout);
       if (timeoutMs !== null && typeof timeoutMs === "object") return timeoutMs.error;
       const engine = await inferSpawnEngine(name, parsed.engine, ctx);
+      if (engine === "codex") {
+        const invalidName = codexNameFailure2(name);
+        if (invalidName !== null) return die5(invalidName);
+      }
       return spawnVerb(
         {
           name,

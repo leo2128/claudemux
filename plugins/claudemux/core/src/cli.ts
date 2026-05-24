@@ -61,6 +61,7 @@ import { parseSpawnArgs } from './engines/claude/spawn'
 import { parseWaitArgs } from './engines/claude/wait'
 import { iterTeammates } from './engines/claude/tmux'
 import type { EngineKind } from './engines/types'
+import { validateTeammateName } from './identity/name'
 
 /**
  * The verb-side context the engine-routed verbs (`ls`, `states`,
@@ -180,6 +181,13 @@ function isCodexPrefixName(name: string): boolean {
   return name.startsWith('codex-') || name.startsWith('codex/')
 }
 
+function codexNameFailure(name: string): string | null {
+  const validation = validateTeammateName(name)
+  return validation.kind === 'ok'
+    ? null
+    : `invalid codex teammate name '${name}': ${validation.reason}`
+}
+
 async function inferSpawnEngine(
   name: string,
   requested: EngineKind | null,
@@ -283,6 +291,10 @@ async function dispatchEngineVerb(
       const timeoutMs = parseTimeoutMs('tm spawn', parsed.timeout)
       if (timeoutMs !== null && typeof timeoutMs === 'object') return timeoutMs.error
       const engine = await inferSpawnEngine(name, parsed.engine, ctx)
+      if (engine === 'codex') {
+        const invalidName = codexNameFailure(name)
+        if (invalidName !== null) return die(invalidName)
+      }
       return spawnVerb(
         {
           name,

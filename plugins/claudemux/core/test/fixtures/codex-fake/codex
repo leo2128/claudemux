@@ -10,6 +10,9 @@
 // Optional behavior knobs via environment, for the negative-path tests:
 //   CODEX_FAKE_BIND_DELAY_MS=<n>   wait <n>ms before binding the socket
 //   CODEX_FAKE_EXIT_BEFORE_BIND=1  exit 7 before ever binding (spawn-fail test)
+//   CODEX_FAKE_TURN_COMPLETE_DELAY_MS=<n>
+//                                  wait <n>ms before sending turn notifications
+//   CODEX_FAKE_TURN_STATUS=failed  complete the turn as failed
 //   CODEX_FAKE_SPAWN_CHILD=1       additionally spawn a sleeping child in the
 //                                  same process group — mimics the real codex
 //                                  node-wrapper → rust-binary tree the
@@ -125,38 +128,44 @@ function bind() {
         const textInput = Array.isArray(params.input)
           ? (params.input.find((item) => item?.type === 'text')?.text ?? '')
           : ''
+        const turnStatus = process.env.CODEX_FAKE_TURN_STATUS === 'failed' ? 'failed' : 'completed'
         const turn = {
           id: turnId,
           items: [],
           itemsView: 'notLoaded',
-          status: 'completed',
-          error: null,
+          status: turnStatus,
+          error: turnStatus === 'failed' ? { message: 'fake failure' } : null,
           startedAt: Math.floor(Date.now() / 1000),
           completedAt: Math.floor(Date.now() / 1000),
           durationMs: 1,
         }
+        const completeDelay =
+          Number.parseInt(process.env.CODEX_FAKE_TURN_COMPLETE_DELAY_MS ?? '0', 10) || 0
         socket.send(JSON.stringify({ id, result: { turn } }))
-        setImmediate(() => {
-          socket.send(JSON.stringify({
-            method: 'item/completed',
-            params: {
-              threadId: params.threadId,
-              turnId,
-              completedAtMs: Date.now(),
-              item: {
-                type: 'agentMessage',
-                id: `msg-${turnId}`,
-                text: `fake reply: ${textInput}`,
-                phase: null,
-                memoryCitation: null,
+        setTimeout(() => {
+          if (socket.readyState !== 1) return
+          if (turnStatus === 'completed') {
+            socket.send(JSON.stringify({
+              method: 'item/completed',
+              params: {
+                threadId: params.threadId,
+                turnId,
+                completedAtMs: Date.now(),
+                item: {
+                  type: 'agentMessage',
+                  id: `msg-${turnId}`,
+                  text: `fake reply: ${textInput}`,
+                  phase: null,
+                  memoryCitation: null,
+                },
               },
-            },
-          }))
+            }))
+          }
           socket.send(JSON.stringify({
             method: 'turn/completed',
             params: { threadId: params.threadId, turn },
           }))
-        })
+        }, completeDelay)
       } else {
         socket.send(JSON.stringify({ id, error: { message: `unknown method: ${env.method}` } }))
       }

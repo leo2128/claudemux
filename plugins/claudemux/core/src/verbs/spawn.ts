@@ -64,12 +64,19 @@ export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmRe
     case 'spawned':
       return { code: 0, stdout: `spawned: ${result.name}\n`, stderr: '' }
     case 'already-exists':
+      if (args.engine === 'codex') {
+        return {
+          code: 1,
+          stdout: '',
+          stderr: `tm: codex teammate '${args.name}' already exists (engine=${result.existingEngine})\n`,
+        }
+      }
       return {
         code: 1,
         stdout: '',
-        stderr: `tm: spawn: '${args.name}' already exists as a ${result.existingEngine} teammate\n`,
+        stderr: `tm: '${args.name}' already exists as a ${result.existingEngine} teammate\n`,
       }
     case 'failed':
-      return { code: 1, stdout: '', stderr: `tm: spawn: ${result.message}\n` }
+      return { code: 1, stdout: '', stderr: `tm: ${result.message}\n` }
   }
 }

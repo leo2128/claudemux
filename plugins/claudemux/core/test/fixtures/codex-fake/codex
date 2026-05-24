@@ -16,6 +16,17 @@
 //                                  answer thread/read with this status
 //   CODEX_FAKE_THREAD_READ_DELAY_MS=<n>
 //                                  wait <n>ms before answering thread/read
+//   CODEX_FAKE_THREAD_READ_BACKFILL=<json>
+//                                  answer thread/read with includeTurns by
+//                                  injecting this JSON array as `turns`
+//                                  (each entry must follow the Turn shape).
+//                                  Used by the wait-backfill race test.
+//   CODEX_FAKE_THREAD_READ_BACKFILL_FILE=<path>
+//                                  same as CODEX_FAKE_THREAD_READ_BACKFILL but
+//                                  reads JSON from the file at request time.
+//                                  Needed because env is frozen at daemon
+//                                  spawn — a test that must inject `turns`
+//                                  AFTER spawn writes to this file instead.
 //   CODEX_FAKE_THREAD_LIST_ID=<id> answer thread/list with this thread id
 //   CODEX_FAKE_THREAD_LIST_EMPTY=1 answer thread/list with no threads
 //   CODEX_FAKE_CONNECTION_LOG=<path>
@@ -34,7 +45,7 @@
 
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { WebSocketServer } from '#ws'
 
 const argv = process.argv.slice(2)
@@ -189,6 +200,28 @@ function bind() {
           false,
           process.env.CODEX_FAKE_THREAD_READ_STATUS,
         )
+        // wait-backfill race test: inject a synthetic `turns` array that
+        // `pickBackfillTurn` will surface as the wait verb's result.
+        // Env is frozen at daemon spawn time, so a test that needs to set
+        // the turns AFTER spawn writes them to BACKFILL_FILE instead;
+        // the file is re-read on every thread/read request.
+        if (params.includeTurns === true) {
+          const inlineJson = process.env.CODEX_FAKE_THREAD_READ_BACKFILL
+          const filePath = process.env.CODEX_FAKE_THREAD_READ_BACKFILL_FILE
+          if (filePath !== undefined && filePath.length > 0) {
+            try {
+              thread.turns = JSON.parse(readFileSync(filePath, 'utf8'))
+            } catch {
+              thread.turns = []
+            }
+          } else if (inlineJson !== undefined) {
+            try {
+              thread.turns = JSON.parse(inlineJson)
+            } catch {
+              thread.turns = []
+            }
+          }
+        }
         sendJson({ id, result: makeThreadResponse(thread) }, envInt('CODEX_FAKE_THREAD_READ_DELAY_MS'))
       } else if (env.method === 'turn/start') {
         const turnId = `turn-${++turnCounter}`

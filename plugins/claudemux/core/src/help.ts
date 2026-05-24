@@ -101,6 +101,10 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       block until --timeout. With the tool gone, a teammate raises
       questions by ending its turn with text, which 'tm send' /
       'tm spawn --prompt' relays straight back to the dispatcher.
+      Exit codes on the --prompt sync path are inherited from
+      'tm send': 0 first-turn reply, 124 sync wait expired (teammate
+      still booted — collect with 'tm wait <repo>'; don't respawn
+      because the name is taken), 1 real failure.
 `,
   send: `tm send <repo> --prompt "..." [--pane-quiet] [--timeout N]
 
@@ -126,9 +130,16 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       On the default (Stop-hook) path, also echoes the teammate's
       post-turn ctx to stderr as "ctx: N tokens · ~M next turn · X%
       of W (note)" — same data as 'tm ctx <repo>' inline with the
-      reply. Skipped on --pane-quiet (no fresh usage block in jsonl).
-      On timeout: stderr warning, partial .last to stdout if any,
-      exit 1.
+      reply. Skipped on --pane-quiet (no fresh usage path in jsonl).
+      Exit codes:
+        0   the reply landed within --timeout; stdout is the reply.
+        124 sync wait expired (no Stop hook within --timeout) but the
+            teammate is STILL running — stdout is the partial .last
+            if any, stderr names the verb to keep tailing with.
+            Don't respawn; the name is still taken. Re-collect with
+            'tm wait <repo>' or check 'tm status <repo>'.
+        1   real failure (no such tmux session, sid marker missing,
+            sendKeys broke). The teammate is gone or never started.
 
       When <repo> is a codex teammate (name starts with 'codex-'),
       this verb routes into the codex driver instead: --prompt is
@@ -157,6 +168,9 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
         is parsed last wins.
       Stop-hook path also echoes ctx to stderr (see 'tm send');
       skipped on --pane-quiet.
+      Same exit codes as 'tm send': 0 on a fresh Stop, 124 if --timeout
+      elapses without one (teammate still running — re-run 'tm wait'),
+      1 on a real failure (no session / no sid marker).
 `,
   compact: `tm compact <repo> [timeout=1800] [--timeout N]
 
@@ -167,13 +181,14 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       Default timeout is 1800s — large contexts can run many
       minutes, and the cap only fires when compaction never
       finishes.
-      Two non-success modes, both exit 1:
-        - Claude Code refuses with "Not enough messages to compact"
-          (transcript too short). That error fires no hook, so the
-          pane is scanned alongside the idle-marker poll to detect
-          it.
-        - PostCompact never fires within timeout. Compaction is
-          hung or the Stop hook is misconfigured.
+      Two non-success modes with different exit codes:
+        1   Claude Code refuses with "Not enough messages to compact"
+            (transcript too short). That error fires no hook, so the
+            pane is scanned alongside the idle-marker poll to detect
+            it. /compact won't proceed; this is a true failure.
+        124 PostCompact never fires within timeout. Compaction may
+            still be running — same "sync wait expired, teammate
+            still alive" semantics as 'tm send'.
 `,
   resume: `tm resume <repo> [<sid-or-thread-id>] [--task <slug>] [--prompt "..."] [--engine claude|codex]
 

@@ -273,6 +273,13 @@ export class ClaudeEngine implements Engine {
     if (req.resumeCheckpoint !== null) argv.push('--resume', req.resumeCheckpoint)
     if (req.displayName !== null) argv.push('--task', req.displayName)
     if (req.prompt !== null) argv.push('--prompt', req.prompt)
+    // `--timeout` MUST reach the inner `tm send` on the --prompt sync path —
+    // CLI parses it into `SpawnRequest.timeoutMs` for a reason. Without this,
+    // `tm spawn <repo> --prompt "…" --timeout 60` silently waits 1800s and
+    // the dispatcher's bg classifier never sees the 124 it was scheduling
+    // against. The Codex engine already propagates timeoutMs into its own
+    // `send`; this keeps the two engines symmetric.
+    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
     const result = await claudeSpawn(argv, this.env)
     if (result.code !== 0) {
       return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }

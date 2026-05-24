@@ -5,12 +5,12 @@
  * *next* Stop that wakes the wait, not a prior one.
  */
 
-import { waitIdleSignal, waitPaneQuiet } from './wait-signals'
+import { probeStillAlive, waitIdleSignal, waitPaneQuiet } from './wait-signals'
 import { echoCtxToStderr, printLastOrEmpty } from './post-turn'
 import { die } from './tmux'
 import { isNonNegativeInteger } from './clock'
 import type { ClaudeVerbEnv } from './env'
-import type { TmResult } from '../../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 
 /** Parsed arg vector for `tm wait`. */
 export interface WaitArgs {
@@ -80,10 +80,20 @@ export async function claudeWait(args: readonly string[], env: ClaudeVerbEnv): P
     : await waitIdleSignal(repo, timeoutSec, fresh, env.runTmux)
   if ('code' in verdict) return verdict
   if (!verdict.ok) {
+    // See `send.ts` for the rationale — re-probe before promising "still
+    // running" (124) so a teammate that died mid-wait surfaces as a real
+    // failure (exit 1) instead of being kept on the dispatcher's "keep
+    // tailing" list forever.
+    const dead = await probeStillAlive(repo, env.runTmux)
+    if (dead !== null) return dead
+    const kind = paneQuiet ? 'pane-quiet' : 'Stop hook'
     return {
-      code: 1,
+      code: EXIT_SYNC_WAIT_EXPIRED,
       stdout: printLastOrEmpty(repo),
-      stderr: `tm wait: timed out after ${timeoutSec}s on ${repo}\n`,
+      stderr:
+        `tm wait: sync wait expired after ${timeoutSec}s on ${repo} ` +
+        `(no ${kind} fired; the teammate is still running — re-run ` +
+        `'tm wait ${repo}' or check 'tm status ${repo}'). exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
     }
   }
 

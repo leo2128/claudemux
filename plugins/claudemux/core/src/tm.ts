@@ -36,6 +36,19 @@ export interface TmRunOptions {
 }
 
 /**
+ * Exit code for "sync wait expired but the teammate is still running" —
+ * the verb wanted a reply within `--timeout`, the timer elapsed, but the
+ * underlying teammate (Claude REPL, codex daemon) was not declared dead.
+ *
+ * The value (124) is the GNU `timeout(1)` convention: callers that already
+ * branch on `124` for `timeout` behave the same on `tm`. The dispatcher's
+ * bg-task wrapper uses it to distinguish "TM is gone, retry from spawn"
+ * (exit 1) from "TM is still working, keep watching with `tm wait`" (exit
+ * 124). Exit 0 still means "got the reply within the window".
+ */
+export const EXIT_SYNC_WAIT_EXPIRED = 124
+
+/**
  * Resolve the `tm` executable. `CLAUDEMUX_TM` overrides it (the live-teammate
  * suite points it at any custom launcher this way); otherwise it is the
  * `bin/tm` shipped alongside this core in the claudemux plugin.

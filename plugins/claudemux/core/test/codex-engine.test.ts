@@ -874,4 +874,179 @@ describe('CodexEngine — core lifecycle', () => {
     expect(readDaemonState(name)).toBeNull()
     expect(readBaseRecord(name)).toBeNull()
   })
+
+  test('wait recovers a turn that completed in the send-timeout-to-wait window via thread/read backfill', { timeout: 15000 }, async () => {
+    // End-to-end pin for the Codex side of the 124 contract. The send →
+    // 124 → wait flow used to silently drop the in-window completion
+    // (the new wait subscription only sees events AFTER it attaches);
+    // backfill via `thread/read(includeTurns: true)` now closes that gap.
+    //
+    // The fake codex re-reads the backfill JSON from BACKFILL_FILE on
+    // every `thread/read`, so the test can stage the file AFTER the
+    // daemon has spawned (env is frozen at fork) but before issuing the
+    // wait. CODEX_FAKE_THREAD_READ_STATUS must also be set so the fake
+    // routes thread/read into the backfill branch — both env vars must
+    // be present at daemon spawn time.
+    const name = nameUnder()
+    spawned.push(name)
+    const backfillFile = join(registryDir, `${counter}-backfill.json`)
+    const savedStatus = process.env['CODEX_FAKE_THREAD_READ_STATUS']
+    const savedBackfillFile = process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE']
+    process.env['CODEX_FAKE_THREAD_READ_STATUS'] = 'idle'
+    process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE'] = backfillFile
+    // A fresh CodexEngine pins the env-at-spawn the daemon will see.
+    const localEngine = new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    try {
+      await localEngine.spawn(
+        {
+          name,
+          cwd,
+          resumeCheckpoint: null,
+          prompt: null,
+          timeoutMs: null,
+          displayName: 'wait backfill',
+        },
+        ctx(),
+      )
+      // Seed a thread id so `wait` doesn't bail with the "no started thread" error.
+      const send = await localEngine.send(
+        { name, prompt: 'kickoff', timeoutMs: 5000, paneQuiet: false },
+        ctx(),
+      )
+      expect(send.kind).toBe('completed')
+      const threadId = readDaemonState(name)?.threadId
+      expect(threadId).toBeTruthy()
+
+      const backfillTurn = {
+        id: 'turn-backfilled',
+        items: [
+          {
+            type: 'agentMessage',
+            id: 'msg-backfilled',
+            text: 'fake reply: backfilled',
+            phase: null,
+            memoryCitation: null,
+          },
+        ],
+        itemsView: 'full',
+        status: 'completed',
+        error: null,
+        startedAt: 1,
+        // `completedAt` must beat the daemon's `lastSeen` — the previous
+        // `engine.send` just touched it to `nowSec()`. Push the backfill
+        // a few seconds into the future so the picker accepts it.
+        completedAt: Math.floor(Date.now() / 1000) + 60,
+        durationMs: 1,
+      }
+      writeFileSync(backfillFile, JSON.stringify([backfillTurn]))
+
+      // `--timeout` is short — the live subscription would never fire
+      // (no `turn/start` triggers it). Only the read backfill can
+      // resolve this wait. If it does NOT resolve, the verb times out
+      // → kind === 'timed-out', which is the regression we are pinning
+      // against.
+      const wait = await localEngine.wait(
+        { name, recoverFor: null, timeoutMs: 5000, fresh: false, paneQuiet: false },
+        ctx(),
+      )
+      expect(wait.kind).toBe('completed')
+      if (wait.kind === 'completed') {
+        expect(wait.text).toContain('turn-backfilled')
+        expect(wait.text).toContain('fake reply: backfilled')
+      }
+    } finally {
+      if (savedStatus === undefined) delete process.env['CODEX_FAKE_THREAD_READ_STATUS']
+      else process.env['CODEX_FAKE_THREAD_READ_STATUS'] = savedStatus
+      if (savedBackfillFile === undefined) delete process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE']
+      else process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE'] = savedBackfillFile
+      rmSync(backfillFile, { force: true })
+    }
+  })
+
+  /**
+   * Stage a wait-backfill scenario against the fake daemon: spawn a
+   * Codex teammate with `CODEX_FAKE_THREAD_READ_*` set at fork, seed a
+   * thread id via a real `engine.send`, then write the backfill JSON to
+   * disk for the next `thread/read` to pick up. Returns the wait result
+   * so each test asserts the status-specific outcome.
+   *
+   * Hoisted out of the happy-path test to keep the failed/interrupted
+   * variants from re-stating ~50 lines of identical scaffold; the
+   * shared driver is also the single site any future fake-daemon
+   * change has to update.
+   */
+  async function runWaitBackfillScenario(turnStatus: 'completed' | 'failed' | 'interrupted', extraTurnFields: Partial<Record<string, unknown>> = {}) {
+    const name = nameUnder()
+    spawned.push(name)
+    const backfillFile = join(registryDir, `${counter}-backfill.json`)
+    const savedStatus = process.env['CODEX_FAKE_THREAD_READ_STATUS']
+    const savedBackfillFile = process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE']
+    process.env['CODEX_FAKE_THREAD_READ_STATUS'] = 'idle'
+    process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE'] = backfillFile
+    const localEngine = new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
+    try {
+      await localEngine.spawn(
+        { name, cwd, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: `wait backfill ${turnStatus}` },
+        ctx(),
+      )
+      const send = await localEngine.send(
+        { name, prompt: 'kickoff', timeoutMs: 5000, paneQuiet: false },
+        ctx(),
+      )
+      expect(send.kind).toBe('completed')
+
+      const backfillTurn = {
+        id: `turn-backfilled-${turnStatus}`,
+        items: [],
+        itemsView: 'notLoaded',
+        status: turnStatus,
+        // turnNotificationToResult reads error.message for failed turns;
+        // null is fine for completed/interrupted.
+        error: null,
+        startedAt: 1,
+        completedAt: Math.floor(Date.now() / 1000) + 60,
+        durationMs: 1,
+        ...extraTurnFields,
+      }
+      writeFileSync(backfillFile, JSON.stringify([backfillTurn]))
+
+      return await localEngine.wait(
+        { name, recoverFor: null, timeoutMs: 5000, fresh: false, paneQuiet: false },
+        ctx(),
+      )
+    } finally {
+      if (savedStatus === undefined) delete process.env['CODEX_FAKE_THREAD_READ_STATUS']
+      else process.env['CODEX_FAKE_THREAD_READ_STATUS'] = savedStatus
+      if (savedBackfillFile === undefined) delete process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE']
+      else process.env['CODEX_FAKE_THREAD_READ_BACKFILL_FILE'] = savedBackfillFile
+      rmSync(backfillFile, { force: true })
+    }
+  }
+
+  test('wait backfill surfaces a late `failed` terminal turn — review-71 P1-3 gap', { timeout: 15000 }, async () => {
+    // Counterpart to the happy-path backfill test: a turn that failed
+    // in the [send-timeout, wait-subscribe] window must reach the
+    // dispatcher as exit 1 (kind: 'failed') instead of spinning to 124
+    // on a thread that already settled into an error. The shared
+    // `turnNotificationToResult` site is what guarantees this maps the
+    // same way a live notification would.
+    const wait = await runWaitBackfillScenario('failed', {
+      error: { message: 'fake backfilled failure' },
+    })
+    expect(wait.kind).toBe('failed')
+    if (wait.kind === 'failed') {
+      expect(wait.message).toContain('fake backfilled failure')
+    }
+  })
+
+  test('wait backfill surfaces a late `interrupted` terminal turn — review-71 P1-3 gap', { timeout: 15000 }, async () => {
+    // Same shape as the failed test; `interrupted` maps to a recoverable
+    // failed TurnResult by `turnNotificationToResult`. The dispatcher
+    // still sees exit 1 with a distinct stderr message, never 124.
+    const wait = await runWaitBackfillScenario('interrupted')
+    expect(wait.kind).toBe('failed')
+    if (wait.kind === 'failed') {
+      expect(wait.message).toContain('interrupted')
+    }
+  })
 })

@@ -44,12 +44,14 @@ import type {
   WaitRequest,
 } from '../types'
 import type { ClientInfo, InitializeResponse } from '../../codex-protocol/index.js'
+import type { Turn } from '../../codex-protocol/v2/Turn.js'
+import type { TurnItemsView } from '../../codex-protocol/v2/TurnItemsView.js'
 import type { ThreadItem } from '../../codex-protocol/v2/ThreadItem.js'
 import type { ThreadListResponse } from '../../codex-protocol/v2/ThreadListResponse.js'
 import type { ThreadReadResponse } from '../../codex-protocol/v2/ThreadReadResponse.js'
 import type { ThreadResumeResponse } from '../../codex-protocol/v2/ThreadResumeResponse.js'
 import type { ThreadStartResponse } from '../../codex-protocol/v2/ThreadStartResponse.js'
-import type { TmResult } from '../../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 import type { TurnCompletedNotification } from './events.js'
 import { codexHistory } from './history.js'
 import { CodexWsClient } from './rpc.js'
@@ -133,6 +135,65 @@ function itemToInteractions(item: ThreadItem): readonly InteractionItem[] {
     ]
   }
   return [{ kind: 'system-note', text: JSON.stringify(item) }]
+}
+
+/**
+ * Pick the latest `Turn` from a `thread/read` snapshot that reached a
+ * terminal state AFTER the daemon's `lastSeen` marker — the candidate
+ * `tm wait` should surface as a backfill instead of subscribing to a
+ * future event the dispatcher would never see.
+ *
+ * Why this exists: `tm send` on Codex opens a WS, posts a turn, and
+ * closes on `--timeout` expiry (exit 124). The follow-up `tm wait` opens
+ * a fresh WS and `subscribeTurnCollection` only ever receives events
+ * that fire AFTER the subscription is in place — so a turn that finished
+ * in the window [send-timeout, wait-subscribe] is invisible to the
+ * notification stream alone. `tm wait` now calls `thread/read` with
+ * `includeTurns: true` alongside the subscription and races them; if
+ * `lastSeen` < some terminal turn, that turn becomes the resolved value
+ * and `tm wait` returns it.
+ *
+ * Filters:
+ *  - `inProgress` is skipped — the live subscription will deliver it.
+ *    Every OTHER status is terminal (the Codex protocol's `TurnStatus`
+ *    union is `completed | failed | interrupted | inProgress`) and must
+ *    be eligible for backfill: the dispatcher needs the late `failed` /
+ *    `interrupted` outcome just as much as a late `completed`, or the
+ *    next `tm wait` keeps spinning to 124 on a turn that already
+ *    settled into an error state. `turnNotificationToResult` is the
+ *    single mapping site that translates any terminal status to a
+ *    `TurnResult`, so backfill and live paths cannot drift.
+ *  - `completedAt === null` is defensive — a turn whose timestamp
+ *    didn't survive serialization cannot be ordered against `lastSeen`.
+ *  - `completedAt <= lastSeen` means the dispatcher already saw it.
+ *
+ * Picks the max `completedAt` among survivors — `thread.turns` ordering
+ * is not documented as ascending, so a scan is the contract-safe form.
+ */
+export function pickBackfillTurn(
+  turns: readonly Turn[],
+  lastSeen: number,
+  threadId: string,
+): TurnCompletedNotification | null {
+  let best: Turn | null = null
+  let bestCompletedAt = 0
+  for (const turn of turns) {
+    if (turn.status === 'inProgress') continue
+    if (turn.completedAt === null) continue
+    if (turn.completedAt <= lastSeen) continue
+    if (best === null || turn.completedAt > bestCompletedAt) {
+      best = turn
+      bestCompletedAt = turn.completedAt
+    }
+  }
+  if (best === null) return null
+  // Match `subscribeTurnCollection`'s synthesis convention so downstream
+  // `turnNotificationToResult` reads the same shape regardless of source.
+  const itemsView: TurnItemsView = best.items.length > 0 ? 'full' : 'notLoaded'
+  return {
+    threadId,
+    turn: { ...best, itemsView },
+  }
 }
 
 export function turnNotificationToResult(completed: TurnCompletedNotification): TurnResult {
@@ -238,7 +299,14 @@ function formatFirstTurn(turn: TurnResult): TmResult {
     case 'failed':
       return { code: 1, stdout: '', stderr: `tm: turn failed: ${turn.message}\n` }
     case 'timed-out':
-      return { code: 1, stdout: '', stderr: `tm: turn timed out after ${turn.elapsedMs}ms\n` }
+      return {
+        code: EXIT_SYNC_WAIT_EXPIRED,
+        stdout: '',
+        stderr:
+          `tm: sync wait expired after ${turn.elapsedMs}ms (the codex daemon ` +
+          `did not return a Turn within the window; it is still running). ` +
+          `exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
+      }
     case 'not-supported':
       return { code: 0, stdout: '', stderr: `  not supported: ${turn.reason}\n` }
     case 'no-op':
@@ -574,12 +642,50 @@ export class CodexEngine implements Engine {
         threadId,
         persistExtendedHistory: false,
       })
+      // Order matters: subscribe BEFORE issuing thread/read, so a turn that
+      // completes between the read response and the subscription setup is
+      // not dropped (subscribeTurnCollection registers a notification
+      // handler immediately; lateInbounds buffer until awaitTurn fires).
       const collector = subscribeTurnCollection(client, threadId)
+      const lastSeen = readDaemonState(req.name)?.lastSeen ?? 0
+      const readPromise = client.request<'thread/read', ThreadReadResponse>('thread/read', {
+        threadId,
+        includeTurns: true,
+      })
+      // Race the live subscription against the backfill read. If a turn
+      // completed in [send-timeout, wait-subscribe], the read finds it
+      // and resolves first; otherwise the read returns no candidate and
+      // we hand off to the collector (which may already have a live
+      // event cached from notifications that arrived during the read).
+      // The 124 contract — "still running, re-collect with tm wait" —
+      // now actually holds for Codex: the second wait recovers the
+      // in-window completion. If the wall-clock --timeout fires before
+      // the read RPC returns, control still reaches `isTimedOut(completed)`
+      // and the caller gets the documented 124; the next `tm wait`
+      // catches the completion via the same backfill path.
+      //
+      // A thread/read RPC error is non-fatal here: the live subscription
+      // is the original (pre-backfill) source of truth, and a snapshot
+      // failure should not turn a healthy wait into a failed verb. Swallow
+      // the rejection and fall through to the collector.
+      const backfillRace: Promise<TurnCompletedNotification> = readPromise.then(
+        (read) => {
+          const backfill = pickBackfillTurn(read.thread.turns, lastSeen, threadId)
+          if (backfill !== null) return backfill
+          return collector.awaitTurn()
+        },
+        () => collector.awaitTurn(),
+      )
       const completed = await withTimeout(
-        collector.awaitTurn(),
+        Promise.race([collector.awaitTurn(), backfillRace]),
         req.timeoutMs,
       )
-      if (isTimedOut(completed)) return { kind: 'timed-out', elapsedMs: req.timeoutMs ?? 0 }
+      if (isTimedOut(completed)) {
+        // Swallow the readPromise rejection (if any) so the WS close in
+        // `finally` does not race with an unhandled rejection.
+        readPromise.catch(() => {})
+        return { kind: 'timed-out', elapsedMs: req.timeoutMs ?? 0 }
+      }
       touchLastSeen(req.name)
       return turnNotificationToResult(completed)
     } catch (e) {

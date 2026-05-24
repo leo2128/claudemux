@@ -20,6 +20,16 @@ Run `tm spawn --help` / `tm send --help` for the full flag/output contract. The 
 
 `tm spawn --prompt` and `tm send` (default mode) both block until the teammate's next Stop hook fires (`--timeout 600` cap). That is potentially minutes. **Every such call MUST run with `run_in_background: true` on the Bash tool** so the dispatcher stays free to handle other work; the harness fires a task-notification when the verb returns, with the reply text already in stdout. Foreground waits block the dispatcher end-to-end for nothing — there is no upside.
 
+## Three exit codes — `124` is NOT a failure
+
+Both verbs distinguish three outcomes:
+
+- **`0`** — the reply landed within `--timeout`; stdout is the reply.
+- **`124`** — sync wait expired, the teammate is **still running**. The first turn may finish moments later. **Do not respawn** — the teammate name is still taken, and a fresh `tm spawn` would just collide and report `already exists`. Collect the late reply with `tm wait <repo>` (run in background, same notification flow), or peek with `tm status <repo>`. This is the spurious-error class that used to look like "failure exit 1" before the exit-code split.
+- **`1`** — true failure: no tmux session, sid marker missing, sendKeys broke, repo path not under the dispatcher dir. The teammate is gone or never started; respawn is correct here.
+
+The `tm spawn --prompt` path inherits these from its inner `tm send`. The stderr line on `124` always names the verb to retry with (`tm wait <repo>`); read it before deciding what to do.
+
 Fire-and-forget is no longer a first-class CLI option. The two historical use cases are handled differently now: `/clear` before `tm kill` is redundant (kill already clears the on-disk markers); slash-command fan-out (e.g. `/reload-plugins`) is handled internally by `tm reload`. External-actor-driven turns (Remote Control web UI, mobile, cron) are collected with `tm wait --fresh`, since there is no `tm send --no-wait` to drive them.
 
 ## What `tm spawn` sets up under the hood

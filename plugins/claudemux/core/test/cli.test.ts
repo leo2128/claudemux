@@ -444,7 +444,7 @@ describe('native dispatch', () => {
     }
   })
 
-  test('codex spawn --prompt returns the first-turn timeout instead of reporting success', async () => {
+  test('codex spawn --prompt returns the first-turn sync-wait expiry instead of reporting success', async () => {
     const name = `codex-timeout-${Date.now()}`
     const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
     const registry = new EngineRegistry()
@@ -457,10 +457,15 @@ describe('native dispatch', () => {
         ['spawn', name, '--engine', 'codex', '--prompt', 'slow', '--timeout', '0'],
         fakeEnv({ dispatcherDir, engines: registry }),
       )
-      expect(result.code).toBe(1)
+      // 124 = EXIT_SYNC_WAIT_EXPIRED: the timer elapsed but the codex daemon is
+      // still alive. Distinct from 1 (true failure) so the dispatcher can keep
+      // tailing the same teammate instead of respawning into a collision.
+      expect(result.code).toBe(124)
       expect(result.stdout).toBe('')
       expect(result.stderr).toMatch(new RegExp(`^spawned: ${name} \\(pid=\\d+, socket=.*\\)\\n`))
-      expect(result.stderr).toContain('tm: turn timed out after 0ms\n')
+      expect(result.stderr).toContain('tm: sync wait expired after 0ms')
+      expect(result.stderr).toContain('still running')
+      expect(result.stderr).toContain('exit 124')
     } finally {
       if (savedDelay === undefined) delete process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS']
       else process.env['CODEX_FAKE_TURN_COMPLETE_DELAY_MS'] = savedDelay

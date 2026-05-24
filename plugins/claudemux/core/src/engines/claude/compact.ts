@@ -1,14 +1,16 @@
 /**
  * `tm compact` — send `/compact` and verify PostCompact fired. Reports
- * the one-line `compacted` on stdout when it did. Two failure modes,
- * both exit 1:
+ * the one-line `compacted` on stdout when it did. Two non-success modes
+ * with different exit codes:
  *
  *   - Claude Code refuses with the "Not enough messages to compact"
  *     tool-result block. That path fires no Stop/PostCompact hook, so
  *     the visible pane is scanned alongside the idle-marker poll to
- *     detect it.
- *   - PostCompact never fires within `--timeout` — compaction hung or
- *     the hook is misconfigured.
+ *     detect it. Exit 1 — `/compact` rejected and won't proceed.
+ *   - PostCompact never fires within `--timeout` — compaction may still
+ *     be running. Exit `EXIT_SYNC_WAIT_EXPIRED` (124) to mark this as
+ *     "sync wait expired, teammate still running", distinct from a true
+ *     failure (no session, sid missing) which keeps exit 1.
  */
 
 import { existsSync } from 'node:fs'
@@ -18,8 +20,9 @@ import { resolveSidOrDie } from './idle'
 import { idleMarkerFor } from './persistence'
 import { die, requireSession, resolvePaneTarget } from './tmux'
 import { isNonNegativeInteger, nowSec, sleepMs } from './clock'
+import { probeStillAlive } from './wait-signals'
 import type { ClaudeVerbEnv } from './env'
-import type { TmResult } from '../../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 
 /** Parsed arg vector for `tm compact`. */
 export interface CompactArgs {
@@ -119,13 +122,22 @@ export async function claudeCompact(args: readonly string[], env: ClaudeVerbEnv)
     }
     await sleepMs(3000)
   }
+  // Same re-probe pattern as `send.ts` / `wait.ts`: 124 means "still
+  // running, compact may yet finish — re-collect with `tm wait`." If the
+  // tmux session or sid file vanished mid-wait, that promise is false and
+  // returning 124 would deadlock the dispatcher into never respawning.
+  const dead = await probeStillAlive(repo, env.runTmux)
+  if (dead !== null) {
+    return { ...dead, stderr: stderr + dead.stderr }
+  }
   return {
-    code: 1,
+    code: EXIT_SYNC_WAIT_EXPIRED,
     stdout: '',
     stderr:
       stderr +
-      `tm compact: ${repo} did not signal PostCompact within ${timeout}s — ` +
-      'compaction may still be running, or the Stop hook is misconfigured. ' +
-      `Check 'tm status ${repo}' and ${marker}.\n`,
+      `tm compact: sync wait expired after ${timeout}s on ${repo} ` +
+      '(PostCompact never fired; compaction may still be running, or the ' +
+      `Stop hook is misconfigured). Check 'tm status ${repo}' and ${marker}. ` +
+      `exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
   }
 }

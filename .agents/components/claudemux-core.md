@@ -104,7 +104,7 @@ single-purpose; routing, verb code, and process wiring each have their own home.
 | `identity/name.ts` | `validateTeammateName` — single-segment + nested-name (`flow/flow-1`) validator. Rejects `__` only when the name also contains `/` (the one case where the `/` → `__` tmux encoding would round-trip ambiguously); legacy flat names like `flow__1` remain reachable. |
 | `identity/router.ts` | `ProductionTeammateRouter` reads the identity JSON; `LegacyClaudeTmuxRouter` falls back to a tmux session probe for Claude teammates that predate the base JSON record; `CompositeTeammateRouter` chains them. |
 | `proc.ts` | `spawnCapture` — the `node:child_process` spawn primitive every shell-out backend is built on. |
-| `tm.ts` | `TmResult` / `TmRunOptions` types, and `resolveTmBinary` — the live-teammate harness's seam for locating the user-installed `tm` PATH entry (honors `CLAUDEMUX_TM`). |
+| `tm.ts` | `TmResult` / `TmRunOptions` types, the `EXIT_SYNC_WAIT_EXPIRED` constant (`124`, GNU `timeout(1)` convention) every wait-bearing verb returns when its `--timeout` elapses without the teammate dying, and `resolveTmBinary` — the live-teammate harness's seam for locating the user-installed `tm` PATH entry (honors `CLAUDEMUX_TM`). |
 | `tmux.ts` | The `tmux` backend — `runTmux`, used by every verb that queries tmux. |
 | `column.ts` | The `column` backend — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs. |
 | `grep.ts` | The `grep` backend — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |

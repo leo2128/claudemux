@@ -10,7 +10,9 @@ This file is also the authoritative writeup of the idle/.last hook machinery —
 tm wait <repo> [--fresh] [--pane-quiet] [--timeout N]
 ```
 
-Blocks until the teammate's next Stop hook fires, then prints the reply to stdout — same output contract as `tm send` (including the post-turn ctx echo to stderr).
+Blocks until the teammate's next Stop hook fires, then prints the reply to stdout — same output contract as `tm send` (including the post-turn ctx echo to stderr), and the same exit-code split: `0` reply landed, `124` sync wait expired but the teammate is still running (just re-run `tm wait`; the marker for the next Stop will arrive eventually), `1` true failure.
+
+On Codex teammates, `tm wait` runs `thread/read` (with `includeTurns: true`) alongside the live notification subscription and races the two. If a turn completed in the gap between a previous `tm send` timing out (124) and the new wait subscribing, the snapshot finds it and the wait resolves with that turn instead of the next one — so the 124 → `tm wait` recovery promise actually holds for Codex, not just for Claude.
 
 **Always pass `--fresh`** for passive observation. Without it, the idle marker from the *previous* Stop is still on disk and `tm wait` returns instantly. `--fresh` clears the idle/.last/.busy baseline up front so the wait targets the NEXT Stop. `tm send` does this baseline-reset internally before sending; passive observers have to ask for it explicitly.
 

@@ -14,12 +14,12 @@
  */
 
 import { sendKeys } from './keys'
-import { waitIdleSignal, waitPaneQuiet } from './wait-signals'
+import { probeStillAlive, waitIdleSignal, waitPaneQuiet } from './wait-signals'
 import { echoCtxToStderr, printLastOrEmpty } from './post-turn'
 import { die } from './tmux'
 import { isNonNegativeInteger } from './clock'
 import type { ClaudeVerbEnv } from './env'
-import type { TmResult } from '../../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 
 /** Parsed arg vector for `tm send`. */
 export interface SendArgs {
@@ -131,13 +131,24 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
     : await waitIdleSignal(repo, timeoutSec, false, env.runTmux)
   if ('code' in verdict) return verdict
   if (!verdict.ok) {
+    // Re-probe at the timeout moment: a teammate that died mid-wait must
+    // NOT be reported as "still running" with code 124, or the dispatcher's
+    // bg classifier will (correctly per the documented 124 contract)
+    // decide not to respawn and silently wait forever on a corpse. Only
+    // promise 124 ("still running") when the session + sid are still there.
+    const dead = await probeStillAlive(repo, env.runTmux)
+    if (dead !== null) {
+      return { ...dead, stderr: sentResult.stderr + dead.stderr }
+    }
     const kind = paneQuiet ? 'pane-quiet' : 'Stop hook'
     return {
-      code: 1,
+      code: EXIT_SYNC_WAIT_EXPIRED,
       stdout: printLastOrEmpty(repo),
       stderr:
         sentResult.stderr +
-        `tm send: timed out after ${timeoutSec}s waiting for ${kind} on ${repo}\n`,
+        `tm send: sync wait expired after ${timeoutSec}s on ${repo} ` +
+        `(no ${kind} fired; the teammate is still running — tail with ` +
+        `'tm wait ${repo}' or check 'tm status ${repo}'). exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
     }
   }
 

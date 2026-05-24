@@ -20,12 +20,12 @@ Sends `/compact` to the teammate, waits for the **PostCompact** hook to fire (to
 
 Run `tm compact --help` for full flag/output contract.
 
-## Two non-success modes (both exit 1)
+## Two non-success modes (different exit codes)
 
-| Mode | What happened | How `tm compact` detects it |
-|---|---|---|
-| `"Not enough messages to compact"` | Transcript too short — Claude Code refuses up front | That error fires NO hook (won't satisfy the idle-marker poll), so the pane is scanned alongside the marker poll. On match, exits 1 immediately instead of hanging to `--timeout`. |
-| PostCompact never fires within `--timeout` | Compaction is hung, or the Stop hook is misconfigured | Falls through to the timeout cap and exits 1 with a stderr warning. |
+| Mode | Exit | What happened | How `tm compact` detects it |
+|---|---|---|---|
+| `"Not enough messages to compact"` | `1` | Transcript too short — Claude Code refuses up front | That error fires NO hook (won't satisfy the idle-marker poll), so the pane is scanned alongside the marker poll. On match, exits 1 immediately instead of hanging to `--timeout`. A true failure: `/compact` won't proceed. |
+| PostCompact never fires within `--timeout` | `124` | Compaction may still be running, or the Stop hook is misconfigured | Falls through to the timeout cap and exits `124` (sync wait expired, teammate still alive) — same semantics as `tm send` / `tm wait` hitting `--timeout`. Don't respawn or kill on this code; the compaction is likely just taking longer than the cap. Re-run `tm wait <repo>` to keep watching, or check `tm status <repo>` to confirm the pane is still moving. |
 
 The "Not enough messages" detection is the reason `tm compact` exists as its own verb instead of being a thin wrapper over `tm send <repo> --prompt /compact` — the wrapper would hang to 600 s on the transcript-too-short case (no hook, no error pane scan).
 

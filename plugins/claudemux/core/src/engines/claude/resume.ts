@@ -123,7 +123,10 @@ export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv):
   }
 
   if (sid === '') {
-    return claudeContinue(repo, { task, prompt, hasPrompt }, env)
+    // `tm resume` does not expose `--timeout` today; pass `null` so the
+    // inner `tm send` handoff uses its default (1800s). When resume grows
+    // its own `--timeout` surface, this is the wire to thread it through.
+    return claudeContinue(repo, { task, prompt, hasPrompt, timeout: null }, env)
   }
 
   const projectDir = projectDirForRepo(repo, env)

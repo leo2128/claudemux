@@ -33,7 +33,7 @@ import {
 } from './persistence'
 import { join } from 'node:path'
 import type { ClaudeVerbEnv } from './env'
-import type { TmResult } from '../../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 
 /** Parsed arg vector for `tm spawn`. */
 export interface SpawnArgs {
@@ -52,6 +52,14 @@ interface ClaudeLaunchArgs {
   readonly task: string
   readonly prompt: string
   readonly hasPrompt: boolean
+  /**
+   * Caller-supplied `--timeout` (seconds, decimal string) for the inner
+   * `tm send` handoff on the `--prompt` sync path. `null` means "use the
+   * `tm send` default" (1800s). MUST be honored or `tm spawn --prompt
+   * --timeout N` silently waits 1800s and the dispatcher's 124 classifier
+   * never fires inside the window it was scheduled against.
+   */
+  readonly timeout: string | null
 }
 
 /**
@@ -174,6 +182,7 @@ export async function claudeSpawn(
     task: parsed.task,
     prompt: parsed.prompt,
     hasPrompt: parsed.hasPrompt,
+    timeout: parsed.timeout,
   }, env)
 }
 
@@ -183,6 +192,7 @@ export async function claudeContinue(
     readonly task: string
     readonly prompt: string
     readonly hasPrompt: boolean
+    readonly timeout: string | null
   },
   env: ClaudeVerbEnv,
 ): Promise<TmResult> {
@@ -193,11 +203,12 @@ export async function claudeContinue(
     task: opts.task,
     prompt: opts.prompt,
     hasPrompt: opts.hasPrompt,
+    timeout: opts.timeout,
   }, env)
 }
 
 async function claudeLaunch(req: ClaudeLaunchArgs, env: ClaudeVerbEnv): Promise<TmResult> {
-  const { repo, resumeSid, continueLatest, task, prompt, hasPrompt } = req
+  const { repo, resumeSid, continueLatest, task, prompt, hasPrompt, timeout } = req
   const path = join(env.dispatcherDir, repo)
   if (!isDirectory(path)) return dieRepoNotFound('spawn', repo, path, env.dispatcherDir)
 
@@ -358,7 +369,8 @@ async function claudeLaunch(req: ClaudeLaunchArgs, env: ClaudeVerbEnv): Promise<
       "(no SessionStart hook fire — the plugin's on-session-start.sh may not " +
       'be loaded, or claude failed to boot). Continuing, but if the REPL is ' +
       "actually dead, a subsequent sync 'tm send' / 'tm spawn --prompt' / " +
-      "'tm compact' will block until its --timeout expires (default 1800s). " +
+      "'tm compact' will block until its --timeout expires (default 1800s) " +
+      `and then exit ${EXIT_SYNC_WAIT_EXPIRED} (sync wait expired). ` +
       `'tm status ${repo}' shows the live pane if you need to verify.\n`
   }
 
@@ -370,8 +382,14 @@ async function claudeLaunch(req: ClaudeLaunchArgs, env: ClaudeVerbEnv): Promise<
   // stdout (and its `ctx:` stderr echo) become the spawn verb's
   // stdout/stderr so the dispatcher sees one round-trip's worth of
   // output for the whole sequence.
+  //
+  // `--timeout` MUST ride along — without it, `tm spawn --prompt --timeout N`
+  // silently waits the 1800s send default and the dispatcher's 124 classifier
+  // never fires inside the window it was scheduled against. The Codex engine
+  // already propagates the same field; this keeps the two engines symmetric.
   await sleepMs(3000)
   const sendArgs: string[] = [repo, '--prompt', prompt]
+  if (timeout !== null) sendArgs.push('--timeout', timeout)
   const sendResult = await claudeSend(sendArgs, env)
   return {
     code: sendResult.code,

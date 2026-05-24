@@ -25,7 +25,7 @@ import type {
   TextResult,
   TurnResult,
 } from '../engines/types'
-import type { TmResult } from '../tm'
+import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../tm'
 
 function rawTmResult(result: RawTmResult): TmResult | null {
   return result.tmResult ?? null
@@ -99,7 +99,14 @@ export function formatTurn(turn: TurnResult): TmResult {
     case 'failed':
       return { code: 1, stdout: '', stderr: `tm: turn failed: ${turn.message}\n` }
     case 'timed-out':
-      return { code: 1, stdout: '', stderr: `tm: turn timed out after ${turn.elapsedMs}ms\n` }
+      return {
+        code: EXIT_SYNC_WAIT_EXPIRED,
+        stdout: '',
+        stderr:
+          `tm: sync wait expired after ${turn.elapsedMs}ms (the teammate did ` +
+          `not return a Turn within the window; it is still running). ` +
+          `exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
+      }
     case 'not-supported':
       return { code: 0, stdout: '', stderr: `  not supported: ${turn.reason}\n` }
     case 'no-op':

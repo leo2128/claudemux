@@ -16,6 +16,57 @@ import type { TmResult } from '../../tm'
 import type { TmuxRunner } from '../../tmux'
 
 /**
+ * Re-probe a teammate's liveness at the moment a sync wait is about to
+ * declare 124 ("expired, still running"). Two failure modes count as DEAD
+ * here — the dispatcher MUST distinguish "TM dropped during the wait" from
+ * "TM is alive and slow":
+ *
+ *  - The tmux session is gone (manual `tm kill`, crash, terminal closed).
+ *  - The `.sid` file is gone (a fresh `tm spawn` would have rewritten it;
+ *    its absence proves the teammate's bookkeeping was torn down).
+ *
+ * Returns `null` when the teammate looks alive (the caller proceeds to its
+ * 124 path), or a `TmResult` with exit 1 + a death-flavored stderr line
+ * the caller can prepend to its own context. The 124 contract is "still
+ * running, re-collect with `tm wait`"; promising that on a dead teammate
+ * is exactly the bg-classifier failure mode this whole PR exists to fix,
+ * just from the opposite direction — so every wait-expiry path runs this
+ * probe before the 124 branch.
+ */
+export async function probeStillAlive(
+  name: TeammateName,
+  runTmux: TmuxRunner,
+): Promise<TmResult | null> {
+  const sessionMissing = await requireSession(name, runTmux)
+  if (sessionMissing !== null) {
+    return {
+      code: 1,
+      stdout: '',
+      stderr:
+        `tm: teammate '${name}' died during the wait — tmux session is gone. ` +
+        `Respawn with 'tm spawn ${name}' (or 'tm resume') once you have a ` +
+        `target. Original wait-expiry: ` +
+        sessionMissing.stderr.replace(/^tm: /, '').trimEnd() +
+        '\n',
+    }
+  }
+  const sidR = resolveSidOrDie(name)
+  if ('error' in sidR) {
+    return {
+      code: 1,
+      stdout: '',
+      stderr:
+        `tm: teammate '${name}' died during the wait — sid marker disappeared ` +
+        `(typically 'tm kill' run mid-wait). Respawn with 'tm spawn ${name}'. ` +
+        `Original wait-expiry: ` +
+        sidR.error.stderr.replace(/^tm: /, '').trimEnd() +
+        '\n',
+    }
+  }
+  return null
+}
+
+/**
  * `tm`'s `_wait_idle_signal`: block until `/tmp/claude-idle/<sid>`
  * exists, or `timeoutSec` elapses. Returns the resolved `TmResult` on
  * early-out (no-such-session / no-sid), or `{ ok }` once the loop has

@@ -64,10 +64,12 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
 `,
   states: `tm states
 
-      One-line fleet snapshot: REPO, SID (first 8 chars), BUSY (yes
-      if the .busy file from the on-busy hook is present), LAST
-      (size + age of <sid>.last), PREVIEW (first 50 chars of last
-      reply). Use to see what every teammate is doing at a glance.
+      One-line fleet snapshot: REPO, SID / thread id (first 8
+      chars), BUSY, LAST (size + age of the last assistant reply),
+      PREVIEW (first 50 chars of that reply). Claude reads
+      /tmp/claude-idle/<sid>.last; Codex reads the current thread's
+      rollout JSONL. Use to see what every teammate is doing at a
+      glance.
 `,
   spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."]
 

@@ -128,7 +128,9 @@ persistence). A Codex teammate uses it directly — no tmux, no screen-scraping.
   BUSY is true when the thread is active, a `tm` process has borrowed the
   daemon for an in-flight turn, or the rollout file was modified inside the
   short activity window; otherwise an alive daemon is idle, and an unreachable
-  daemon is unknown.
+  daemon is unknown. In the states table, Codex LAST / PREVIEW come from the
+  current thread's latest assistant text in the rollout JSONL, matching Claude's
+  `.last`-backed row semantics.
 - **Durable inspection.** `tm last` reads the latest assistant final answer or
   commentary from the current thread's rollout JSONL. `tm ctx` reads the latest
   token-count event from the same rollout file and reports used tokens,

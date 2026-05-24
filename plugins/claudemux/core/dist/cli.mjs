@@ -3810,10 +3810,12 @@ var HELP_TEXTS = {
 `,
   states: `tm states
 
-      One-line fleet snapshot: REPO, SID (first 8 chars), BUSY (yes
-      if the .busy file from the on-busy hook is present), LAST
-      (size + age of <sid>.last), PREVIEW (first 50 chars of last
-      reply). Use to see what every teammate is doing at a glance.
+      One-line fleet snapshot: REPO, SID / thread id (first 8
+      chars), BUSY, LAST (size + age of the last assistant reply),
+      PREVIEW (first 50 chars of that reply). Claude reads
+      /tmp/claude-idle/<sid>.last; Codex reads the current thread's
+      rollout JSONL. Use to see what every teammate is doing at a
+      glance.
 `,
   spawn: `tm spawn <repo> [--task <slug>] [--prompt "..."]
 
@@ -6668,6 +6670,9 @@ var ClaudeEngine = class {
   }
 };
 
+// src/engines/codex/engine.ts
+import { Buffer as Buffer3 } from "node:buffer";
+
 // src/engines/codex/history.ts
 import { Buffer as Buffer2 } from "node:buffer";
 import {
@@ -7573,19 +7578,31 @@ function codexDaemonState(name, state = readDaemonState(name), runtime = null, r
   if (runtime?.threadState === "unknown" || runtime?.socketReachable === "no") return "unknown";
   return "idle";
 }
+function codexPreview(text) {
+  const preview = [...text.split("\n")[0] ?? ""].filter((ch) => (ch.codePointAt(0) ?? 0) > 31).slice(0, 50).join("");
+  return preview.length > 0 ? preview : "(no first line)";
+}
+function codexLastTextCells(rollout, nowSec3) {
+  if (rollout?.lastAssistantText === null || rollout?.lastAssistantText === void 0) return null;
+  const age = Math.max(0, nowSec3 - Math.floor(rollout.mtimeMs / 1e3));
+  return {
+    last: `${Buffer3.byteLength(rollout.lastAssistantText, "utf8")}B/${fmtAge4(age)}`,
+    preview: codexPreview(rollout.lastAssistantText)
+  };
+}
 function codexListExtras(name, nowSec3, state, daemonState, rollout, runtime) {
   const pid = state?.pid === void 0 ? "" : String(state.pid);
   const thread = state?.threadId ?? "";
   const rolloutSeen = rollout === null ? null : Math.floor(rollout.mtimeMs / 1e3);
+  const lastText = codexLastTextCells(rollout, nowSec3);
   const recordedSeen = state?.lastSeen ?? null;
   const activitySeen = recordedSeen === null ? rolloutSeen : rolloutSeen === null ? recordedSeen : Math.max(recordedSeen, rolloutSeen);
   const lastSeen = activitySeen === null ? "" : String(activitySeen);
-  const lastSeenAge = activitySeen === null ? "-" : fmtAge4(Math.max(0, nowSec3 - activitySeen));
   return {
     sidShort: thread.length === 0 ? "codex" : thread.slice(0, 8),
     busy: daemonState === "busy" ? "yes" : daemonState === "idle" ? "no" : "?",
-    last: lastSeenAge,
-    preview: pid.length === 0 ? "codex daemon" : `pid=${pid}`,
+    last: lastText?.last ?? "-",
+    preview: lastText?.preview ?? "-",
     pid,
     socket: state?.socketPath ?? "",
     socketReachable: runtime?.socketReachable ?? "unknown",

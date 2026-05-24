@@ -7,6 +7,7 @@
  * Phase 2b exposes to the verb layer.
  */
 
+import { Buffer } from 'node:buffer'
 import {
   existsSync,
   mkdirSync,
@@ -263,9 +264,9 @@ describe('CodexEngine — core lifecycle', () => {
     expect(row?.extras).toMatchObject({
       sidShort: 'thread-1',
       busy: 'no',
-      preview: expect.stringMatching(/^pid=\d+$/),
+      last: '-',
+      preview: '-',
     })
-    expect(row?.extras['last']).toMatch(/^\d+s$/)
     writeFileSync(codexBorrowLockFile(name), `${process.pid}\n`)
     const busyRow = (await engine.list(ctx())).find((candidate) => candidate.name === name)
     expect(busyRow).toMatchObject({ state: 'busy', extras: { busy: 'yes' } })
@@ -545,6 +546,41 @@ describe('CodexEngine — core lifecycle', () => {
     const idle = (await engine.list({ now: () => nowMs, env: process.env }))
       .find((row) => row.name === name)
     expect(idle).toMatchObject({ state: 'idle', extras: { busy: 'no' } })
+  })
+
+  test('list renders states LAST and PREVIEW from codex rollout last assistant text', async () => {
+    const name = nameUnder()
+    const threadId = '019e5f5f-2e57-7abc-8def-123456789ac5'
+    const nowMs = 1_800_000_000_000
+    const lastAssistant =
+      `abcdefghijklmnopqrstuvwxyz${String.fromCharCode(7)}ABCDEFGHIJKLMNOPQRSTUVWXYZ-extra\nsecond line`
+    writeDaemonFiles(name, threadId)
+    writeRollout(
+      threadId,
+      [
+        {
+          timestamp: '2026-05-24T00:00:02.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'agent_message',
+            message: lastAssistant,
+            phase: 'final_answer',
+          },
+        },
+      ],
+      nowMs - 10_000,
+    )
+
+    const row = (await engine.list({ now: () => nowMs, env: process.env }))
+      .find((candidate) => candidate.name === name)
+
+    expect(row).toMatchObject({
+      extras: {
+        last: `${Buffer.byteLength(lastAssistant, 'utf8')}B/10s`,
+        preview: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX',
+      },
+    })
+    expect(row?.extras['preview']).not.toContain('pid=')
   })
 
   test('list keeps busy when RPC thread status is idle but the rollout is fresh', async () => {

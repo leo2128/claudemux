@@ -7,6 +7,8 @@
  * this directory; the public surface is the shared `Engine` interface.
  */
 
+import { Buffer } from 'node:buffer'
+
 import type { Engine } from '../engine'
 import type {
   CompactRequest,
@@ -271,6 +273,26 @@ function codexDaemonState(
   return 'idle'
 }
 
+function codexPreview(text: string): string {
+  const preview = [...(text.split('\n')[0] ?? '')]
+    .filter((ch) => (ch.codePointAt(0) ?? 0) > 0x1f)
+    .slice(0, 50)
+    .join('')
+  return preview.length > 0 ? preview : '(no first line)'
+}
+
+function codexLastTextCells(
+  rollout: CodexRolloutSnapshot | null,
+  nowSec: number,
+): { readonly last: string; readonly preview: string } | null {
+  if (rollout?.lastAssistantText === null || rollout?.lastAssistantText === undefined) return null
+  const age = Math.max(0, nowSec - Math.floor(rollout.mtimeMs / 1000))
+  return {
+    last: `${Buffer.byteLength(rollout.lastAssistantText, 'utf8')}B/${fmtAge(age)}`,
+    preview: codexPreview(rollout.lastAssistantText),
+  }
+}
+
 function codexListExtras(
   name: string,
   nowSec: number,
@@ -282,16 +304,16 @@ function codexListExtras(
   const pid = state?.pid === undefined ? '' : String(state.pid)
   const thread = state?.threadId ?? ''
   const rolloutSeen = rollout === null ? null : Math.floor(rollout.mtimeMs / 1000)
+  const lastText = codexLastTextCells(rollout, nowSec)
   const recordedSeen = state?.lastSeen ?? null
   const activitySeen =
     recordedSeen === null ? rolloutSeen : rolloutSeen === null ? recordedSeen : Math.max(recordedSeen, rolloutSeen)
   const lastSeen = activitySeen === null ? '' : String(activitySeen)
-  const lastSeenAge = activitySeen === null ? '-' : fmtAge(Math.max(0, nowSec - activitySeen))
   return {
     sidShort: thread.length === 0 ? 'codex' : thread.slice(0, 8),
     busy: daemonState === 'busy' ? 'yes' : daemonState === 'idle' ? 'no' : '?',
-    last: lastSeenAge,
-    preview: pid.length === 0 ? 'codex daemon' : `pid=${pid}`,
+    last: lastText?.last ?? '-',
+    preview: lastText?.preview ?? '-',
     pid,
     socket: state?.socketPath ?? '',
     socketReachable: runtime?.socketReachable ?? 'unknown',

@@ -47,7 +47,9 @@ contracts they hold.
 > [`plugins/claudemux/core/src/engines/codex/engine.ts`](/plugins/claudemux/core/src/engines/codex/engine.ts).
 > `tm status`, `tm ls`, and `tm states` combine daemon registry health,
 > socket reachability, `thread/read` status when available, and recent
-> rollout writes. `tm last`, `tm ctx`, and `tm history` read Codex's
+> rollout writes; `tm states` renders LAST / PREVIEW from the current
+> thread's latest assistant text when the rollout is present. `tm last`,
+> `tm ctx`, and `tm history` read Codex's
 > append-only rollout JSONL files under `~/.codex/sessions/YYYY/MM/DD/`;
 > `tm history` filters them by recorded cwd and lists thread ids for
 > `tm resume`.

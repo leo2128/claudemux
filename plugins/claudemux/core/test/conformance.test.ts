@@ -109,6 +109,7 @@ let savedTmux: string | undefined
 let savedSessions: string | undefined
 let savedCapture: string | undefined
 let savedCodexRegistryRoot: string | undefined
+let savedCodexSessionsRoot: string | undefined
 let savedTz: string | undefined
 
 /**
@@ -172,6 +173,7 @@ beforeAll(() => {
   savedSessions = process.env.FAKE_TMUX_SESSIONS
   savedCapture = process.env.FAKE_TMUX_CAPTURE
   savedCodexRegistryRoot = process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT
+  savedCodexSessionsRoot = process.env.CLAUDEMUX_CODEX_SESSIONS_ROOT
 
   // Pin Date for the whole file — see FIXED_NOW above.
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -196,6 +198,7 @@ beforeAll(() => {
   process.env.FAKE_TMUX_SESSIONS = sessionsFile
   process.env.FAKE_TMUX_CAPTURE = captureFile
   process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT = join(scratchDir, 'codex-registry')
+  process.env.CLAUDEMUX_CODEX_SESSIONS_ROOT = join(scratchDir, 'codex-sessions')
 })
 
 afterAll(() => {
@@ -208,6 +211,8 @@ afterAll(() => {
   else process.env.FAKE_TMUX_CAPTURE = savedCapture
   if (savedCodexRegistryRoot === undefined) delete process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT
   else process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT = savedCodexRegistryRoot
+  if (savedCodexSessionsRoot === undefined) delete process.env.CLAUDEMUX_CODEX_SESSIONS_ROOT
+  else process.env.CLAUDEMUX_CODEX_SESSIONS_ROOT = savedCodexSessionsRoot
   if (savedTz === undefined) delete process.env.TZ
   else process.env.TZ = savedTz
   if (existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true })
@@ -218,6 +223,7 @@ afterEach(() => {
     if (existsSync(file)) rmSync(file, { force: true })
   }
   resetCodexRegistry()
+  resetCodexSessions()
 })
 
 /**
@@ -343,6 +349,18 @@ function resetCodexRegistry(): void {
   mkdirSync(root, { recursive: true })
 }
 
+function codexSessionsRoot(): string {
+  const root = process.env.CLAUDEMUX_CODEX_SESSIONS_ROOT
+  if (root === undefined) throw new Error('CLAUDEMUX_CODEX_SESSIONS_ROOT is not set')
+  return root
+}
+
+function resetCodexSessions(): void {
+  const root = codexSessionsRoot()
+  rmSync(root, { recursive: true, force: true })
+  mkdirSync(root, { recursive: true })
+}
+
 /** Seed a fake Codex daemon row without starting an app-server. */
 function writeCodexDaemon(
   name: string,
@@ -367,6 +385,23 @@ function writeCodexDaemon(
     }, null, 2)}\n`,
   )
   if (opts.borrowed === true) writeFileSync(codexBorrowLockFile(name), `${process.pid}\n`)
+}
+
+function writeCodexRollout(threadId: string, assistantText: string, ageSeconds = 10000): void {
+  const dir = join(codexSessionsRoot(), '2026', '05', '23')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `rollout-2026-05-23T12-00-00-${threadId}.jsonl`)
+  writeFileSync(file, `${JSON.stringify({
+    timestamp: '2026-05-23T12:00:00.000Z',
+    type: 'event_msg',
+    payload: {
+      type: 'agent_message',
+      message: assistantText,
+      phase: 'final_answer',
+    },
+  })}\n`)
+  const pinned = Math.floor(Date.now() / 1000) - ageSeconds
+  utimesSync(file, pinned, pinned)
 }
 
 /** Set the session list the fake `tmux ls` returns. */
@@ -1094,6 +1129,7 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             lastSeenAgeSec: 42,
             borrowed: true,
           })
+          writeCodexRollout('abcdef12-3456-7890-abcd-ef1234567890', 'codex row stays rich', 42)
           return { args: [] }
         },
       },

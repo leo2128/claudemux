@@ -67,6 +67,15 @@ import {
   sendAtFile,
   sidFile,
 } from '../src/paths'
+import {
+  codexBorrowLockFile,
+  codexLastSeenFile,
+  codexMetaFile,
+  codexPidFile,
+  codexStartedAtFile,
+  codexTeammateDir,
+  codexThreadFile,
+} from '../src/engines/codex/persistence'
 import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
@@ -208,6 +217,7 @@ afterEach(() => {
   for (const file of tmpFiles.splice(0)) {
     if (existsSync(file)) rmSync(file, { force: true })
   }
+  resetCodexRegistry()
 })
 
 /**
@@ -317,6 +327,46 @@ function sanitizeSnapshot(snap: FsSnapshot): FsSnapshot {
 function marker(path: string, content: string): void {
   writeFileSync(path, content)
   tmpFiles.push(path)
+}
+
+/** The per-suite codex registry root, isolated from the user's `/tmp`. */
+function codexRegistryRoot(): string {
+  const root = process.env.CLAUDEMUX_CODEX_REGISTRY_ROOT
+  if (root === undefined) throw new Error('CLAUDEMUX_CODEX_REGISTRY_ROOT is not set')
+  return root
+}
+
+/** Reset the fake Codex daemon registry between scenarios. */
+function resetCodexRegistry(): void {
+  const root = codexRegistryRoot()
+  rmSync(root, { recursive: true, force: true })
+  mkdirSync(root, { recursive: true })
+}
+
+/** Seed a fake Codex daemon row without starting an app-server. */
+function writeCodexDaemon(
+  name: string,
+  opts: { threadId?: string; lastSeenAgeSec?: number; borrowed?: boolean } = {},
+): void {
+  mkdirSync(codexTeammateDir(name), { recursive: true })
+  const nowSec = Math.floor(Date.now() / 1000)
+  writeFileSync(codexPidFile(name), '1\n')
+  writeFileSync(codexStartedAtFile(name), `${nowSec - 300}\n`)
+  if (opts.threadId !== undefined) writeFileSync(codexThreadFile(name), `${opts.threadId}\n`)
+  if (opts.lastSeenAgeSec !== undefined) {
+    writeFileSync(codexLastSeenFile(name), `${nowSec - opts.lastSeenAgeSec}\n`)
+  }
+  writeFileSync(
+    codexMetaFile(name),
+    `${JSON.stringify({
+      schema: 1,
+      name,
+      cwd: join(dispatcherDir, name),
+      displayName: null,
+      spawnedAt: nowSec - 300,
+    }, null, 2)}\n`,
+  )
+  if (opts.borrowed === true) writeFileSync(codexBorrowLockFile(name), '99999\n')
 }
 
 /** Set the session list the fake `tmux ls` returns. */
@@ -1027,6 +1077,23 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           setSessions(`${sessionLine(repo)}\n`)
           marker(sidFile(repo), `${sid}\n`)
           writeLastMarker(sid, 'a reply in the minutes bucket\n', 1830)
+          return { args: [] }
+        },
+      },
+      {
+        name: 'a mixed Claude and Codex fleet → both engines render rich rows',
+        setup: () => {
+          const claudeRepo = uniqueName()
+          const claudeSid = uniqueName()
+          const codexName = `codex-${currentRng().slice(0, 8)}`
+          setSessions(`${sessionLine(claudeRepo)}\n`)
+          marker(sidFile(claudeRepo), `${claudeSid}\n`)
+          writeLastMarker(claudeSid, 'claude row stays rich\n')
+          writeCodexDaemon(codexName, {
+            threadId: 'abcdef12-3456-7890-abcd-ef1234567890',
+            lastSeenAgeSec: 42,
+            borrowed: true,
+          })
           return { args: [] }
         },
       },

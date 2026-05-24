@@ -106,11 +106,8 @@ export async function codexSpawn(
 export async function codexSend(
   name: string,
   prompt: string,
-  opts: { readonly timeoutSec?: number | null; readonly noWait?: boolean; readonly engine?: Engine } = {},
+  opts: { readonly timeoutSec?: number | null; readonly engine?: Engine } = {},
 ): Promise<TmResult> {
-  if (opts.noWait === true) {
-    return die('tm send: --no-wait is not supported for codex teammates')
-  }
   const result = await resolveEngine(opts.engine).send(
     {
       name,

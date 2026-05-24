@@ -4889,6 +4889,9 @@ function daemonAlive(name) {
   if (state === null) return false;
   return isProcessAlive(state.pid);
 }
+function daemonBorrowed(name) {
+  return existsSync2(codexBorrowLockFile(name));
+}
 function listDaemons() {
   try {
     const root = codexRegistryRoot();
@@ -6796,6 +6799,33 @@ async function withTimeout(promise, timeoutMs) {
 function isTimedOut(value) {
   return typeof value === "object" && value !== null && value.timedOut === true;
 }
+function fmtAge3(age) {
+  if (age < 60) return `${age}s`;
+  if (age < 3600) return `${Math.floor(age / 60)}m`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h`;
+  return `${Math.floor(age / 86400)}d`;
+}
+function codexDaemonState(name, state = readDaemonState(name)) {
+  if (state === null || !isProcessAlive(state.pid)) return "unknown";
+  return daemonBorrowed(name) ? "busy" : "idle";
+}
+function codexListExtras(name, nowSec3, state) {
+  const pid = state?.pid === void 0 ? "" : String(state.pid);
+  const thread = state?.threadId ?? "";
+  const daemonState = codexDaemonState(name, state);
+  const lastSeen = state?.lastSeen === null || state?.lastSeen === void 0 ? "" : String(state.lastSeen);
+  const lastSeenAge = state?.lastSeen === null || state?.lastSeen === void 0 ? "-" : fmtAge3(Math.max(0, nowSec3 - state.lastSeen));
+  return {
+    sidShort: thread.length === 0 ? "codex" : thread.slice(0, 8),
+    busy: daemonState === "busy" ? "yes" : daemonState === "idle" ? "no" : "?",
+    last: lastSeenAge,
+    preview: pid.length === 0 ? "codex daemon" : `pid=${pid}`,
+    pid,
+    socket: state?.socketPath ?? "",
+    thread,
+    lastSeen
+  };
+}
 var CodexEngine = class {
   constructor(options = {}) {
     this.options = options;
@@ -6963,7 +6993,8 @@ var CodexEngine = class {
       return { kind: "failed", message: e instanceof Error ? e.message : String(e) };
     }
   }
-  async list(_ctx) {
+  async list(ctx) {
+    const nowSec3 = Math.floor(ctx.now() / 1e3);
     return listDaemons().map((name) => {
       const state = readDaemonState(name);
       const base = readBaseRecord(name);
@@ -6971,15 +7002,10 @@ var CodexEngine = class {
       return {
         name,
         engine: "codex",
-        state: state !== null && isProcessAlive(state.pid) ? "idle" : "unknown",
+        state: codexDaemonState(name, state),
         cwd: base?.cwd ?? meta?.cwd ?? "",
         displayName: base?.displayName ?? meta?.displayName ?? null,
-        extras: {
-          pid: state?.pid === void 0 ? "" : String(state.pid),
-          socket: state?.socketPath ?? "",
-          thread: state?.threadId ?? "",
-          lastSeen: state?.lastSeen === null || state?.lastSeen === void 0 ? "" : String(state.lastSeen)
-        }
+        extras: codexListExtras(name, nowSec3, state)
       };
     });
   }
@@ -6992,7 +7018,7 @@ var CodexEngine = class {
       kind: "present",
       name: req.name,
       engine: "codex",
-      state: state !== null && isProcessAlive(state.pid) ? "idle" : "unknown",
+      state: codexDaemonState(req.name, state),
       cwd: base?.cwd ?? meta?.cwd ?? "",
       pane: null,
       diagnostics: {
@@ -7394,9 +7420,6 @@ async function codexSpawn(name, opts = {}) {
   }
 }
 async function codexSend(name, prompt, opts = {}) {
-  if (opts.noWait === true) {
-    return die3("tm send: --no-wait is not supported for codex teammates");
-  }
   const result = await resolveEngine(opts.engine).send(
     {
       name,

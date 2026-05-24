@@ -7,7 +7,7 @@
  * Phase 2b exposes to the verb layer.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,7 +19,7 @@ import {
   readDaemonState,
   reapDaemon,
 } from '../src/engines/codex/supervisor'
-import { removeBaseRecord } from '../src/engines/codex/persistence'
+import { codexBorrowLockFile, removeBaseRecord } from '../src/engines/codex/persistence'
 import type { EngineContext } from '../src/engines/types'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -84,9 +84,20 @@ describe('CodexEngine — core lifecycle', () => {
 
     const listing = await engine.list(ctx())
     expect(listing.map((row) => row.name)).toContain(name)
+    const row = listing.find((candidate) => candidate.name === name)
+    expect(row?.extras).toMatchObject({
+      sidShort: 'thread-1',
+      busy: 'no',
+      preview: expect.stringMatching(/^pid=\d+$/),
+    })
+    expect(row?.extras['last']).toMatch(/^\d+s$/)
+    writeFileSync(codexBorrowLockFile(name), `${process.pid}\n`)
+    const busyRow = (await engine.list(ctx())).find((candidate) => candidate.name === name)
+    expect(busyRow).toMatchObject({ state: 'busy', extras: { busy: 'yes' } })
 
     const status = await engine.status({ name, lines: null }, ctx())
-    expect(status).toMatchObject({ kind: 'present', name, engine: 'codex', state: 'idle', cwd })
+    expect(status).toMatchObject({ kind: 'present', name, engine: 'codex', state: 'busy', cwd })
+    rmSync(codexBorrowLockFile(name), { force: true })
 
     const wait = await engine.wait({ name, recoverFor: null, timeoutMs: 10 }, ctx())
     expect(wait).toMatchObject({ kind: 'timed-out' })

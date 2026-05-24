@@ -51,6 +51,7 @@ import { runTurn, subscribeTurnCollection } from './events.js'
 import {
   CodexDaemonAlreadyAliveError,
   CodexDaemonSpawnInProgressError,
+  daemonBorrowed,
   daemonAlive,
   isProcessAlive,
   listDaemons,
@@ -159,6 +160,47 @@ function isTimedOut<T>(value: T | { timedOut: true }): value is { timedOut: true
     value !== null &&
     (value as { timedOut?: unknown }).timedOut === true
   )
+}
+
+function fmtAge(age: number): string {
+  if (age < 60) return `${age}s`
+  if (age < 3600) return `${Math.floor(age / 60)}m`
+  if (age < 86400) return `${Math.floor(age / 3600)}h`
+  return `${Math.floor(age / 86400)}d`
+}
+
+function codexDaemonState(
+  name: string,
+  state: ReturnType<typeof readDaemonState> = readDaemonState(name),
+): 'idle' | 'busy' | 'unknown' {
+  if (state === null || !isProcessAlive(state.pid)) return 'unknown'
+  return daemonBorrowed(name) ? 'busy' : 'idle'
+}
+
+function codexListExtras(
+  name: string,
+  nowSec: number,
+  state: ReturnType<typeof readDaemonState>,
+): Readonly<Record<string, string>> {
+  const pid = state?.pid === undefined ? '' : String(state.pid)
+  const thread = state?.threadId ?? ''
+  const daemonState = codexDaemonState(name, state)
+  const lastSeen =
+    state?.lastSeen === null || state?.lastSeen === undefined ? '' : String(state.lastSeen)
+  const lastSeenAge =
+    state?.lastSeen === null || state?.lastSeen === undefined
+      ? '-'
+      : fmtAge(Math.max(0, nowSec - state.lastSeen))
+  return {
+    sidShort: thread.length === 0 ? 'codex' : thread.slice(0, 8),
+    busy: daemonState === 'busy' ? 'yes' : daemonState === 'idle' ? 'no' : '?',
+    last: lastSeenAge,
+    preview: pid.length === 0 ? 'codex daemon' : `pid=${pid}`,
+    pid,
+    socket: state?.socketPath ?? '',
+    thread,
+    lastSeen,
+  }
 }
 
 export class CodexEngine implements Engine {
@@ -339,7 +381,8 @@ export class CodexEngine implements Engine {
     }
   }
 
-  async list(_ctx: EngineContext): Promise<readonly TeammateListing[]> {
+  async list(ctx: EngineContext): Promise<readonly TeammateListing[]> {
+    const nowSec = Math.floor(ctx.now() / 1000)
     return listDaemons().map((name) => {
       const state = readDaemonState(name)
       const base = readBaseRecord(name)
@@ -347,15 +390,10 @@ export class CodexEngine implements Engine {
       return {
         name,
         engine: 'codex',
-        state: state !== null && isProcessAlive(state.pid) ? 'idle' : 'unknown',
+        state: codexDaemonState(name, state),
         cwd: base?.cwd ?? meta?.cwd ?? '',
         displayName: base?.displayName ?? meta?.displayName ?? null,
-        extras: {
-          pid: state?.pid === undefined ? '' : String(state.pid),
-          socket: state?.socketPath ?? '',
-          thread: state?.threadId ?? '',
-          lastSeen: state?.lastSeen === null || state?.lastSeen === undefined ? '' : String(state.lastSeen),
-        },
+        extras: codexListExtras(name, nowSec, state),
       }
     })
   }
@@ -369,7 +407,7 @@ export class CodexEngine implements Engine {
       kind: 'present',
       name: req.name,
       engine: 'codex',
-      state: state !== null && isProcessAlive(state.pid) ? 'idle' : 'unknown',
+      state: codexDaemonState(req.name, state),
       cwd: base?.cwd ?? meta?.cwd ?? '',
       pane: null,
       diagnostics: {

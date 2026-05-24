@@ -227,6 +227,11 @@ export function daemonAlive(name: string): boolean {
   return isProcessAlive(state.pid)
 }
 
+/** Does this daemon registry entry currently carry an exclusive borrow lock? */
+export function daemonBorrowed(name: string): boolean {
+  return existsSync(codexBorrowLockFile(name))
+}
+
 /** Names of every registry entry, alive or stale. */
 export function listDaemons(): string[] {
   try {

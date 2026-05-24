@@ -1,17 +1,19 @@
 /**
  * Production engine wiring for one `tm` process.
  *
- * Phase 2b registers the Codex engine here. Phase 2a owns the Claude
- * engine implementation and will replace the TODO with the concrete
- * registration when that branch lands.
+ * Phase 2a registers the Claude engine; Phase 2b registers the Codex
+ * engine. Keep both registrations in this one invocation-scoped helper so
+ * verb defaults see the full fleet.
  */
 
+import type { NativeEnv } from '../native'
+import { ClaudeEngine } from './claude/claude-engine'
 import { CodexEngine } from './codex/engine'
 import { EngineRegistry } from './registry'
 
-export function productionRegistry(): EngineRegistry {
+export function productionRegistry(env: NativeEnv): EngineRegistry {
   const registry = new EngineRegistry()
+  registry.register(new ClaudeEngine(env))
   registry.register(new CodexEngine())
-  // TODO(phase-2a): registry.register(new ClaudeEngine())
   return registry
 }

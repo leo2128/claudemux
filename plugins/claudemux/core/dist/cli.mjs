@@ -4148,6 +4148,19 @@ function formatStatus(status2) {
 ` };
   }
 }
+function formatKill(name, result) {
+  switch (result.kind) {
+    case "killed":
+      return { code: 0, stdout: `killed: ${name}
+`, stderr: "" };
+    case "not-found":
+      return { code: 0, stdout: `not running: ${name}
+`, stderr: "" };
+    case "failed":
+      return { code: 1, stdout: "", stderr: `tm: kill: ${result.message}
+` };
+  }
+}
 function formatTurn(turn) {
   switch (turn.kind) {
     case "completed":
@@ -7257,233 +7270,35 @@ function resolveTmuxBinary() {
 }
 var runTmux = (args, options) => spawnCapture([resolveTmuxBinary(), ...args], options);
 
-// src/engines/registry.ts
-var EngineRegistry = class {
-  engines = /* @__PURE__ */ new Map();
-  /** Add an engine; throws if a kind is registered twice in one process. */
-  register(engine) {
-    if (this.engines.has(engine.kind)) {
-      throw new Error(
-        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
-      );
-    }
-    this.engines.set(engine.kind, engine);
-  }
-  get(kind) {
-    return this.engines.get(kind);
-  }
-  registered() {
-    return Array.from(this.engines.values());
-  }
-  kinds() {
-    return Array.from(this.engines.keys());
-  }
-};
-
-// src/engines/production.ts
-function productionRegistry() {
-  const registry = new EngineRegistry();
-  registry.register(new CodexEngine());
-  return registry;
-}
-
-// src/cli.ts
-import { homedir } from "node:os";
-import { join as join7 } from "node:path";
-
-// src/verbs/archive.ts
-import { readFileSync as readFileSync4, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
-
-// src/persistence/project-dir.ts
-function encodeProjectDir2(cwd) {
-  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
-}
-
-// src/verbs/archive.ts
-var ARCHIVE_TEMPLATE2 = `${[
-  "---",
-  "name: dispatcher-tasks-archive",
-  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
-  "metadata:",
-  "  node_type: memory",
-  "  type: project",
-  "---",
-  "",
-  "# Dispatcher task archive",
-  "",
-  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
-  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
-  "that outlives a task should be promoted to its own memory file, not kept here.",
-  "",
-  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
-].join("\n")}
-`;
-function die3(message) {
-  return { code: 1, stdout: "", stderr: `tm: ${message}
-` };
-}
-function isRegularFile2(path) {
-  try {
-    return statSync3(path).isFile();
-  } catch {
-    return false;
-  }
-}
-function fmtLocalDate2() {
-  const d = /* @__PURE__ */ new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function ledgerLines2(content) {
-  const lines = content.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-function parseArchiveArgs2(args) {
-  let id = "";
-  let status2 = "";
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--status") {
-      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
-      status2 = args[i + 1];
-      i++;
-    } else if (arg.startsWith("--status=")) {
-      status2 = arg.slice("--status=".length);
-    } else if (arg.startsWith("-")) {
-      return { error: die3(`tm archive: unknown flag: ${arg}`) };
-    } else if (id === "") {
-      id = arg;
-    } else {
-      return { error: die3(`tm archive: unexpected arg: ${arg}`) };
-    }
-  }
-  return { id, status: status2 };
-}
-async function archiveVerb(args, stdin, env) {
-  const parsed = parseArchiveArgs2(args);
-  if ("error" in parsed) return parsed.error;
-  const { id } = parsed;
-  if (id === "") {
-    return die3("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
-  }
-  const memoryDir = join5(env.projectsDir, encodeProjectDir2(env.dispatcherDir), "memory");
-  const activePath = join5(memoryDir, "active-dispatcher-tasks.md");
-  const archivePath = join5(memoryDir, "dispatcher-tasks-archive.md");
-  if (!isRegularFile2(activePath)) return die3(`no active ledger at ${activePath}`);
-  const outcome = (stdin ?? "").replace(/\n+$/, "");
-  if (outcome.replace(/\s/g, "") === "") {
-    return die3(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
-  }
-  const activeContent = readFileSync4(activePath, "utf8");
-  const activeLines = ledgerLines2(activeContent);
-  let headerRe;
-  try {
-    headerRe = new RegExp(`^### ${id}(\\s|$)`);
-  } catch {
-    headerRe = /(?!)/;
-  }
-  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
-  if (headerLines.length === 0) {
-    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
-    return die3(`id not found in active ledger: ${id}
-  available: ${available}`);
-  }
-  if (headerLines.length !== 1) {
-    return die3(`id matches ${headerLines.length} entries in active ledger: ${id}`);
-  }
-  const start = headerLines[0];
-  const total = (activeContent.match(/\n/g) ?? []).length;
-  let end = total;
-  for (let index = start; index < activeLines.length; index++) {
-    if (/^(### |## )/.test(activeLines[index])) {
-      end = index;
-      break;
-    }
-  }
-  const blockLines = activeLines.slice(start - 1, end);
-  let status2 = parsed.status;
-  if (status2 === "") {
-    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
-    status2 = tag ? tag[1] : "done";
-  }
-  const field = (name) => {
-    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
-    if (line === void 0) return "(unknown)";
-    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
-    return value === "" ? "(unknown)" : value;
-  };
-  const entry = `### ${id}  [${status2}]
-- repo/branch: ${field("repo")} / ${field("branch")}
-- intent: ${field("intent")}
-- outcome: ${outcome}
-- closed: ${fmtLocalDate2()}`;
-  const archiveContent = isRegularFile2(archivePath) ? readFileSync4(archivePath, "utf8") : ARCHIVE_TEMPLATE2;
-  const archiveLines = ledgerLines2(archiveContent);
-  let firstEntry = 0;
-  for (let index = 0; index < archiveLines.length; index++) {
-    if (archiveLines[index].startsWith("### ")) {
-      firstEntry = index + 1;
-      break;
-    }
-  }
-  let newArchive;
-  if (firstEntry > 0) {
-    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
-` : "";
-    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
-`;
-    newArchive = `${head}${entry}
-
-${tail}`;
-  } else {
-    newArchive = `${archiveContent}
-${entry}
-`;
-  }
-  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
-  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
-` : "";
-  writeFileSync4(archivePath, newArchive);
-  writeFileSync4(activePath, newActive);
-  return {
-    code: 0,
-    stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
-`,
-    stderr: ""
-  };
-}
-
 // src/engines/claude/claude-engine.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync5, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync4, rmSync as rmSync5, statSync as statSync3 } from "node:fs";
 
 // src/engines/claude/persistence.ts
-import { join as join6 } from "node:path";
+import { join as join5 } from "node:path";
 var TEAMMATE_ROOT = "/tmp";
 function cwdFile2(name) {
-  return join6(TEAMMATE_ROOT, `teammate-${name}.cwd`);
+  return join5(TEAMMATE_ROOT, `teammate-${name}.cwd`);
 }
 function sidFile2(name) {
-  return join6(TEAMMATE_ROOT, `teammate-${name}.sid`);
+  return join5(TEAMMATE_ROOT, `teammate-${name}.sid`);
 }
 function readyFile2(name) {
-  return join6(TEAMMATE_ROOT, `teammate-${name}.ready`);
+  return join5(TEAMMATE_ROOT, `teammate-${name}.ready`);
 }
 function sendAtFile2(name) {
-  return join6(TEAMMATE_ROOT, `teammate-${name}.send-at`);
+  return join5(TEAMMATE_ROOT, `teammate-${name}.send-at`);
 }
 function idleDir2() {
   return "/tmp/claude-idle";
 }
 function idleMarkerFor2(sid) {
-  return join6(idleDir2(), sid);
+  return join5(idleDir2(), sid);
 }
 function busyMarkerFor2(sid) {
-  return join6(idleDir2(), `${sid}.busy`);
+  return join5(idleDir2(), `${sid}.busy`);
 }
 function lastFileFor2(sid) {
-  return join6(idleDir2(), `${sid}.last`);
+  return join5(idleDir2(), `${sid}.last`);
 }
 var TMUX_SESSION_PREFIX = "teammate-";
 
@@ -7513,8 +7328,8 @@ function rstrip(text) {
 }
 function readIfNonEmpty2(path) {
   try {
-    if (statSync4(path).size === 0) return null;
-    return readFileSync5(path, "utf8");
+    if (statSync3(path).size === 0) return null;
+    return readFileSync4(path, "utf8");
   } catch {
     return null;
   }
@@ -7754,6 +7569,205 @@ var ClaudeEngine = class {
   }
 };
 
+// src/engines/registry.ts
+var EngineRegistry = class {
+  engines = /* @__PURE__ */ new Map();
+  /** Add an engine; throws if a kind is registered twice in one process. */
+  register(engine) {
+    if (this.engines.has(engine.kind)) {
+      throw new Error(
+        `EngineRegistry.register: engine '${engine.kind}' is already registered in this process`
+      );
+    }
+    this.engines.set(engine.kind, engine);
+  }
+  get(kind) {
+    return this.engines.get(kind);
+  }
+  registered() {
+    return Array.from(this.engines.values());
+  }
+  kinds() {
+    return Array.from(this.engines.keys());
+  }
+};
+
+// src/engines/production.ts
+function productionRegistry(env) {
+  const registry = new EngineRegistry();
+  registry.register(new ClaudeEngine(env));
+  registry.register(new CodexEngine());
+  return registry;
+}
+
+// src/cli.ts
+import { homedir } from "node:os";
+import { join as join7 } from "node:path";
+
+// src/verbs/archive.ts
+import { readFileSync as readFileSync5, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// src/persistence/project-dir.ts
+function encodeProjectDir2(cwd) {
+  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+// src/verbs/archive.ts
+var ARCHIVE_TEMPLATE2 = `${[
+  "---",
+  "name: dispatcher-tasks-archive",
+  'description: "On-demand archive of closed dispatcher tasks, compressed to outcome + artifacts. NOT a boot read \u2014 only consult when looking up past task history. Live in-flight tasks live in active-dispatcher-tasks.md."',
+  "metadata:",
+  "  node_type: memory",
+  "  type: project",
+  "---",
+  "",
+  "# Dispatcher task archive",
+  "",
+  "Closed tasks moved here from `active-dispatcher-tasks.md`, compressed to a",
+  "pointer + conclusion (not a knowledge base). Newest on top. Reusable analysis",
+  "that outlives a task should be promoted to its own memory file, not kept here.",
+  "",
+  "<!-- split by month (dispatcher-tasks-archive-YYYY-MM.md) if this file grows past a few hundred entries -->"
+].join("\n")}
+`;
+function die3(message) {
+  return { code: 1, stdout: "", stderr: `tm: ${message}
+` };
+}
+function isRegularFile2(path) {
+  try {
+    return statSync4(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function fmtLocalDate2() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function ledgerLines2(content) {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+function parseArchiveArgs2(args) {
+  let id = "";
+  let status2 = "";
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--status") {
+      if (i + 1 >= args.length) return { error: { code: 1, stdout: "", stderr: "" } };
+      status2 = args[i + 1];
+      i++;
+    } else if (arg.startsWith("--status=")) {
+      status2 = arg.slice("--status=".length);
+    } else if (arg.startsWith("-")) {
+      return { error: die3(`tm archive: unknown flag: ${arg}`) };
+    } else if (id === "") {
+      id = arg;
+    } else {
+      return { error: die3(`tm archive: unexpected arg: ${arg}`) };
+    }
+  }
+  return { id, status: status2 };
+}
+async function archiveVerb(args, stdin, env) {
+  const parsed = parseArchiveArgs2(args);
+  if ("error" in parsed) return parsed.error;
+  const { id } = parsed;
+  if (id === "") {
+    return die3("usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)");
+  }
+  const memoryDir = join6(env.projectsDir, encodeProjectDir2(env.dispatcherDir), "memory");
+  const activePath = join6(memoryDir, "active-dispatcher-tasks.md");
+  const archivePath = join6(memoryDir, "dispatcher-tasks-archive.md");
+  if (!isRegularFile2(activePath)) return die3(`no active ledger at ${activePath}`);
+  const outcome = (stdin ?? "").replace(/\n+$/, "");
+  if (outcome.replace(/\s/g, "") === "") {
+    return die3(`outcome text required on stdin, e.g.:  echo '...' | tm archive ${id}`);
+  }
+  const activeContent = readFileSync5(activePath, "utf8");
+  const activeLines = ledgerLines2(activeContent);
+  let headerRe;
+  try {
+    headerRe = new RegExp(`^### ${id}(\\s|$)`);
+  } catch {
+    headerRe = /(?!)/;
+  }
+  const headerLines = activeLines.map((line, index) => headerRe.test(line) ? index + 1 : 0).filter((lineNo) => lineNo > 0);
+  if (headerLines.length === 0) {
+    const available = activeLines.map((line) => /^### [^ ]+/.exec(line)?.[0]).filter((match) => match != null).map((match) => match.slice("### ".length)).join(" ");
+    return die3(`id not found in active ledger: ${id}
+  available: ${available}`);
+  }
+  if (headerLines.length !== 1) {
+    return die3(`id matches ${headerLines.length} entries in active ledger: ${id}`);
+  }
+  const start = headerLines[0];
+  const total = (activeContent.match(/\n/g) ?? []).length;
+  let end = total;
+  for (let index = start; index < activeLines.length; index++) {
+    if (/^(### |## )/.test(activeLines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const blockLines = activeLines.slice(start - 1, end);
+  let status2 = parsed.status;
+  if (status2 === "") {
+    const tag = /\[(.+)\]\s*$/.exec(blockLines[0] ?? "");
+    status2 = tag ? tag[1] : "done";
+  }
+  const field = (name) => {
+    const line = blockLines.find((candidate) => candidate.startsWith(`- ${name}:`));
+    if (line === void 0) return "(unknown)";
+    const value = line.slice(`- ${name}:`.length).replace(/^\s*/, "");
+    return value === "" ? "(unknown)" : value;
+  };
+  const entry = `### ${id}  [${status2}]
+- repo/branch: ${field("repo")} / ${field("branch")}
+- intent: ${field("intent")}
+- outcome: ${outcome}
+- closed: ${fmtLocalDate2()}`;
+  const archiveContent = isRegularFile2(archivePath) ? readFileSync5(archivePath, "utf8") : ARCHIVE_TEMPLATE2;
+  const archiveLines = ledgerLines2(archiveContent);
+  let firstEntry = 0;
+  for (let index = 0; index < archiveLines.length; index++) {
+    if (archiveLines[index].startsWith("### ")) {
+      firstEntry = index + 1;
+      break;
+    }
+  }
+  let newArchive;
+  if (firstEntry > 0) {
+    const head = firstEntry > 1 ? `${archiveLines.slice(0, firstEntry - 1).join("\n")}
+` : "";
+    const tail = `${archiveLines.slice(firstEntry - 1).join("\n")}
+`;
+    newArchive = `${head}${entry}
+
+${tail}`;
+  } else {
+    newArchive = `${archiveContent}
+${entry}
+`;
+  }
+  const remaining = [...activeLines.slice(0, start - 1), ...activeLines.slice(end)];
+  const newActive = remaining.length > 0 ? `${remaining.join("\n")}
+` : "";
+  writeFileSync4(archivePath, newArchive);
+  writeFileSync4(activePath, newActive);
+  return {
+    code: 0,
+    stdout: `archived ${id}  [${status2}] -> dispatcher-tasks-archive.md  (removed from active ledger)
+`,
+    stderr: ""
+  };
+}
+
 // src/persistence/atomic-file.ts
 import {
   closeSync as closeSync3,
@@ -7934,10 +7948,18 @@ async function statusVerb(name, ctx2, options = { lines: null }) {
   return formatStatus(status2);
 }
 
+// src/verbs/kill.ts
+async function killVerb(name, ctx2) {
+  const resolved = await ctx2.router.resolve(name);
+  if (resolved === null) return teammateNotFound(name);
+  const result = await resolved.engine.kill({ name }, ctx2.engineContext);
+  if (result.kind === "killed") await ctx2.identity.remove(name);
+  return formatKill(name, result);
+}
+
 // src/cli.ts
 function productionVerbContext(env) {
-  const registry = new EngineRegistry();
-  registry.register(new ClaudeEngine(env));
+  const registry = env.engines ?? productionRegistry(env);
   const router = new CompositeTeammateRouter([
     new ProductionTeammateRouter(registry),
     new LegacyClaudeTmuxRouter(registry, async (session) => {
@@ -7956,7 +7978,7 @@ function productionVerbContext(env) {
     identity: new ProductionIdentityStore()
   };
 }
-var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status"]);
+var ENGINE_VERBS = /* @__PURE__ */ new Set(["ls", "states", "status", "kill"]);
 async function dispatchEngineVerb(verb, rest, ctx2) {
   switch (verb) {
     case "ls":
@@ -7972,6 +7994,9 @@ async function dispatchEngineVerb(verb, rest, ctx2) {
       const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed;
       return statusVerb(rest[0], ctx2, { lines: linesArg });
     }
+    case "kill":
+      if (rest.length === 0) return { code: 1, stdout: "", stderr: "tm: usage: tm kill <repo>\n" };
+      return killVerb(rest[0], ctx2);
     default:
       return { code: 1, stdout: "", stderr: `tm: unsupported engine verb: ${verb}
 ` };
@@ -8044,7 +8069,7 @@ async function runCli(argv, env, stdin) {
   return unknownVerb(verb);
 }
 function productionEnv() {
-  return {
+  const env = {
     runTmux,
     runColumn,
     runGrep,
@@ -8062,9 +8087,9 @@ function productionEnv() {
     //     `""`, while `tm doctor`'s own check treats empty as unset and
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
-    projectsDir: join7(process.env.HOME ?? homedir(), ".claude", "projects"),
-    engines: productionRegistry()
+    projectsDir: join7(process.env.HOME ?? homedir(), ".claude", "projects")
   };
+  return { ...env, engines: productionRegistry(env) };
 }
 
 // src/main.ts

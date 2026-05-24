@@ -30,8 +30,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { archiveVerb } from './verbs/archive'
-import { ClaudeEngine } from './engines/claude/claude-engine'
-import { EngineRegistry } from './engines/registry'
 import type { EngineContext } from './engines/types'
 import {
   CompositeTeammateRouter,
@@ -43,6 +41,7 @@ import type { VerbContext } from './verbs/context'
 import { lsVerb } from './verbs/ls'
 import { statesVerb } from './verbs/states'
 import { statusVerb } from './verbs/status'
+import { killVerb } from './verbs/kill'
 
 /**
  * The Phase 2a-1 verb-side wiring. Decision 0024 §"Verb is the
@@ -59,10 +58,7 @@ import { statusVerb } from './verbs/status'
  * keep finding existing teammates.
  */
 function productionVerbContext(env: NativeEnv): VerbContext {
-  const registry = new EngineRegistry()
-  registry.register(new ClaudeEngine(env))
-  // TODO Phase 2b: registry.register(new CodexEngine(...)) lands once the
-  // Codex engine class implements the `Engine` interface.
+  const registry = env.engines ?? productionRegistry(env)
 
   const router = new CompositeTeammateRouter([
     new ProductionTeammateRouter(registry),
@@ -87,14 +83,11 @@ function productionVerbContext(env: NativeEnv): VerbContext {
 /**
  * Verbs that route through the Engine layer in Phase 2a-1.
  *
- * `kill` is intentionally NOT on this list: the legacy `NATIVE_VERBS.kill`
- * has an `isCodexTarget(repo)` arm that hands off to `codexKill(repo)`, and
- * Phase 2a-1 does not yet register a `CodexEngine`. Routing `kill` through
- * `ClaudeEngine` would silently regress `tm kill codex-<n>` to
- * `no such teammate`. Phase 2b lands `CodexEngine` and only then `kill`
- * joins this set.
+ * Phase 2a-1 routed `ls` / `states` / `status` through the Engine layer.
+ * Phase 2b registers `CodexEngine`, so `kill` can join the same path and
+ * stop relying on the legacy `NATIVE_VERBS.kill` codex fork.
  */
-const ENGINE_VERBS: ReadonlySet<string> = new Set(['ls', 'states', 'status'])
+const ENGINE_VERBS: ReadonlySet<string> = new Set(['ls', 'states', 'status', 'kill'])
 
 /** Dispatch one of the fleet-visibility verbs through the verb context. */
 async function dispatchEngineVerb(
@@ -116,6 +109,9 @@ async function dispatchEngineVerb(
       const linesArg = parsed === null || !Number.isFinite(parsed) ? null : parsed
       return statusVerb(rest[0]!, ctx, { lines: linesArg })
     }
+    case 'kill':
+      if (rest.length === 0) return { code: 1, stdout: '', stderr: 'tm: usage: tm kill <repo>\n' }
+      return killVerb(rest[0]!, ctx)
     default:
       return { code: 1, stdout: '', stderr: `tm: unsupported engine verb: ${verb}\n` }
   }
@@ -231,9 +227,8 @@ export async function runCli(
     return removedVerb(REMOVED_VERB_MESSAGES[verb]!)
   }
 
-  // 5a. Engine-routed verbs — Phase 2a-1's fleet-visibility cut. These
-  //     four verbs go through `verbs/<v>.ts` → `EngineRegistry` →
-  //     `ClaudeEngine.<method>`; Codex registration lands in Phase 2b.
+  // 5a. Engine-routed verbs — fleet visibility and kill go through
+  //     `verbs/<v>.ts` → `EngineRegistry` → concrete Engine methods.
   if (ENGINE_VERBS.has(verb)) {
     return dispatchEngineVerb(verb, rest, productionVerbContext(env))
   }
@@ -263,7 +258,7 @@ export async function runCli(
 
 /** The production `NativeEnv` — the real backends, resolved once per invocation. */
 export function productionEnv(): NativeEnv {
-  return {
+  const env: NativeEnv = {
     runTmux,
     runColumn,
     runGrep,
@@ -282,6 +277,6 @@ export function productionEnv(): NativeEnv {
     //     reports the opposite of what the verbs saw.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
-    engines: productionRegistry(),
   }
+  return { ...env, engines: productionRegistry(env) }
 }

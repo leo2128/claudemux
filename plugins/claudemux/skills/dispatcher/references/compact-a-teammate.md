@@ -39,12 +39,12 @@ Do not chase a follow-up `tm ctx <repo>` to "double-check" the new size. `tm ctx
 
 ## Codex teammates auto-compact
 
-`tm compact <codex-target>` is a no-op for Codex teammates. The verb returns:
+`tm compact <codex-target>` is a no-op for Codex teammates. The verb writes an empty stdout and the line
 
 ```
-not supported: codex compacts its own context automatically when the 252k window fills
+  not supported: codex compacts its own context automatically when the 252k window fills
 ```
 
-Exit code is 0, so calling it defensively is safe, but skip it as a deliberate between-phase ritual. The Codex daemon watches its own thread token count and runs compaction internally when the 252k window fills; there is no Claude-style external `/compact` hook to drive. Between phases on a Codex teammate, just `tm send` the next prompt — the "compact between phases" rule above applies to Claude teammates only.
+to stderr, with exit code 0. Calling it defensively is safe, but skip it as a deliberate between-phase ritual. The Codex daemon watches its own thread token count and runs compaction internally when the 252k window fills; there is no Claude-style external `/compact` hook to drive. Between phases on a Codex teammate, just `tm send` the next prompt — the "compact between phases" rule above applies to Claude teammates only.
 
-The verify-via-stdout rule still applies across engines: trust the stdout string. `compacted` means it ran (Claude); `not supported` means it did not and will not (Codex).
+Where to look for the success signal depends on the engine: Claude writes `compacted` to **stdout** on success, while Codex writes the `not supported: ...` line to **stderr** with empty stdout. Both paths exit 0. The skill-wide rule — trust the verb's own success signal, do not chase a follow-up `tm ctx` — still holds across engines; just read the right stream for the engine you are calling.

@@ -27,7 +27,13 @@ The reviewer engine must differ from the author engine:
 
 Pick the author engine by task fit (Bash / hook / CLI scaffolding work fits Claude; async-heavy or Codex-internal work fits Codex) — author is not forced to be heterogeneous, only the reviewer side is.
 
-Identify the author engine before spawning the reviewer: read the `SID` column of `tm states` (Claude sessions show an 8-character hex prefix; Codex thread ids are dashed UUIDs), or read the ledger entry, or use the worktree naming convention (the author worktree carries no `-review-` suffix).
+Identify the author engine before spawning the reviewer. `tm states` is not enough on its own — its `SID` column shows only the first 8 characters, and a Codex thread-id UUID truncated to 8 characters looks identical to a Claude session-id prefix. Use a source that actually carries the engine instead:
+
+- the `engine` field on the teammate's identity record (the persisted base `TeammateRecord` JSON);
+- the ledger entry for the active task, which records the engine alongside the teammate name;
+- the user's local worktree-naming convention if one is in place (for example, Codex worktrees carrying a leading `codex/`); and the author worktree carries no `-review-` suffix regardless of engine.
+
+When in doubt, ask the author teammate to print its own engine name in its next status reply rather than guessing from the fleet snapshot.
 
 ## Phase A — prepare
 

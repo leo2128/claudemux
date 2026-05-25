@@ -55,6 +55,21 @@ User says: "继续昨天那个 X 任务" but the ledger entry is gone (archived,
 3. Run `tm history <repo-or-name> <id-prefix>` for detail; confirm via the full first prompt and last assistant text.
 4. Use the detail output's ready-to-paste `tm resume <repo-or-name> <full-id>` line.
 
+## Resuming with a caller-supplied sid: verify subject first
+
+When the user hands the dispatcher a sid or thread-id with a phrase like "this is the X result, take over the scheduling", do not decide what "X" means from whatever is most contextually salient in the current chat (a PR the dispatcher just opened, a task the dispatcher just finished). The dispatcher did not witness the resumed conversation, so the actual content of that session — not the local chat's loudest event — is the authority on what it was about.
+
+After `tm resume <repo> <sid>`, verify the subject via at least one of:
+
+- **`tm last <repo>`** — usually names the subject when a `.last` file exists.
+- **Read the jsonl tail directly** — `tail -3 ~/.claude/projects/<encoded-cwd>/<sid>.jsonl` and parse the last assistant `text` content. Works on a fresh resume before `.last` has been written.
+- **Check the suspected target on the side** — `gh pr view <suspected-PR> --json reviews,comments`; if the resumed session was a review and the PR you assumed has empty reviews/comments, you assumed wrong.
+- **Ask the user one line** — the cost of a clarifying reply is much lower than the cost of dispatching invented work to a downstream teammate.
+
+Only after one of those checks lines up with your understanding of the subject should you brief the teammate.
+
+The first turn sent to the resumed teammate should not contain a confident statement about the subject ("you reviewed PR #N"). Ask the teammate to surface its existing conclusions first ("summarize what you concluded in this session in dispatcher-friendly format"), and let its summary establish the subject — that way a wrong subject manifests as a push-back, not as invented compliance.
+
 ## Foot-gun: polling history by prompt-echo
 
 If you build a custom wait around `tm history` or `tm poll`, match expected result keywords (`merged`, `Cancelled`, anticipated error codes), never words from the prompt you just sent. The prompt itself appears in the user turn, so prompt-word grep returns instantly.

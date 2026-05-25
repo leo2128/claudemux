@@ -1,6 +1,6 @@
 ---
 name: dispatcher
-description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; host local scheduled work; or maintain the dispatcher task ledger. Also use when the user names dispatcher concepts such as "派一个 / 起一个 teammate / 下发任务 / 看看 X 在干啥 / 多仓 / dispatcher".
+description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; host local scheduled work; maintain the dispatcher task ledger; run an adversarial cross-engine review of a PR; or run a heterogeneous design-direction negotiation. Also use when the user names dispatcher concepts such as "send out a teammate / spin up a teammate / dispatch a task / check what X is doing / multi-repo / dispatcher / send a reviewer / review this PR / adversarial review / cross-engine review / heterogeneous design negotiation / get a second model's opinion / merge this PR".
 ---
 
 # Dispatcher: multi-repo teammate orchestrator
@@ -34,6 +34,14 @@ Pick once, up front; switching delegation form mid-task requires rebuilding stat
 
 Cron firing is reliable only inside an interactive TUI REPL: this dispatcher, or a Claude tmux teammate launched by `tm spawn`. Keep cron on this dispatcher unless the user specifically wants the job tied to a Claude teammate's lifecycle. Do not host cron jobs in `claude -p`, Agent Teams, or Codex daemon teammates.
 
+## Dispatcher posture as router
+
+The dispatcher routes work into sibling repos; it does not investigate target-repo code itself. Two corollaries that show up often:
+
+- **Hand the symptom to the teammate, not pre-digested conclusions.** When a sibling-repo symptom shows up, spawn the teammate and pass the symptom. Skip `git -C <repo> diff/log`, `grep` inside the sibling repo, and `Read` on sibling files done "to understand the bug first". The teammate has the repo's own context and `CLAUDE.md`; pre-investigation wastes dispatcher context and anchors the teammate to whatever conclusion you already drew before delegating.
+- **Expect the user to drive teammates directly.** Remote Control web UI, mobile, and claude.ai/code give the user a private channel to each Claude tmux teammate; many interactions never pass through `tm send`. Surface the Remote Control URL in the ledger at spawn time and do not reflexively offer to relay user messages through the dispatcher. The teammate's own recap is the source of truth for what happened in that channel, even when the dispatcher was not the prompt source.
+- **A teammate citing instructions the dispatcher never saw is the expected case.** See `references/wait-and-readback.md` §"A reply may cite instructions you never saw" for the handling rule — default reading is "user spoke directly", not "teammate fabricated".
+
 ## The `tm` script
 
 `tm` resolves the dispatcher directory from `TM_DISPATCHER_DIR` if set, otherwise `$PWD`. `/claudemux:setup` writes `TM_DISPATCHER_DIR` into the dispatcher root's `.claude/settings.json` so Claude Code injects it on dispatcher launch. If `tm doctor` reports `TM_DISPATCHER_DIR: unset` or points at the wrong directory, run `/claudemux:setup` from the dispatcher root or ask the user to relaunch there.
@@ -59,6 +67,8 @@ Match the user's intent to one scenario, then read the corresponding reference. 
 | Spawning an Agent Teams teammate | `references/agent-teams.md` | `Agent(team_name=...)` |
 | Diagnosing `.sid` drift, a stuck Claude spawn, or surprising `tm states` output | `references/sid-rotation.md` | (debugging) |
 | Fanning `/reload-plugins` to teammates after a plugin update | (no reference) | `tm reload --all` (or `tm reload <repo>...`) |
+| Running an adversarial cross-engine review of a PR | `references/heterogeneous-review.md` | `tm spawn <reviewer> --engine <opposite>` |
+| Running a heterogeneous design-direction negotiation | `references/heterogeneous-negotiation.md` | parallel `tm spawn` of one claude TM + one codex TM |
 
 For any verb's flag/output contract: `tm <verb> --help`. Do not reason about `tm` from prior-conversation memory or model priors.
 
@@ -91,6 +101,15 @@ The auto-mode classifier blocks the dispatcher from editing its own `settings.lo
 ```json
 { "permissions": { "allow": ["Bash(<command>:*)"] } }
 ```
+
+## User-facing reports
+
+A reply to the user that asserts an outcome must be verifiable from this turn's tool calls. The wrap-up sentence of a status report is where rounded-off fabrication tends to slip in; these four rules keep it honest:
+
+- **Verify any command, slash command, endpoint, flag, or file path before naming it in a user-facing reply.** Check the system-reminder skill list, run `<cli> --help`, or `ls` the path. If you cannot verify it in this turn, omit the wording or say "not sure of the exact verb" — a confident-wrong name drops trust harder than a terse "I don't know".
+- **Translate dispatcher-internal identifiers to plain language before the message goes out.** Internal backlog codes, ad-hoc phase labels, and memory file slugs are invisible to the user and read as gibberish. PR numbers and issue IDs the user can look up are shared vocabulary; keep those intact.
+- **Send the "done" reply after the action's tool call returns, not in the same parallel batch.** The auto-mode classifier reads the transcript top-to-bottom; a reply that asserts completion alongside the action looks like a fabricated completion report and can be blocked. Independent calls can still batch — this only constrains an action and the reply that asserts it finished.
+- **Run `date` before writing time-sensitive framing.** The session context carries the date but never the time of day, and a past "I'm going to sleep" in the summary says nothing about the present moment. Without checking the clock, phrases like "good morning", "it's late", or "unattended overnight" can be confidently wrong.
 
 ## Task ledger boot-up
 

@@ -31,6 +31,8 @@ agent reads exactly the one that applies. The references:
 | `ledger-and-archive.md` | Append / archive the dispatcher task ledger |
 | `agent-teams.md` | Spawn an Agent Teams teammate |
 | `sid-rotation.md` | Diagnose `.sid` drift or a stuck Claude spawn |
+| `heterogeneous-review.md` | Adversarial cross-engine review of a pull request — author one engine, reviewer the other |
+| `heterogeneous-negotiation.md` | Surface a second independent design direction from a different engine family before anchoring |
 
 This skeleton/reference split was a size cut — see
 [the dispatcher SKILL.md split](https://github.com/excitedjs/claudemux/commit/dd94785) (commit `dd94785`).

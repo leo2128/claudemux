@@ -51,8 +51,21 @@ Known blind spot: a permission prompt blocks Claude with no spinner. `--pane-qui
 - **Don't read `/tmp/claude-idle/<sid>` directly to check "done".** `tm send` removes the marker before sending, so an old completed turn is not visible there. Use `tm wait --fresh` or `tm last <repo>`.
 - **Don't build a custom polling loop with `grep` on prompt-echo words.** Match expected result keywords (`Scheduled`, `Cancelled`, anticipated error codes), never words from the prompt you just sent. The prompt appears in the user turn, so prompt-word grep returns instantly.
 
+## Don't send extra input during a sync wait
+
+While a `tm spawn --prompt`, `tm send`, or `tm wait` is still tracking a teammate's Stop, do not send that teammate any other input — no second `tm send`, no `/reload-plugins`, no `tm reload <repo>` aimed at it. An extra turn arriving mid-flight breaks `tm`'s Stop-signal capture: `/tmp/claude-idle/<sid>.last` never gets written, the tracking call never returns its reply, and you only learn the work finished by reading the artifact directly. `/reload-plugins` is the sharpest version because it reloads the Stop hook itself while a wait is depending on it.
+
+Before sending anything to a teammate, check whether a background `tm` call is still tracking it (the ledger entry, the unfinished task notification). If one is, wait for it to return (or read the artifact directly) before the next send.
+
+Fleet-wide operations such as `tm reload --all` should exclude any teammate currently tracked by a pending spawn/send — otherwise the in-flight wait silently dies on whichever teammate the fan-out hit.
+
 ## A reply may cite instructions you never saw
 
-The user can drive a teammate directly through Remote Control web UI or mobile on a channel the dispatcher cannot observe. A reply that references an instruction, decision, or constraint you never dispatched is expected.
+The user routinely drives Claude tmux teammates directly through Remote Control web UI, mobile, or claude.ai/code — channels the dispatcher cannot observe. A reply that references an instruction, decision, or constraint the dispatcher never sent is the expected case, not an anomaly.
 
-Treat such references as genuine user input. Do not assume the teammate invented them, and do not "correct" the teammate back to what you remember dispatching. If a cited instruction conflicts with something you need to act on and cannot be reconciled, ask the user.
+The default reading is **"the user spoke to the teammate directly,"** not **"the teammate fabricated authorization."** Both are possible; in practice the former is almost always correct. How to act on it depends on how reversible the action is:
+
+- **Reversible work** (a normal commit on a feature branch, an MR comment, a status read) — note the out-of-band channel in the ledger and continue. Do not "correct" the teammate back to what you remember dispatching, and do not write "user did not authorize this" / "fabricated" / "out of scope" in dispatcher-facing analysis without explicit user confirmation that they did not authorize it.
+- **Irreversible work or shared-state work** (force-push, MR merge, branch deletion, secret rotation) — confirm with the user before raising alarm, and phrase it as a fact-check, not an accusation: "did you tell teammate X to do Y? I didn't see it on this side". Reflog and `git log` are still useful for understanding *what* happened; just do not auto-attribute intent to the teammate.
+
+When you write a prompt whose effect spans multiple branches or repos (a force-push, a cleanup, an "amend"), be explicit about the target — an ambiguous dispatcher prompt can legitimately combine with explicit user direction on the out-of-band channel in unexpected ways.

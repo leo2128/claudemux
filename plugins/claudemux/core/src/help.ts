@@ -303,10 +303,10 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       Inspect this repo's past Claude sessions and Codex threads
       (live or dead). No id: list mode, newest-first table merged by
       transcript / rollout mtime. The ENGINE column identifies
-      claude vs codex; ID is the first 8 chars of the Claude sid or
-      Codex thread id recorded in a rollout filename. '*' marks the
-      current live teammate's session / thread. With a sid, thread id,
-      or prefix:
+      claude vs codex; ID is the full Claude sid (UUIDv4) or Codex
+      thread id (UUIDv7) recorded in a rollout filename — the same
+      string 'tm resume' accepts. '*' marks the current live
+      teammate's session / thread. With a sid, thread id, or prefix:
       detail mode (full id, transcript / rollout path, size / line
       count, created time, ctx usage when present, first prompt,
       last assistant text up to 1500 chars, ready-to-paste

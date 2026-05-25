@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: received 'fa48af8f', looks like a sid prefix; resume requires the full sid. Run 'tm history claudemux-conftest-3d6e2a337125 fa48af8f' to expand it, or 'tm history claudemux-conftest-3d6e2a337125' to list past sessions with full ids.\n"
+}

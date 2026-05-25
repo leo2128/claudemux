@@ -28,7 +28,7 @@ Claude `LAST` / `PREVIEW` come from `/tmp/claude-idle/<sid>.last`; Codex reads t
 
 ## `tm history` modes
 
-- **List mode**: `tm history <repo-or-name>` prints a newest-first table. Current columns are `ENGINE`, `ID` (first 8 chars of the Claude sid or Codex thread id), `AGE`, `SIZE`, and `TOPIC`; a leading `*` marks the row matching the current live teammate's session/thread.
+- **List mode**: `tm history <repo-or-name>` prints a newest-first table. Current columns are `ENGINE`, `ID` (full canonical Claude sid or Codex thread id — the same string `tm resume` accepts; copy-paste it directly), `AGE`, `SIZE`, and `TOPIC`; a leading `*` marks the row matching the current live teammate's session/thread.
 - **Detail mode**: `tm history <repo-or-name> <sid-or-thread-prefix>` prints the full id, transcript/rollout path, size or line count, timestamps, ctx usage when available, full first user prompt, last assistant text up to 1500 chars, and a ready-to-paste `tm resume` command.
 
 The Claude project dir is derived from the repo's physical cwd: every `/` and `.` in `<dispatcher-dir>/<repo>` becomes `-`, prepended with `$HOME/.claude/projects/`. Codex history is matched from rollout sessions by cwd.

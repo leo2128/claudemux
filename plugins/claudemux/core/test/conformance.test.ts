@@ -2003,6 +2003,24 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           return { args: [repo, 'not-a-uuid'] }
         },
       },
+      {
+        name: 'an 8-hex sid prefix (the tm history ID column) → the prefix-hint error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          mkdirSync(historyProjectDir(repo), { recursive: true })
+          return { args: [repo, 'fa48af8f'] }
+        },
+      },
+      {
+        name: 'a partial dashed sid prefix → the prefix-hint error',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          mkdirSync(historyProjectDir(repo), { recursive: true })
+          return { args: [repo, 'fa48af8f-2d2e-4fd2'] }
+        },
+      },
     ],
   },
 ]

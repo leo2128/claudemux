@@ -13,6 +13,7 @@ import { UUID_RE } from './identifiers'
 import { dieRepoNotFound, projectDirForRepo } from './repo-fs'
 import { die, sessionExists } from './tmux'
 import { tmuxSessionName } from '../../persistence/paths'
+import { looksLikeUuidPrefix } from '../../identity/uuid-prefix'
 import { parseResumeArgs } from '../../shared/verb-args'
 import type { ClaudeVerbEnv } from './env'
 import type { TmResult } from '../../tm'
@@ -51,13 +52,29 @@ export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv):
   const projectDir = projectDirForRepo(repo, env)
   const target = join(projectDir, `${sid}.jsonl`)
   if (!isRegularFile(target)) {
+    if (looksLikeUuidPrefix(sid)) {
+      return die(
+        `received '${sid}', looks like a sid prefix; resume requires the ` +
+          `full sid. Run 'tm history ${repo} ${sid}' to expand it, or ` +
+          `'tm history ${repo}' to list past sessions with full ids.`,
+      )
+    }
     return die(
       `no transcript at ${target} — wrong repo for this sid, or sid does not ` +
         `exist. Check 'ls ${projectDir}/'.`,
     )
   }
 
-  if (!UUID_RE.test(sid)) return die(`sid is not a valid uuid: ${sid}`)
+  if (!UUID_RE.test(sid)) {
+    if (looksLikeUuidPrefix(sid)) {
+      return die(
+        `received '${sid}', looks like a sid prefix; resume requires the ` +
+          `full sid. Run 'tm history ${repo} ${sid}' to expand it, or ` +
+          `'tm history ${repo}' to list past sessions with full ids.`,
+      )
+    }
+    return die(`sid is not a valid uuid: ${sid}`)
+  }
 
   // Delegate the rest of the launch to `claudeSpawn` via its `--resume`
   // path. This mirrors `cmd_resume`'s `cmd_spawn` recursion: the launch

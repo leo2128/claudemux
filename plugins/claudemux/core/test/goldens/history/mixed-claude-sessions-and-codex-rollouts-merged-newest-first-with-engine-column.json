@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "   ENGINE  ID        AGE  SIZE  TOPIC\n   codex   6eceb570  1h   384B  codex newest task\n   claude  e5f726e4  11h  73B   claude middle task\n   claude  e01b9a80  1d   73B   claude oldest task\n",
+  "stdout": "   ENGINE  ID                                    AGE  SIZE  TOPIC\n   codex   6eceb570-3750-c10b-f8b8-06eea94d996d  1h   384B  codex newest task\n   claude  e5f726e4-db4d-8a11-6a20-a5d5a12c9d06  11h  73B   claude middle task\n   claude  e01b9a80-29e4-869e-e245-43285b02e970  1d   73B   claude oldest task\n",
   "stderr": ""
 }

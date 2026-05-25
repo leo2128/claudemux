@@ -90,6 +90,7 @@ import {
   rolloutRecentlyActive,
 } from './rollout.js'
 import { validateTeammateName } from '../../identity/name.js'
+import { looksLikeUuidPrefix } from '../../identity/uuid-prefix.js'
 
 export const CODEX_CLIENT_INFO: ClientInfo = {
   name: 'claudemux',
@@ -363,10 +364,16 @@ function codexNameFailure(name: string): string | null {
     : `invalid codex teammate name '${name}': ${validation.reason}`
 }
 
-function codexThreadIdFailure(threadId: string): string | null {
-  return CODEX_THREAD_ID_RE.test(threadId)
-    ? null
-    : `codex thread id is not a valid uuid: ${threadId}`
+function codexThreadIdFailure(threadId: string, name: string | null = null): string | null {
+  if (CODEX_THREAD_ID_RE.test(threadId)) return null
+  if (name !== null && looksLikeUuidPrefix(threadId)) {
+    return (
+      `received '${threadId}', looks like a thread-id prefix; resume ` +
+      `requires the full thread id. Run 'tm history ${name} ${threadId}' to ` +
+      `expand it, or 'tm history ${name}' to list past threads with full ids.`
+    )
+  }
+  return `codex thread id is not a valid uuid: ${threadId}`
 }
 
 async function latestCodexThreadIdForCwd(
@@ -904,7 +911,7 @@ export class CodexEngine implements Engine {
     const invalidName = codexNameFailure(req.name)
     if (invalidName !== null) return { kind: 'failed', message: invalidName }
     let threadId = req.checkpoint
-    const invalidThreadId = threadId === null ? null : codexThreadIdFailure(threadId)
+    const invalidThreadId = threadId === null ? null : codexThreadIdFailure(threadId, req.name)
     if (invalidThreadId !== null) return { kind: 'failed', message: invalidThreadId }
 
     const existing = readBaseRecord(req.name)

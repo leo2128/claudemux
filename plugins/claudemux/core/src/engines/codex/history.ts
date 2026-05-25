@@ -273,11 +273,13 @@ function listHistory(
     return { code: 0, stdout: `(no codex threads for ${name})\n`, stderr: '' }
   }
   const rows: string[][] = [[' ', 'ENGINE', 'ID', 'AGE', 'SIZE', 'TOPIC']]
+  // Full id — see the matching note in `engines/claude/history.ts`. Engine-raw
+  // list output stays consistent with the cross-engine renderer in verbs/.
   for (const entry of codexHistoryListEntries(entries, activeThreadId)) {
     rows.push([
       entry.active ? '*' : ' ',
       entry.engine,
-      entry.id.slice(0, 8),
+      entry.id,
       fmtAge(Math.max(0, Math.floor((nowMs - entry.mtimeMs) / 1000))),
       fmtSize(entry.size),
       entry.topic,

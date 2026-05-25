@@ -118,11 +118,14 @@ async function formatHistoryEntries(
 ): Promise<TmResult> {
   const nowMs = ctx.engineContext.now()
   const rows: string[][] = [[' ', 'ENGINE', 'ID', 'AGE', 'SIZE', 'TOPIC']]
+  // Full id, not an 8-char prefix: `tm resume` requires the canonical UUID
+  // and silently rejects a prefix with a misleading "wrong repo" error.
+  // Listing the full id keeps history → resume copy-paste lossless.
   for (const entry of sortedHistoryEntries(entries)) {
     rows.push([
       entry.active ? '*' : ' ',
       entry.engine,
-      entry.id.slice(0, 8),
+      entry.id,
       fmtAge(Math.max(0, Math.floor((nowMs - entry.mtimeMs) / 1000))),
       fmtSize(entry.size),
       entry.topic,

@@ -347,12 +347,16 @@ export async function claudeHistoryList(repo: string, env: ClaudeVerbEnv): Promi
     }
   }
   const now = Math.floor(Date.now() / 1000)
+  // Full id, not an 8-char prefix — keeps this engine-raw fallback render
+  // (used when verbs/history.ts can't take its cross-engine merge path)
+  // byte-consistent with the merged renderer, so a single-engine call site
+  // never silently emits a different ID column shape than the dispatcher one.
   const rows: string[][] = [[' ', 'ENGINE', 'ID', 'AGE', 'SIZE', 'TOPIC']]
   for (const entry of entries) {
     rows.push([
       entry.active ? '*' : ' ',
       entry.engine,
-      entry.id.slice(0, 8),
+      entry.id,
       fmtAge(Math.max(0, now - Math.floor(entry.mtimeMs / 1000))),
       fmtSize(entry.size),
       entry.topic,

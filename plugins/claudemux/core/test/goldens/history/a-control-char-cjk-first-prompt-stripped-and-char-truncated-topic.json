@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "   ENGINE  ID        AGE  SIZE  TOPIC\n   claude  claudemu  2h   220B  诊断这个上下文窗口使用问题这是一段足够长的中文首条提示用来验证按字符截断到六十个字符的行为再补一些文字\n",
+  "stdout": "   ENGINE  ID                               AGE  SIZE  TOPIC\n   claude  claudemux-conftest-1e35941a1294  2h   220B  诊断这个上下文窗口使用问题这是一段足够长的中文首条提示用来验证按字符截断到六十个字符的行为再补一些文字\n",
   "stderr": ""
 }

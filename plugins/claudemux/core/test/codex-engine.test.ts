@@ -486,6 +486,30 @@ describe('CodexEngine — core lifecycle', () => {
     })
     expect(readBaseRecord(rejectedName)).toBeNull()
     expect(readDaemonState(rejectedName)).toBeNull()
+
+    // A partial thread id pasted from `tm history` is the common shape of
+    // the "wrong-id" error in practice; surface the actionable hint
+    // instead of the bare "not a valid uuid" line.
+    const prefixName = nameUnder()
+    const prefixRejected = await engine.resume(
+      {
+        name: prefixName,
+        cwd,
+        checkpoint: '019e5f5f',
+        prompt: null,
+        displayName: null,
+      },
+      ctx(),
+    )
+    expect(prefixRejected).toEqual({
+      kind: 'failed',
+      message:
+        `received '019e5f5f', looks like a thread-id prefix; resume ` +
+        `requires the full thread id. Run 'tm history ${prefixName} 019e5f5f' to ` +
+        `expand it, or 'tm history ${prefixName}' to list past threads with full ids.`,
+    })
+    expect(readBaseRecord(prefixName)).toBeNull()
+    expect(readDaemonState(prefixName)).toBeNull()
   })
 
   test('concurrent same-name spawn keeps the winning daemon alive', async () => {
@@ -762,7 +786,10 @@ describe('CodexEngine — core lifecycle', () => {
       expect(result.kind).toBe('list')
       expect(result.tmResult?.code).toBe(0)
       expect(result.tmResult?.stdout).toContain('ENGINE')
-      expect(result.tmResult?.stdout).toContain('*  codex   019e5f5f  5s')
+      // List mode now renders the full thread id (was the 8-char prefix);
+      // pin against `activeThreadId` so the test tracks the contract `tm
+      // resume` accepts rather than a now-defunct truncation.
+      expect(result.tmResult?.stdout).toContain(`*  codex   ${activeThreadId}  5s`)
       expect(result.tmResult?.stdout).toContain('Implement codex history')
       expect(result.tmResult?.stdout).toContain('Older codex thread')
       expect(result.tmResult?.stdout).not.toContain('Other repo thread')

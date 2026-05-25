@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "   ENGINE  ID        AGE  SIZE  TOPIC\n   claude  claudemu  2h   93B   (no user prompt)\n",
+  "stdout": "   ENGINE  ID                               AGE  SIZE  TOPIC\n   claude  claudemux-conftest-2c3e76514803  2h   93B   (no user prompt)\n",
   "stderr": ""
 }

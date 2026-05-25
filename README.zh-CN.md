@@ -103,7 +103,7 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | `tm kill <repo>` | 干掉 teammate 的 tmux session,清状态文件。 |
 | `tm archive <id> [--status '<tag>']` | 把 `active-dispatcher-tasks.md` 里一个收尾的 task 搬到 archive(收尾文字从 stdin 进)。 |
 | `tm ctx <repo>… \| --all [--window 200k\|1m]` | 每个 teammate 的真实上下文用量,从 jsonl 的 `usage` 字段读,比 TUI 那个百分比准。 |
-| `tm history <repo> [<sid-or-thread-prefix>]` | 列 `<repo>` 的 Claude 历史 session 或 Codex thread(最新在前)。Claude 行显示 transcript `sid`;Codex 行显示 rollout thread id 前 8 位,当前 live thread 标 `*`。传 sid / thread-id 前缀则展开详情,并给出可直接粘贴的 `tm resume` 命令。 |
+| `tm history <repo> [<sid-or-thread-prefix>]` | 列 `<repo>` 的 Claude 历史 session 或 Codex thread(最新在前)。每行显示完整的 Claude `sid` 或 Codex thread id —— 即 `tm resume` 接受的字符串;当前 live session/thread 标 `*`。传 sid / thread-id 前缀则展开详情,并给出可直接粘贴的 `tm resume` 命令。 |
 | `tm mem <repo>` | cat sibling 仓的 auto-memory `MEMORY.md`(FG 名 / 分支 / 进行中项目)。在塑造 `tm spawn` / `tm send --prompt` **引用 sibling 状态前**先调一下 —— dispatcher 自己的 AutoMemory 不包含 sibling 仓。文件不存在 → stderr 一行提示 + exit 0 + 空 stdout。 |
 | `tm reload <repo>… \| --all` | 给 teammate 派 `/reload-plugins`,插件更新后用。 |
 

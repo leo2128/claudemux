@@ -106,7 +106,7 @@ terminal, see [Outside Claude Code](#using-tm-outside-claude-code).
 | `tm kill <repo>` | Kill the teammate's tmux session and clean up its state files. |
 | `tm archive <id> [--status '<tag>']` | Move a closed task from `active-dispatcher-tasks.md` to the archive (outcome text on stdin). |
 | `tm ctx <repo>… \| --all [--window 200k\|1m]` | Real context-window usage per teammate, read from the jsonl `usage` block. More accurate than the TUI percentage. |
-| `tm history <repo> [<sid-or-thread-prefix>]` | List past Claude sessions or Codex threads for `<repo>` (newest first). Claude rows show transcript `sid`; Codex rows show the first 8 chars of the rollout thread id and mark the live thread with `*`. Passing a sid / thread-id prefix opens detail view with a ready-to-paste `tm resume` command. |
+| `tm history <repo> [<sid-or-thread-prefix>]` | List past Claude sessions or Codex threads for `<repo>` (newest first). Each row shows the full Claude `sid` or Codex thread id — the exact string `tm resume` accepts; the live session/thread is marked with `*`. Passing a sid / thread-id prefix opens detail view with a ready-to-paste `tm resume` command. |
 | `tm mem <repo>` | Cat the sibling repo's auto-memory `MEMORY.md` (feature-gate names, branch names, in-progress projects). Read this before composing a `tm spawn` / `tm send --prompt` that quotes sibling state — the dispatcher's own AutoMemory does not include sibling repos. Missing memory → stderr notice + exit 0 + empty stdout. |
 | `tm reload <repo>… \| --all` | Fan out `/reload-plugins` to teammates after a plugin update. |
 

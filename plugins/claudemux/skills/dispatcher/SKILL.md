@@ -1,6 +1,6 @@
 ---
 name: dispatcher
-description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; host local scheduled work; maintain the dispatcher task ledger; run an adversarial cross-engine review of a PR; or run a heterogeneous design-direction negotiation. Also use when the user names dispatcher concepts such as "send out a teammate / spin up a teammate / dispatch a task / check what X is doing / multi-repo / dispatcher / send a reviewer / review this PR / adversarial review / cross-engine review / heterogeneous design negotiation / get a second model's opinion / merge this PR".
+description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; or maintain the dispatcher task ledger. Also use when the user names dispatcher concepts such as "send out a teammate / spin up a teammate / dispatch a task / check what X is doing / multi-repo / dispatcher".
 ---
 
 # Dispatcher: multi-repo teammate orchestrator
@@ -15,24 +15,21 @@ Operations manual for dispatcher-style work from a parent directory of sibling g
 
 - The user asks to push work into another repo ("派一个到 `<repo>`", "去 `<repo>` 看看 X").
 - The user asks about an existing teammate ("看看 alarm 在干啥", "问问 monorepo-1 现在的 git status").
-- The user asks for a scheduled / recurring local job.
 - The user asks to coordinate across multiple sibling repos or maintain the dispatcher task ledger.
 
 If the request is a normal single-repo or single-file task inside a covered sibling repo, resolve the target repo and delegate the work into that repo. Keep repo-local instructions, git state, and tool output inside the worker context instead of mixing them into the dispatcher.
 
-## Pick the right delegation form
+## Pick the right `tm` verb for the common cases
 
-Pick once, up front; switching delegation form mid-task requires rebuilding state in the new form. Use the dispatcher's own shell for dispatcher bookkeeping (`tm`, ledger edits, cron setup); use delegated execution for target-repo inspection or modification.
+The dispatcher orchestrates teammates exclusively through `tm`. These three verbs cover almost every delegation: reach for them first, then drop into the per-scenario reference for flags and edge cases.
 
-| Form | Pick when | Skip when |
+| Verb | Use when | Read |
 |---|---|---|
-| `claude -p` headless in the target repo | One-shot repo task that can finish in a single delegated turn, including reads, small edits, or focused analysis | You need a cron / loop / wakeup; you want to keep talking to it later |
-| `Agent` teammate via Agent Teams (`team_name=<...>` on the Agent tool) | Parallel work across multiple repos that needs a shared task list or peer `SendMessage` | You need cron firing inside the teammate; you need teammate-level cwd; you need session resume; you need nested sub-teams |
-| Claude tmux teammate (`tm spawn <repo>`) | Long-running Claude work that needs a real TUI REPL, a Remote Control session, resume, or optional cron tied to that teammate's lifecycle | Throwaway one-shot work; Codex-specific work |
-| Persistent Codex daemon teammate (`tm spawn <name> --engine codex`) | Long-running Codex work that needs a named daemon and resumable persistent thread | Throwaway one-shot Codex work; cron or TUI-only behavior |
-| Codex pool one-shot (`tm ask "..."`) | One Codex turn on a fresh ephemeral thread using an already-spawned idle Codex daemon | You need a named persistent Codex thread, ledger tracking, or later resume |
+| `tm spawn <repo>` / `tm spawn <name> --engine codex` | Starting a long-lived teammate (Claude tmux session or Codex daemon) for ongoing work, optionally with a first task via `--prompt` | `references/dispatch-task.md` |
+| `tm send <repo-or-name> --prompt "..."` | Handing a new task or follow-up turn to an existing teammate | `references/dispatch-task.md`, `references/wait-and-readback.md` |
+| `tm resume <repo-or-name> <sid-or-thread-id>` | Re-attaching to a past Claude session or Codex thread that is no longer running (dispatcher restarted, `tm kill`, Mac reboot) | `references/inspect-and-resume.md` |
 
-Cron firing is reliable only inside an interactive TUI REPL: this dispatcher, or a Claude tmux teammate launched by `tm spawn`. Keep cron on this dispatcher unless the user specifically wants the job tied to a Claude teammate's lifecycle. Do not host cron jobs in `claude -p`, Agent Teams, or Codex daemon teammates.
+Agent Teams is intentionally not surfaced as a dispatcher delegation form; use `tm` for all teammate orchestration. Raw `claude -p` is similarly not the dispatcher's path — wrap any headless one-shot work inside the matching `tm` verb so it shares the same ledger, identity record, and state tracking as the rest of the fleet.
 
 ## Dispatcher posture as router
 
@@ -62,13 +59,10 @@ Match the user's intent to one scenario, then read the corresponding reference. 
 | Reading the fleet snapshot | `references/inspect-and-resume.md` | `tm states` |
 | A teammate looks hung mid-turn and needs pane/process ground truth | `references/wait-and-readback.md` | `tm status <repo>` |
 | Looking up past sessions or threads / resuming / re-reading a reply | `references/inspect-and-resume.md` | `tm history <repo>` / `tm resume <repo> <id>` / `tm last <repo>` |
-| Checking or compacting a Claude teammate's context window | `references/compact-a-teammate.md` | `tm ctx <repo>` / `tm compact <repo>` |
+| Compacting a Claude teammate's context window | `references/compact-a-teammate.md` | `tm compact <repo>` |
 | Appending a new active task or archiving a finished one | `references/ledger-and-archive.md` | `tm archive <id>` |
-| Spawning an Agent Teams teammate | `references/agent-teams.md` | `Agent(team_name=...)` |
 | Diagnosing `.sid` drift, a stuck Claude spawn, or surprising `tm states` output | `references/sid-rotation.md` | (debugging) |
 | Fanning `/reload-plugins` to teammates after a plugin update | (no reference) | `tm reload --all` (or `tm reload <repo>...`) |
-| Running an adversarial cross-engine review of a PR | `references/heterogeneous-review.md` | `tm spawn <reviewer> --engine <opposite>` |
-| Running a heterogeneous design-direction negotiation | `references/heterogeneous-negotiation.md` | parallel `tm spawn` of one claude TM + one codex TM |
 
 For any verb's flag/output contract: `tm <verb> --help`. Do not reason about `tm` from prior-conversation memory or model priors.
 
@@ -76,31 +70,9 @@ For any verb's flag/output contract: `tm <verb> --help`. Do not reason about `tm
 
 Run every verb that may block longer than a couple of seconds with `run_in_background: true` on the Bash tool. This covers `tm send` (sync default, blocks until Stop), `tm wait`, `tm spawn --prompt`, `tm resume --prompt`, `tm compact` (default 1800 s cap), `tm poll`, `tm reload`, and any file-polling loop you write yourself. After the call is backgrounded, wait for the task notification; do not chain `sleep N && cat <output-file>` to peek at the background output file.
 
-Foreground waits block the dispatcher end-to-end, so keep foreground use to non-wait operations such as `tm ls`, `tm states`, `tm status`, `tm last`, `tm ctx`, `tm history`, `tm archive`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, and `tm spawn` without `--prompt` when you intentionally want launch readiness before continuing.
+Foreground waits block the dispatcher end-to-end, so keep foreground use to non-wait operations such as `tm ls`, `tm states`, `tm status`, `tm last`, `tm history`, `tm archive`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, and `tm spawn` without `--prompt` when you intentionally want launch readiness before continuing.
 
-Long `sleep` chains are blocked by the harness sandbox. For "wait until X", use `until <check>; do sleep 4; done` with a time-bounded outer loop; run that loop in the background like every wait.
-
-## Cron host rule
-
-This dispatcher is the preferred cron host on this machine. The scheduler ticks only inside an interactive TUI REPL, not inside `claude -p`, Agent Teams teammates, or Codex daemon teammates.
-
-- Place periodic work here. If the work itself belongs to a specific repo, the callback prompt can dispatch outward with Bash, `claude -p`, `tm send`, or a fresh delegated teammate.
-- Jobs fire only while you are idle. Ongoing conversation delays firing.
-- Jobs are session-only by default and die when this dispatcher process dies (`tmux kill-session dispatcher`, terminal close while not detached, Mac reboot).
-- Recurring jobs auto-expire after 7 days.
-- For approximate times, pick an off-minute (e.g. `7 * * * *`, not `0 * * * *`) because the platform-wide fleet aliases on `:00` and `:30`.
-
-## Local dispatcher notes
-
-User-specific notes accumulated by `/claudemux:optimize` live in `.claude/local-dispatcher-notes.md` under the dispatcher directory. At the start of a dispatcher session, check whether that file exists and read it if so. It is user-owned and survives plugin upgrades: anything that would be lost on a plugin update belongs there, not in the plugin-shipped skill body.
-
-## Tool permission requests
-
-The auto-mode classifier blocks the dispatcher from editing its own `settings.local.json` to grant itself new tool permissions. When the dispatcher needs a new Bash permission, hand the user a minimal JSON snippet to merge into `~/.claude/settings.local.json`, or point them at `/permissions` to do it interactively:
-
-```json
-{ "permissions": { "allow": ["Bash(<command>:*)"] } }
-```
+The harness sandbox blocks `sleep` calls longer than a few seconds. To wait for an external condition (a file appearing, a process exiting, a status flipping), run a bounded polling loop in the background: `until <check>; do sleep 4; done` wrapped in `run_in_background: true`. The sandbox doesn't object to many short sleeps; it objects to one long one.
 
 ## User-facing reports
 

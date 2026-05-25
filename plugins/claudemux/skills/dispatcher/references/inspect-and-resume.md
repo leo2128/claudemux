@@ -62,11 +62,12 @@ When the user hands the dispatcher a sid or thread-id with a phrase like "this i
 After `tm resume <repo> <sid>`, verify the subject via at least one of:
 
 - **`tm last <repo>`** — usually names the subject when a `.last` file exists.
-- **Read the jsonl tail directly** — `tail -3 ~/.claude/projects/<encoded-cwd>/<sid>.jsonl` and parse the last assistant `text` content. Works on a fresh resume before `.last` has been written.
 - **Check the suspected target on the side** — `gh pr view <suspected-PR> --json reviews,comments`; if the resumed session was a review and the PR you assumed has empty reviews/comments, you assumed wrong.
 - **Ask the user one line** — the cost of a clarifying reply is much lower than the cost of dispatching invented work to a downstream teammate.
 
 Only after one of those checks lines up with your understanding of the subject should you brief the teammate.
+
+TODO (follow-up `tm` work, not this skill's responsibility): a fresh resume has no `.last` file written yet, so the first check above can return empty even when the prior session has content. Extending `tm last` (or adding a sibling verb) to surface the most recent assistant text directly from the engine's persistence, regardless of `.last` state, would close that gap and remove the need for callers to reach below the verb layer.
 
 The first turn sent to the resumed teammate should not contain a confident statement about the subject ("you reviewed PR #N"). Ask the teammate to surface its existing conclusions first ("summarize what you concluded in this session in dispatcher-friendly format"), and let its summary establish the subject — that way a wrong subject manifests as a push-back, not as invented compliance.
 

@@ -1,5 +1,9 @@
 # claudemux changelog
 
+## 1.0.0-beta.2 — 2026-05-25
+
+- (patch) tm history list mode shows the full canonical sid/thread-id (was an 8-char prefix) — at both the cross-engine renderer and each engine's raw fallback path — so it pastes cleanly into tm resume; tm resume attaches an actionable "looks like a prefix" hint for both engines when the caller pastes a partial canonical-dashed id, replacing the misleading "wrong repo" error
+
 ## 1.0.0-beta.1 — 2026-05-25
 
 - (minor) Add the resident MCP-native orchestration core (next line, Phase A): a Bun process that fronts the tm verb set over MCP, with a persistent teammate registry and a resident idle subscription

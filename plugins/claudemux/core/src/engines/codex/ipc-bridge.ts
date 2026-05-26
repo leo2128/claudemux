@@ -31,6 +31,7 @@ import {
 } from './ui-ipc.js'
 
 const CODEX_UI_HOST_ID = 'local'
+// Matches Codex extension 26.519.x's IPC schema version for thread-stream-state-changed.
 const CODEX_UI_STREAM_VERSION = 6
 const CODEX_IPC_RETRY_MS = 1000
 const CODEX_IPC_POLL_MS = 1000
@@ -229,6 +230,7 @@ export class CodexIpcBridge {
         requestAttestation: false,
       },
     })
+    client.onClose((reason) => this.handleAppClientClosed(client, reason))
     client.setServerRequestHandler(async (req) => this.handleCodexServerRequest(req))
     client.onNotification((notif) => this.handleCodexNotification(notif))
     this.appClient = client
@@ -240,13 +242,23 @@ export class CodexIpcBridge {
   }
 
   private closeAppClient(): void {
-    if (this.appClient !== null) this.appClient.close()
+    const client = this.appClient
     this.appClient = null
     this.appThread = null
     this.activeThreadId = null
+    if (client !== null) client.close()
     for (const pending of this.pendingServerRequests.values()) {
       pending.reject(new Error('codex IPC bridge app-server connection closed'))
     }
+    this.pendingServerRequests.clear()
+  }
+
+  private handleAppClientClosed(client: CodexWsClient, reason: Error): void {
+    if (this.appClient !== client) return
+    this.appClient = null
+    this.appThread = null
+    this.activeThreadId = null
+    for (const pending of this.pendingServerRequests.values()) pending.reject(reason)
     this.pendingServerRequests.clear()
   }
 
@@ -260,7 +272,6 @@ export class CodexIpcBridge {
       throw new Error(`server request ${req.method} does not target the active thread`)
     }
     const id = String(req.id)
-    this.scheduleSnapshot()
     return new Promise((resolve, reject) => {
       this.pendingServerRequests.set(id, {
         id,
@@ -587,7 +598,7 @@ function normalizeThreadItemForUi(item: unknown): unknown {
   return item
 }
 
-function turnStartParamsFromFollower(params: unknown, threadId: string): TurnStartParams {
+export function turnStartParamsFromFollower(params: unknown, threadId: string): TurnStartParams {
   const outer = asRecord(params)
   if (outer === null) throw new Error('thread-follower-start-turn params must be an object')
   const inner = asRecord(outer['turnStartParams']) ?? outer

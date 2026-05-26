@@ -82,6 +82,7 @@ export interface CodexWsClientOptions {
 
 export type NotificationHandler = (notif: ServerNotification) => void
 export type ServerRequestHandler = (req: ServerRequest) => Promise<unknown>
+export type CloseHandler = (reason: Error) => void
 
 /**
  * A long-running websocket connection to one `codex app-server` daemon.
@@ -95,6 +96,7 @@ export class CodexWsClient {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >()
   private readonly notifHandlers: NotificationHandler[] = []
+  private readonly closeHandlers: CloseHandler[] = []
   private serverReqHandler: ServerRequestHandler = async () => null
   private nextId = 1
   private readonly opened: Promise<void>
@@ -159,6 +161,15 @@ export class CodexWsClient {
    */
   setServerRequestHandler(handler: ServerRequestHandler): void {
     this.serverReqHandler = handler
+  }
+
+  /** Subscribe to connection teardown. Fires for remote close, transport error, and caller close. */
+  onClose(handler: CloseHandler): void {
+    if (this.closed) {
+      handler(this.closeReason ?? new Error('codex client closed'))
+      return
+    }
+    this.closeHandlers.push(handler)
   }
 
   /**
@@ -289,5 +300,12 @@ export class CodexWsClient {
     this.closeReason = reason
     for (const { reject } of this.pending.values()) reject(reason)
     this.pending.clear()
+    for (const handler of this.closeHandlers) {
+      try {
+        handler(reason)
+      } catch {
+        // Close observers are cleanup hooks; one throw must not mask teardown.
+      }
+    }
   }
 }

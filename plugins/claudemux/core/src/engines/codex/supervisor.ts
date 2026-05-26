@@ -153,6 +153,27 @@ function codexIpcBridgeDisabled(env: NodeJS.ProcessEnv): boolean {
   return env['CLAUDEMUX_CODEX_IPC_BRIDGE'] === '0' || env['VITEST'] !== undefined
 }
 
+const CODEX_IPC_BRIDGE_PID_RESERVATION_STALE_MS = 10000
+
+function ipcBridgePidFileIsBusy(name: string): boolean {
+  const pidPath = codexIpcBridgePidFile(name)
+  const existingPid = readIntFile(pidPath)
+  if (existingPid !== null) {
+    if (isProcessAlive(existingPid)) return true
+    rmSync(pidPath, { force: true })
+    return false
+  }
+  if (!existsSync(pidPath)) return false
+  try {
+    const ageMs = Date.now() - statSync(pidPath).mtimeMs
+    if (ageMs < CODEX_IPC_BRIDGE_PID_RESERVATION_STALE_MS) return true
+  } catch {
+    return true
+  }
+  rmSync(pidPath, { force: true })
+  return false
+}
+
 function clearStaleBorrowLock(name: string): void {
   const lockPath = codexBorrowLockFile(name)
   const pid = readIntFile(lockPath)
@@ -337,31 +358,44 @@ export function ensureCodexIpcBridge(
   const env = opts.env ?? process.env
   if (codexIpcBridgeDisabled(env)) return
   const pidPath = codexIpcBridgePidFile(name)
-  const existingPid = readIntFile(pidPath)
-  if (existingPid !== null && isProcessAlive(existingPid)) return
-  rmSync(pidPath, { force: true })
+  if (ipcBridgePidFileIsBusy(name)) return
   mkdirSync(codexTeammateDir(name), { recursive: true })
 
-  const stdoutFd = openSync(codexIpcBridgeStdoutLogFile(name), 'a', 0o600)
-  const stderrFd = openSync(codexIpcBridgeStderrLogFile(name), 'a', 0o600)
-  const scriptPath = fileURLToPath(new URL('./ipc-bridge-process.ts', import.meta.url))
-  const child = spawnChild(
-    process.execPath,
-    [...process.execArgv, scriptPath, name],
-    {
-      cwd: opts.cwd ?? process.cwd(),
-      env,
-      detached: true,
-      stdio: ['ignore', stdoutFd, stderrFd],
-    },
-  )
-  closeSync(stdoutFd)
-  closeSync(stderrFd)
-  child.unref()
-  child.on('error', () => {
+  let pidFd: number | null = null
+  let stdoutFd: number | null = null
+  let stderrFd: number | null = null
+  try {
+    pidFd = openSync(pidPath, 'wx', 0o600)
+  } catch {
+    return
+  }
+  try {
+    stdoutFd = openSync(codexIpcBridgeStdoutLogFile(name), 'a', 0o600)
+    stderrFd = openSync(codexIpcBridgeStderrLogFile(name), 'a', 0o600)
+    const scriptPath = fileURLToPath(new URL('./ipc-bridge-process.ts', import.meta.url))
+    const child = spawnChild(
+      process.execPath,
+      [...process.execArgv, scriptPath, name],
+      {
+        cwd: opts.cwd ?? process.cwd(),
+        env,
+        detached: true,
+        stdio: ['ignore', stdoutFd, stderrFd],
+      },
+    )
+    child.unref()
+    child.on('error', () => {
+      rmSync(pidPath, { force: true })
+    })
+    if (child.pid === undefined) throw new Error('codex IPC bridge spawned without a pid')
+    writeSync(pidFd, `${child.pid}\n`)
+  } catch {
     rmSync(pidPath, { force: true })
-  })
-  if (child.pid !== undefined) atomicWrite(pidPath, `${child.pid}\n`)
+  } finally {
+    if (stdoutFd !== null) closeSync(stdoutFd)
+    if (stderrFd !== null) closeSync(stderrFd)
+    if (pidFd !== null) closeSync(pidFd)
+  }
 }
 
 function reapCodexIpcBridge(name: string): void {

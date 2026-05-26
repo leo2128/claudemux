@@ -1,0 +1,13 @@
+{
+  "name": "claudemux",
+  "version": "1.0.0-beta.3",
+  "private": true,
+  "scripts": {
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-plugin-version.mjs",
+    "version-ga": "changeset pre exit && changeset version && node scripts/sync-plugin-version.mjs"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.31.0"
+  }
+}

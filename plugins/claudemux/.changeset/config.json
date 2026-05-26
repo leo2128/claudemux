@@ -1,0 +1,26 @@
+{
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "access": "restricted",
+  "baseBranch": "next",
+  "updateInternalDependencies": "patch",
+  "ignore": [],
+  "changedFilePatterns": [
+    "bin/*",
+    "hooks/*",
+    "scripts/*",
+    "templates/*",
+    "skills/*/SKILL.md",
+    "core/src/*",
+    "core/package.json",
+    "core/resolver.mjs",
+    "core/resolver-register.mjs",
+    "core/third_party/*"
+  ],
+  "privatePackages": {
+    "version": true,
+    "tag": false
+  }
+}

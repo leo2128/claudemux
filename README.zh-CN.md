@@ -182,10 +182,15 @@ clone 后跑一次启用 pre-commit hook:
 git config core.hooksPath .githooks
 ```
 
-它会拦截同一提交里改了某个插件 feature-class 路径却没有 changeset 声明
-变更的 commit。`plugins/` 下每个插件各自独立计版:feature 提交用
-`bin/changeset <插件> <patch|minor|major> "<摘要>"` 记录变更,之后由
-`bin/release <插件>` 把累积的 changeset 汇成一次版本号抬升和 CHANGELOG 条目。
+它会拦截 author email 不合法的 commit。claudemux 的发版意图用官方
+Changesets fragment 声明:
+
+```bash
+pnpm --dir plugins/claudemux changeset
+```
+
+feature PR 提交生成的 `.changeset/*.md`;后续 release PR 会消费这些
+fragment,更新插件版本和 changelog。
 
 ## 卸载
 

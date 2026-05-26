@@ -58,29 +58,35 @@ These rules cover the shared surfaces between `bin/tm`, the hooks, and the host 
 
 This repo ships more than one plugin under `plugins/`. Each plugin has its own manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version number — the plugins are versioned independently.
 
-A feature commit does **not** edit the `version` field. Instead it declares the change with a **changeset**: run `bin/changeset <plugin> <patch|minor|major> "<one-line summary>"`, which writes a uniquely-named fragment under `plugins/<plugin>/.changeset/`, and commit that fragment alongside the change. The level you pick is what that change warrants on its own:
+For claudemux, a feature commit does **not** edit the `version` field. It declares the change with an official Changesets fragment:
+
+```bash
+pnpm --dir plugins/claudemux changeset
+```
+
+Commit the generated `plugins/claudemux/.changeset/*.md` file alongside the change. The level you pick is what that change warrants on its own:
 
 - `patch` — bug fix, no behavior change visible to users
 - `minor` — new feature, backward-compatible
 - `major` — breaking change to a documented contract (CLI flag removal, file path change, on-disk format change)
 
-The version is bumped only at **release time**: `bin/release <plugin>` consumes every pending fragment for that plugin, bumps the manifest `version` by the highest level among them, prepends a dated section to `plugins/<plugin>/CHANGELOG.md`, and deletes the consumed fragments. `bin/release` is the only command that edits a `version` field. Because each feature commit adds a *new, uniquely-named* file rather than editing the one shared `version` line, two parallel branches never collide over versioning; the version line is touched only by serialized release commits. See [decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
+The version is bumped only by the release pipeline. Official Changesets consumes pending fragments, updates `plugins/claudemux/package.json`, writes `plugins/claudemux/CHANGELOG.md`, and deletes consumed fragments. The `version-packages` script then mirrors that package version into `plugins/claudemux/.claude-plugin/plugin.json`. Because each feature commit adds a new fragment instead of editing the shared `version` line, parallel feature branches do not collide on versioning. See [decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
 
-What counts as feature-class differs per plugin, because the plugins have different shapes:
+For claudemux, release-surface paths are declared in `plugins/claudemux/.changeset/config.json` under `changedFilePatterns`:
 
-- `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any `skills/*/SKILL.md`.
-- `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and any `skills/*/SKILL.md`.
+- `bin/*`, `hooks/*`, `scripts/*`, `templates/*`
+- `skills/*/SKILL.md`
+- `core/src/*`, `core/package.json`
+- `core/resolver.mjs`, `core/resolver-register.mjs`, `core/third_party/*`
 
-A pre-commit hook at `.githooks/pre-commit` enforces this: staging a feature-class file for a plugin without staging a changeset fragment for that plugin in the same commit is rejected, with the exact `bin/changeset` invocation printed to stderr. When several plugins are touched in one commit, each is checked independently. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords are exempt — the hook doesn't trigger on them. The per-plugin feature-class sets live in the `feature_class_globs` function in the hook; onboarding a new plugin means adding a case branch there.
+The local pre-commit hook at `.githooks/pre-commit` checks only the commit author email. Changeset enforcement belongs in CI, not in the local hook. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from claudemux release intent.
 
 To enable the hook on a fresh clone, run once: `git config core.hooksPath .githooks`.
-
-The hook is a workflow nudge, not a security wall — `git commit --no-verify` bypasses it. Use that escape only when you've judged the change genuinely doesn't warrant a changeset.
 
 ## Commit Author
 
 Commit author email must be a real, well-formed address — not a machine-default identity (git's `whoami@hostname` guess, e.g. `dyzhu@MacBook.local`, which git fabricates when `user.email` is unset). Any valid public email passes; there is no per-person whitelist.
 
-The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`). Enabling the hook is the same one-time step as the versioning nudge: `git config core.hooksPath .githooks`. `.githooks/` itself is not a feature-class path, so changes to the hook don't trigger the changeset rule.
+The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`). Enable the hook with `git config core.hooksPath .githooks`.
 
 To stop machine-default identities at the root, set once per machine: `git config --global user.useConfigOnly true` — git then refuses to commit until `user.email` is explicitly configured, instead of silently guessing.

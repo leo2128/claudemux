@@ -62,8 +62,6 @@ jobs:
             plugins/claudemux/core/scripts/*.sh \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
-            bin/changeset \
-            bin/release \
             bin/check-author \
             .githooks/pre-commit \
             .agents/scripts/check.sh

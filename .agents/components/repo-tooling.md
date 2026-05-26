@@ -8,38 +8,39 @@ workflow.
 
 | Path | Role |
 |---|---|
-| [`/bin/changeset`](/bin/changeset) | Record one pending change as a changeset fragment — `bin/changeset <plugin> <patch\|minor\|major> "<summary>"` |
-| [`/bin/release`](/bin/release) | Consume a plugin's changeset fragments into one version bump and a CHANGELOG entry — `bin/release <plugin>` |
 | [`/bin/check-author`](/bin/check-author) | Validate one git author email — the single source of truth for the author rule |
 | [`/bin/test-tm-mem`](/bin/test-tm-mem), `/bin/test-tm-prompt-splat` | Standalone `tm` behavior test runners |
-| [`/.githooks/pre-commit`](/.githooks/pre-commit) | Two ordered checks: author email, then changeset presence |
+| [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Official Changesets package manifest for claudemux release automation |
+| [`/plugins/claudemux/.changeset/config.json`](/plugins/claudemux/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, and claudemux release-surface globs |
+| [`/plugins/claudemux/scripts/sync-plugin-version.mjs`](/plugins/claudemux/scripts/sync-plugin-version.mjs) | Mirror `package.json.version` into `.claude-plugin/plugin.json.version` after Changesets versions packages |
+| [`/.githooks/pre-commit`](/.githooks/pre-commit) | Local author-email check |
 | [`/.github/workflows/ci.yml`](/.github/workflows/ci.yml) | CI — shellcheck + bats on an Ubuntu/macOS matrix |
 | [`/tests/`](/tests) | bats tests — `cli/` covers repo tooling and hook regressions; TypeScript core conformance lives under `plugins/claudemux/core/test/` |
 
-## Versioning — the changeset / release model
+## Versioning — official Changesets
 
-This repo ships more than one plugin under `plugins/`. Each has its own
-manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version;
-the plugins are versioned independently.
+Claudemux is versioned with official Changesets, scoped to
+`plugins/claudemux/`. The Claude Code plugin manifest remains
+`plugins/claudemux/.claude-plugin/plugin.json`, but Changesets reads and writes
+`plugins/claudemux/package.json`.
 
-A feature commit never edits the `version` field. It declares its change with
-a **changeset fragment** instead:
+A feature commit never edits either version field. It declares release intent
+with an official Changesets fragment:
 
-1. `bin/changeset <plugin> <patch|minor|major> "<one-line summary>"` writes a
-   uniquely-named fragment under `plugins/<plugin>/.changeset/`. Commit the
-   fragment alongside the change.
-2. At release time, `bin/release <plugin>` consumes every pending fragment for
-   that plugin: it bumps the manifest `version` by the highest level among
-   them, prepends a dated section to `plugins/<plugin>/CHANGELOG.md`, and
-   deletes the consumed fragments. `bin/release` is the sole writer of the
-   `version` field.
+```bash
+pnpm --dir plugins/claudemux changeset
+```
 
-Each feature commit therefore adds a *new, uniquely-named* file rather than
-editing the one shared `version` line — so two parallel branches never
-collide over versioning. The `version` line moves only in release commits,
-which are cut one plugin at a time. The per-change semver intent is not lost:
-the fragment records it, and `bin/release` aggregates it (`major` > `minor` >
-`patch`) and writes it into the CHANGELOG. See
+Commit the generated `plugins/claudemux/.changeset/*.md` file alongside the
+change. Release automation later runs `pnpm --dir plugins/claudemux
+version-packages`, which calls `changeset version` and then mirrors the
+resulting package version into `.claude-plugin/plugin.json`.
+
+Each feature commit therefore adds a new fragment rather than editing the
+shared `version` line, so two parallel branches do not collide over versioning.
+The per-change semver intent is not lost: the fragment records it, and
+Changesets aggregates it (`major` > `minor` > `patch`) and writes it into the
+generated changelog. See
 [decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
 
 `patch` = bug fix, no visible behavior change; `minor` = new
@@ -47,10 +48,13 @@ backward-compatible feature; `major` = breaking change to a documented
 contract (a CLI flag, a file path, an on-disk format).
 
 What counts as feature-class is per-plugin, because the plugins differ in
-shape:
+shape. Claudemux's release surface is declared in
+`plugins/claudemux/.changeset/config.json`:
 
 - `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any
-  `skills/*/SKILL.md`.
+  `skills/*/SKILL.md`; plus `core/src/*`, `core/package.json`,
+  `core/resolver.mjs`, `core/resolver-register.mjs`, and
+  `core/third_party/*`.
 - `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and
   any `skills/*/SKILL.md`.
 
@@ -61,19 +65,10 @@ need a changeset.
 
 ## The pre-commit hook
 
-[`/.githooks/pre-commit`](/.githooks/pre-commit) runs two checks:
-
-1. **Author email** — delegates to `bin/check-author` (see below).
-2. **Changeset** — for each plugin with a staged feature-class file, the
-   commit is rejected unless a changeset fragment for that plugin
-   (`plugins/<plugin>/.changeset/<name>.md`) is also staged. Plugins are
-   checked independently, and the exact `bin/changeset` command is printed to
-   stderr. The per-plugin feature-class globs live in the hook's
-   `feature_class_globs` function — a new plugin is onboarded by adding one
-   case branch there.
-
-It is a workflow nudge, not a wall: `git commit --no-verify` bypasses it.
-Enable it once per clone: `git config core.hooksPath .githooks`.
+[`/.githooks/pre-commit`](/.githooks/pre-commit) delegates the author-email
+rule to `bin/check-author`. Changeset enforcement belongs to CI, not to the
+local hook. Enable the hook once per clone:
+`git config core.hooksPath .githooks`.
 
 ## The author-email rule
 
@@ -97,9 +92,8 @@ jobs:
 - **`check`** — the claudemux plugin, on an `ubuntu-latest` +
   `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
   install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on `tm`, the hooks,
-  the scripts, `bin/changeset`, `bin/release`, `bin/check-author`, and
-  `.githooks/pre-commit` → `bats tests/cli/` (repo-tooling and hook
-  regression tests).
+  the scripts, `bin/check-author`, and `.githooks/pre-commit` →
+  `bats tests/cli/` (repo-tooling and hook regression tests).
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`
@@ -116,5 +110,5 @@ The `feishu-channel` job covers a plugin that is still on a branch — see
 ## See also
 
 - [decisions/tm-quality-hardening.md](/.agents/decisions/tm-quality-hardening.md) — how CI, tests, and the lint hooks were introduced.
-- [decisions/changeset-release-versioning.md](/.agents/decisions/changeset-release-versioning.md) — why versioning moved to changeset fragments and a release step.
+- [decisions/changeset-release-versioning.md](/.agents/decisions/changeset-release-versioning.md) — why versioning moved to Changesets fragments and release PRs.
 - [components/tm.md](/.agents/components/tm.md) — what shellcheck and the bats suite guard.

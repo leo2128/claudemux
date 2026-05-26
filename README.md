@@ -191,12 +191,15 @@ Enable the pre-commit hook once after cloning:
 git config core.hooksPath .githooks
 ```
 
-It rejects a commit that changes a plugin's feature-class paths without a
-changeset declaring the change. Each plugin under `plugins/` is versioned on
-its own: a feature commit records its change with
-`bin/changeset <plugin> <patch|minor|major> "<summary>"`, and `bin/release
-<plugin>` later turns the pending changesets into a version bump and a
-CHANGELOG entry.
+It rejects commits with an invalid author email. Claudemux release intent is
+declared with official Changesets fragments:
+
+```bash
+pnpm --dir plugins/claudemux changeset
+```
+
+Feature PRs commit the generated `.changeset/*.md` file; generated release PRs
+later consume those fragments into the plugin version and changelog.
 
 ## Uninstall
 

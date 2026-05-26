@@ -1,132 +1,16 @@
 #!/usr/bin/env bash
-# pre-commit — two checks, in order:
-#   1) Commit author email must be a real, well-formed address — not a
-#      machine-default identity (git's whoami@hostname guess). The rule
-#      lives in bin/check-author and is shared with the CI workflow.
-#   2) Touching a plugin's feature-class path requires a changeset fragment
-#      for that plugin in the same commit. Every plugin under plugins/ is
-#      versioned independently, so each is checked on its own.
+# pre-commit — commit author email must be a real, well-formed address, not a
+# machine-default identity (git's whoami@hostname guess). The rule lives in
+# bin/check-author and is shared with the CI workflow.
 #
 # Enable per clone:  git config core.hooksPath .githooks
-# Bypass once:       git commit --no-verify
-#
-# This is a workflow nudge, not a security wall — bypass exists on purpose.
-# Use it when you've judged the change genuinely doesn't need a changeset.
 
 set -euo pipefail
 
-# --- 1) Author email sanity check -----------------------------------------
 # Delegate the rule to bin/check-author so this hook and the CI workflow
 # share one definition of a valid author email.
 author_email=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
 if ! "$(git rev-parse --show-toplevel)/bin/check-author" "$author_email"; then
   echo "Fix:    git config user.email you@example.com" >&2
-  echo "Bypass: git commit --no-verify  (if this is intentional)" >&2
   exit 1
 fi
-
-# --- 2) Changeset check ---------------------------------------------------
-# This repo ships more than one plugin under plugins/, each with its own
-# manifest and its own version. A staged feature-class file requires a
-# changeset fragment for *that plugin* in the same commit — a new, uniquely
-# named file under the plugin's .changeset/ directory, never an edit to the
-# shared `version` line. Two parallel commits therefore never collide on it;
-# `bin/release` later aggregates the fragments into one version bump.
-# Plugins are checked independently of one another.
-
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
-[[ -z "$staged" ]] && exit 0
-
-# Feature-class globs per plugin, matched against the path *within* the
-# plugin directory. The plugins have different shapes — a Bash plugin and a
-# TypeScript plugin — so each declares its own set. A blanket "everything but
-# docs" rule is deliberately avoided: it would silently reclassify
-# claudemux's command docs and skill references as feature-class. A path is
-# feature-class when changing it shifts user-visible runtime behavior.
-# To onboard a new plugin, add a case branch here.
-feature_class_globs() {
-  case "$1" in
-    claudemux)
-      printf '%s\n' 'bin/*' 'hooks/*' 'scripts/*' 'templates/*' 'skills/*/SKILL.md' \
-        'core/src/*' 'core/package.json' \
-        'core/resolver.mjs' 'core/resolver-register.mjs' 'core/third_party/*' ;;
-    feishu-channel)
-      printf '%s\n' 'src/*' '.mcp.json' 'package.json' 'skills/*/SKILL.md' ;;
-    *) ;;  # Unknown plugin: no declared set — reported below, never blocked on.
-  esac
-}
-
-touched=" "   # space-padded unique plugin names with a feature-class change
-unknown=" "   # space-padded unique plugin names with no feature-class rule
-report=""     # human-readable per-file list for the rejection message
-
-while IFS= read -r f; do
-  [[ "$f" == plugins/*/* ]] || continue
-  rest="${f#plugins/}"
-  plugin="${rest%%/*}"
-  rel="${rest#*/}"
-
-  globs=$(feature_class_globs "$plugin")
-  if [[ -z "$globs" ]]; then
-    [[ "$unknown" == *" $plugin "* ]] || unknown+="$plugin "
-    continue
-  fi
-
-  while IFS= read -r glob; do
-    # $glob is an intentional case pattern, not a literal string.
-    # shellcheck disable=SC2254
-    case "$rel" in
-      $glob)
-        [[ "$touched" == *" $plugin "* ]] || touched+="$plugin "
-        report+="  [$plugin] $f"$'\n'
-        break ;;
-    esac
-  done <<< "$globs"
-done <<< "$staged"
-
-# A plugin with no feature-class rule cannot be checked — say so, but never
-# block on it, so an unrecognized plugin does not wedge every commit.
-if [[ "$unknown" != " " ]]; then
-  # shellcheck disable=SC2086  # intentional word-split over the name list
-  for p in $unknown; do
-    echo "pre-commit: note — plugins/$p/ has no feature-class rule in" \
-         ".githooks/pre-commit; its changeset is not enforced." >&2
-  done
-fi
-
-[[ "$touched" == " " ]] && exit 0
-
-# Each touched plugin must carry a changeset fragment in this commit: a staged
-# file matching plugins/<plugin>/.changeset/<name>.md. The fragment is a new,
-# uniquely named file, so two parallel commits never collide on it — unlike
-# the single `version` line they would otherwise both edit.
-missing=""
-# shellcheck disable=SC2086  # intentional word-split over the name list
-for p in $touched; do
-  has_changeset=0
-  while IFS= read -r f; do
-    case "$f" in
-      plugins/"$p"/.changeset/*.md) has_changeset=1; break ;;
-    esac
-  done <<< "$staged"
-  (( has_changeset )) || missing+="$p "
-done
-
-[[ -z "$missing" ]] && exit 0
-
-{
-  echo "pre-commit: feature-class files staged, but no changeset declares the change."
-  echo
-  echo "Touched feature-class paths:"
-  printf '%s' "$report"
-  echo
-  echo "Add a changeset for each affected plugin in this commit:"
-  # shellcheck disable=SC2086  # intentional word-split over the name list
-  for p in $missing; do
-    echo "  bin/changeset $p <patch|minor|major> \"<one-line summary>\""
-    echo "  git add plugins/$p/.changeset"
-  done
-  echo
-  echo "Bypass with --no-verify if this change genuinely doesn't warrant a changeset."
-} >&2
-exit 1

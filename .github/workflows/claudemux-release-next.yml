@@ -1,0 +1,58 @@
+name: claudemux release next
+
+on:
+  push:
+    branches: [next]
+
+concurrency:
+  group: claudemux-release-next
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: next
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: plugins/claudemux/pnpm-lock.yaml
+
+      - name: Install claudemux release tooling
+        run: pnpm --dir plugins/claudemux install --frozen-lockfile
+
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDEMUX_RELEASE_APP_ID }}
+          private-key: ${{ secrets.CLAUDEMUX_RELEASE_APP_PRIVATE_KEY }}
+
+      - id: changesets
+        uses: changesets/action@v1
+        with:
+          cwd: plugins/claudemux
+          branch: next
+          title: "chore(release): claudemux beta"
+          commit: "chore(release): claudemux beta"
+          version: pnpm version-packages
+          github-token: ${{ steps.app-token.outputs.token }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Enable auto-merge for the release PR
+        if: steps.changesets.outputs.pullRequestNumber != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr merge "${{ steps.changesets.outputs.pullRequestNumber }}" --auto --squash

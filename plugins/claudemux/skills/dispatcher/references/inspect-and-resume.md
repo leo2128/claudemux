@@ -65,9 +65,7 @@ After `tm resume <repo> <sid>`, verify the subject via at least one of:
 - **Check the suspected target on the side** — `gh pr view <suspected-PR> --json reviews,comments`; if the resumed session was a review and the PR you assumed has empty reviews/comments, you assumed wrong.
 - **Ask the user one line** — the cost of a clarifying reply is much lower than the cost of dispatching invented work to a downstream teammate.
 
-Only after one of those checks lines up with your understanding of the subject should you brief the teammate.
-
-TODO (follow-up `tm` work, not this skill's responsibility): a fresh resume has no `.last` file written yet, so the first check above can return empty even when the prior session has content. Extending `tm last` (or adding a sibling verb) to surface the most recent assistant text directly from the engine's persistence, regardless of `.last` state, would close that gap and remove the need for callers to reach below the verb layer.
+These three checks cover this case; pick whichever is fastest for the situation. Only after one of them lines up with your understanding of the subject should you brief the teammate.
 
 The first turn sent to the resumed teammate should not contain a confident statement about the subject ("you reviewed PR #N"). Ask the teammate to surface its existing conclusions first ("summarize what you concluded in this session in dispatcher-friendly format"), and let its summary establish the subject — that way a wrong subject manifests as a push-back, not as invented compliance.
 

@@ -50,7 +50,7 @@ Read stderr before deciding the next step; timeout paths name the recovery verb 
 ## Current-state command rules
 
 - For reload fan-out across teammates, use `tm reload --all` or `tm reload <repo>...`.
-- For externally driven Claude turns (Remote Control web UI, mobile, cron, sub-agent), collect the next reply with `tm wait --fresh <repo>`; for Codex daemon turns, use `tm wait <name>`.
+- For externally driven Claude turns (Remote Control web UI, mobile, the teammate's own sub-agents), collect the next reply with `tm wait --fresh <repo>`; for Codex daemon turns, use `tm wait <name>`.
 - For stopping a teammate, use `tm kill <repo>`; it clears the matching on-disk state for that engine.
 
 ## Claude tmux teammate setup

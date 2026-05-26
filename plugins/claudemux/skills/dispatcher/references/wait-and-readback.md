@@ -1,6 +1,6 @@
 # Wait for a turn and read it back (scenario reference)
 
-Read this when an external actor (Remote Control web UI, mobile app, cron callback, or the teammate's own sub-agents) is driving a teammate and you need to collect the result without sending a fresh prompt. Skip when you are the sender; `tm send` and `tm spawn --prompt` already wait and print the result atomically (see `dispatch-task.md`).
+Read this when an external actor (Remote Control web UI, mobile app, or the teammate's own sub-agents) is driving a teammate and you need to collect the result without sending a fresh prompt. Skip when you are the sender; `tm send` and `tm spawn --prompt` already wait and print the result atomically (see `dispatch-task.md`).
 
 ## Primary verbs
 

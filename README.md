@@ -161,8 +161,9 @@ installed version.
   `$PWD/<repo>`, so sibling repos must share one parent.
 - **macOS / Linux only.** Scripts use BSD `stat`; GNU Linux needs
   `-c %Y` — PRs welcome.
-- **Cron only fires inside the dispatcher REPL.** `CronCreate` from
-  `claude -p` or an Agent Teams teammate returns success then never fires.
+- **Cron only fires inside an interactive TUI REPL.** The dispatcher session
+  and `tm`-spawned Claude tmux sessions qualify; `claude -p` and Agent Teams
+  subagents accept the `CronCreate` call but silently never fire.
 
 ## Local development
 

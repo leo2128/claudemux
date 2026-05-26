@@ -169,7 +169,7 @@ If any step in this skill errors (jsonl corruption, a `Read` that fails, a Bash 
 
 ## Scheduling
 
-Once the user has confirmed the skill works manually, schedule it via `CronCreate` from the dispatcher (cron only fires inside the dispatcher REPL, never inside teammates or `claude -p`):
+Once the user has confirmed the skill works manually, schedule it via `CronCreate` from the dispatcher (CronCreate only fires inside an interactive TUI REPL — the dispatcher session and `tm`-spawned Claude tmux sessions both qualify; `claude -p` and Agent Teams subagents accept the call but silently never fire):
 
 ```
 CronCreate({

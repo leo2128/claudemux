@@ -27,6 +27,7 @@ import {
   type SpawnOptions,
 } from 'node:child_process'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   closeSync,
   existsSync,
@@ -44,6 +45,9 @@ import {
 
 import {
   codexBorrowLockFile,
+  codexIpcBridgePidFile,
+  codexIpcBridgeStderrLogFile,
+  codexIpcBridgeStdoutLogFile,
   codexLastSeenFile,
   codexMetaFile,
   codexPidFile,
@@ -143,6 +147,10 @@ function readTextFile(path: string): string | null {
   } catch {
     return null
   }
+}
+
+function codexIpcBridgeDisabled(env: NodeJS.ProcessEnv): boolean {
+  return env['CLAUDEMUX_CODEX_IPC_BRIDGE'] === '0' || env['VITEST'] !== undefined
 }
 
 function clearStaleBorrowLock(name: string): void {
@@ -306,6 +314,9 @@ function removeSelfRegistry(name: string): void {
     codexLastSeenFile(name),
     codexStdoutLogFile(name),
     codexStderrLogFile(name),
+    codexIpcBridgePidFile(name),
+    codexIpcBridgeStdoutLogFile(name),
+    codexIpcBridgeStderrLogFile(name),
     codexMetaFile(name),
     codexBorrowLockFile(name),
   ]) {
@@ -317,6 +328,47 @@ function removeSelfRegistry(name: string): void {
     const code = (e as NodeJS.ErrnoException).code
     if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e
   }
+}
+
+export function ensureCodexIpcBridge(
+  name: string,
+  opts: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv } = {},
+): void {
+  const env = opts.env ?? process.env
+  if (codexIpcBridgeDisabled(env)) return
+  const pidPath = codexIpcBridgePidFile(name)
+  const existingPid = readIntFile(pidPath)
+  if (existingPid !== null && isProcessAlive(existingPid)) return
+  rmSync(pidPath, { force: true })
+  mkdirSync(codexTeammateDir(name), { recursive: true })
+
+  const stdoutFd = openSync(codexIpcBridgeStdoutLogFile(name), 'a', 0o600)
+  const stderrFd = openSync(codexIpcBridgeStderrLogFile(name), 'a', 0o600)
+  const scriptPath = fileURLToPath(new URL('./ipc-bridge-process.ts', import.meta.url))
+  const child = spawnChild(
+    process.execPath,
+    [...process.execArgv, scriptPath, name],
+    {
+      cwd: opts.cwd ?? process.cwd(),
+      env,
+      detached: true,
+      stdio: ['ignore', stdoutFd, stderrFd],
+    },
+  )
+  closeSync(stdoutFd)
+  closeSync(stderrFd)
+  child.unref()
+  child.on('error', () => {
+    rmSync(pidPath, { force: true })
+  })
+  if (child.pid !== undefined) atomicWrite(pidPath, `${child.pid}\n`)
+}
+
+function reapCodexIpcBridge(name: string): void {
+  const pid = readIntFile(codexIpcBridgePidFile(name))
+  if (pid === null) return
+  if (isProcessAlive(pid)) killProcessGroup(pid, 'SIGTERM')
+  killProcessGroup(pid, 'SIGKILL')
 }
 
 /**
@@ -531,6 +583,7 @@ async function waitForSocket(
  * so the SIGKILL fires unconditionally before registry cleanup.
  */
 export async function reapDaemon(name: string): Promise<void> {
+  reapCodexIpcBridge(name)
   const state = readDaemonState(name)
   if (state !== null) {
     if (isProcessAlive(state.pid)) {

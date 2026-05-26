@@ -63,6 +63,7 @@ import {
   daemonAlive,
   daemonBorrowed,
   daemonSpawnInProgress,
+  ensureCodexIpcBridge,
   isProcessAlive,
   listDaemons,
   readDaemonState,
@@ -615,6 +616,7 @@ export class CodexEngine implements Engine {
       })
 
       await this.healthCheck(req.name)
+      ensureCodexIpcBridge(req.name, { cwd: req.cwd, env: ctx.env })
 
       if (req.prompt === null) {
         return {
@@ -673,6 +675,10 @@ export class CodexEngine implements Engine {
         recoverable: false,
       }
     }
+    ensureCodexIpcBridge(req.name, {
+      cwd: readBaseRecord(req.name)?.cwd ?? readCodexMeta(req.name)?.cwd ?? undefined,
+      env: ctx.env,
+    })
     if (req.prompt.length === 0) {
       return { kind: 'failed', message: 'usage: tm send <teammate> "<prompt>"', recoverable: false }
     }
@@ -963,6 +969,7 @@ export class CodexEngine implements Engine {
       })
 
       await this.healthCheck(req.name)
+      ensureCodexIpcBridge(req.name, { cwd, env: ctx.env })
       client = await openInitializedCodexClient(req.name)
       if (threadId === null) {
         threadId = await latestCodexThreadIdForCwd(client, cwd)

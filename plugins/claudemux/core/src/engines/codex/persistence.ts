@@ -31,6 +31,9 @@ export interface CodexTeammateExtension {
   lastSeen: string
   stdoutLog: string
   stderrLog: string
+  ipcBridgePid: string
+  ipcBridgeStdoutLog: string
+  ipcBridgeStderrLog: string
   meta: string
   lock: string
   lastTurn: string
@@ -88,6 +91,18 @@ export function codexStderrLogFile(name: TeammateName): string {
   return join(codexTeammateDir(name), 'stderr.log')
 }
 
+export function codexIpcBridgePidFile(name: TeammateName): string {
+  return join(codexTeammateDir(name), 'ipc-bridge.pid')
+}
+
+export function codexIpcBridgeStdoutLogFile(name: TeammateName): string {
+  return join(codexTeammateDir(name), 'ipc-bridge.stdout.log')
+}
+
+export function codexIpcBridgeStderrLogFile(name: TeammateName): string {
+  return join(codexTeammateDir(name), 'ipc-bridge.stderr.log')
+}
+
 export function codexMetaFile(name: TeammateName): string {
   return join(codexTeammateDir(name), 'meta.json')
 }
@@ -127,6 +142,9 @@ export function codexExtension(name: TeammateName): CodexTeammateExtension {
     lastSeen: codexLastSeenFile(name),
     stdoutLog: codexStdoutLogFile(name),
     stderrLog: codexStderrLogFile(name),
+    ipcBridgePid: codexIpcBridgePidFile(name),
+    ipcBridgeStdoutLog: codexIpcBridgeStdoutLogFile(name),
+    ipcBridgeStderrLog: codexIpcBridgeStderrLogFile(name),
     meta: codexMetaFile(name),
     lock: codexBorrowLockFile(name),
     lastTurn: codexLastTurnFile(name),
@@ -205,6 +223,9 @@ export class CodexTeammateRecord extends TeammateRecord {
       ext.lastSeen,
       ext.stdoutLog,
       ext.stderrLog,
+      ext.ipcBridgePid,
+      ext.ipcBridgeStdoutLog,
+      ext.ipcBridgeStderrLog,
       ext.meta,
       ext.lock,
       ext.lastTurn,

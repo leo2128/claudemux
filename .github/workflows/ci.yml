@@ -6,6 +6,37 @@ on:
   pull_request:
 
 jobs:
+  claudemux-changeset-status:
+    if: >
+      github.event_name == 'pull_request' &&
+      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/claudemux-ga-') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/claudemux-next-pre-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: plugins/claudemux/pnpm-lock.yaml
+
+      - name: Install claudemux release tooling
+        run: pnpm --dir plugins/claudemux install --frozen-lockfile
+
+      - name: Fetch PR base
+        run: git fetch origin "${{ github.base_ref }}" --depth=1
+
+      - name: Changeset declaration check
+        run: pnpm --dir plugins/claudemux changeset status --since="origin/${{ github.base_ref }}"
+
   check:
     strategy:
       fail-fast: false

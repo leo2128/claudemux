@@ -122,6 +122,17 @@ persistence). A Codex teammate uses it directly — no tmux, no screen-scraping.
   that targets a Codex teammate reads the registry, checks the daemon is alive,
   spawns or restarts it if not, connects, runs its verb, and exits. The daemon
   persists; the `tm` process is ephemeral.
+- **Codex UI IPC bridge.** After a Codex teammate daemon is ready, claudemux
+  starts an optional bridge process for that teammate. The bridge connects to
+  the Codex.app / VS Code UI bus at `${TMPDIR}/codex-ipc/ipc-$(id -u).sock`
+  when the socket exists; if no UI is running, it quietly retries. The bridge is
+  not a replacement for the teammate app-server. It keeps a separate
+  app-server connection, broadcasts `thread-stream-state-changed` snapshots for
+  the active thread, rebroadcasts when new UI clients connect, and proxies
+  supported `thread-follower-*` requests back to the same per-teammate
+  app-server. Its pid and logs live beside the daemon registry as
+  `ipc-bridge.pid`, `ipc-bridge.stdout.log`, and `ipc-bridge.stderr.log`, and
+  `tm kill` reaps it with the daemon.
 - **Liveness surfaces.** `tm status`, `tm ls`, and `tm states` combine the
   registry's pid/socket record, a short socket reachability probe, the Codex
   `thread/read` status when available, and the current thread's rollout mtime.

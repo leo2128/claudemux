@@ -153,8 +153,9 @@ ln -sf ~/.claude/plugins/cache/claudemux/claudemux/<version>/bin/tm ~/.local/bin
   `$PWD/<repo>` 解,sibling repo 必须共享一个父目录。
 - **只 macOS / Linux**。脚本用 BSD `stat`,GNU Linux 需要
   `-c %Y`——PR welcome。
-- **Cron 只在 dispatcher REPL 里 fire**。`claude -p` 或 Agent Teams
-  teammate 里 `CronCreate` 返回成功但永不触发。
+- **Cron 只在交互式 TUI REPL 里 fire**。dispatcher 和 `tm` 拉起的 Claude
+  tmux teammate 都算;`claude -p` 和 Agent Teams subagent 调用 `CronCreate`
+  会返回成功但永不触发。
 
 ## 本地开发
 

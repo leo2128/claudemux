@@ -53,17 +53,10 @@ Read stderr before deciding the next step; timeout paths name the recovery verb 
 - For externally driven Claude turns (Remote Control web UI, mobile, the teammate's own sub-agents), collect the next reply with `tm wait --fresh <repo>`; for Codex daemon turns, use `tm wait <name>`.
 - For stopping a teammate, use `tm kill <repo>`; it clears the matching on-disk state for that engine.
 
-## Claude tmux teammate setup
+## Dispatcher-facing details on Claude spawn
 
-When you `tm spawn <repo>` on the default Claude engine:
-
-1. **cwd** = `<dispatcher-dir>/<repo>`. The teammate's Claude process is launched there via `tmux new-session -c`.
-2. **CLAUDE.md exclusions.** The teammate loads the target repo's own `CLAUDE.md`, but not the dispatcher's `CLAUDE.md` / `CLAUDE.local.md`.
-3. **Remote Control auto-registration.** The teammate's startup banner prints its Remote Control URL, visible via `tm status <repo>`.
-4. **sid pre-generation.** `tm` generates a UUID, passes it to `claude --session-id <uuid>`, writes `/tmp/teammate-<repo>.sid`, and creates the idle/.last machinery used by waits.
-5. **Fresh `.last` sentinel.** A fresh spawn writes an empty `/tmp/claude-idle/<sid>.last`; `tm last` before any reply returns a clear "no reply yet" error instead of stale text.
-6. **AskUserQuestion disabled.** Teammates raise questions by ending the turn with text, which `tm send` / `tm spawn --prompt` relays back. Do not instruct the teammate to ask via that tool.
-7. **`--task <slug>`.** Names the conversation `<repo>-<slug>` for the prompt box, `/resume` picker, and terminal title. ASCII letters/digits plus CJK Unified Ideographs are accepted; ASCII letters are lowercased, other runs collapse to `-`, and the slug is capped at 30 code points. Without `--task`, a fresh spawn auto-names `<repo>-<rand4>`.
+- **Remote Control URL.** The teammate's startup banner prints its Remote Control URL; read it from `tm status <repo>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
+- **`--task <slug>`.** Names the conversation `<repo>-<slug>` for the prompt box, `/resume` picker, and terminal title. ASCII letters/digits plus CJK Unified Ideographs are accepted; ASCII letters are lowercased, other runs collapse to `-`, and the slug is capped at 30 code points. Without `--task`, a fresh spawn auto-names `<repo>-<rand4>`.
 
 ## Persistent Codex daemon teammates
 

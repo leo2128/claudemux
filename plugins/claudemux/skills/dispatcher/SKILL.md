@@ -19,18 +19,6 @@ Operations manual for dispatcher-style work from a parent directory of sibling g
 
 If the request is a normal single-repo or single-file task inside a covered sibling repo, resolve the target repo and delegate the work into that repo. Keep repo-local instructions, git state, and tool output inside the worker context instead of mixing them into the dispatcher.
 
-## Pick the right `tm` verb for the common cases
-
-The dispatcher orchestrates teammates exclusively through `tm`. These three verbs cover almost every delegation: reach for them first, then drop into the per-scenario reference for flags and edge cases.
-
-| Verb | Use when | Read |
-|---|---|---|
-| `tm spawn <repo>` / `tm spawn <name> --engine codex` | Starting a long-lived teammate (Claude tmux session or Codex daemon) for ongoing work, optionally with a first task via `--prompt` | `references/dispatch-task.md` |
-| `tm send <repo-or-name> --prompt "..."` | Handing a new task or follow-up turn to an existing teammate | `references/dispatch-task.md`, `references/wait-and-readback.md` |
-| `tm resume <repo-or-name> <sid-or-thread-id>` | Re-attaching to a past Claude session or Codex thread that is no longer running (dispatcher restarted, `tm kill`, Mac reboot) | `references/inspect-and-resume.md` |
-
-Agent Teams is intentionally not surfaced as a dispatcher delegation form; use `tm` for all teammate orchestration. Raw `claude -p` is similarly not the dispatcher's path — wrap any headless one-shot work inside the matching `tm` verb so it shares the same ledger, identity record, and state tracking as the rest of the fleet.
-
 ## Dispatcher posture as router
 
 The dispatcher routes work into sibling repos; it does not investigate target-repo code itself. Two corollaries that show up often:
@@ -47,7 +35,7 @@ For Claude teammates, `<repo>` is the short name of a sibling subdirectory direc
 
 ## Scenario routing
 
-Match the user's intent to one scenario, then read the corresponding reference. Each reference is self-contained; read just the one that applies.
+Match the user's intent to one row below, then **read the listed reference before reaching for the verb** — it covers scenario flow and edge cases. The dispatcher orchestrates teammates exclusively through `tm`; Agent Teams and raw `claude -p` are intentionally not surfaced as dispatcher delegation forms, so every teammate shares the same ledger, identity record, and state tracking.
 
 | When you're doing this | Read | Primary verb(s) |
 |---|---|---|

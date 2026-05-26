@@ -8,7 +8,7 @@ teammate 去 repo-a 跑测试") into the right delegation form and `tm` verb.
 
 | Path | Audience | Role |
 |---|---|---|
-| [`skills/dispatcher/SKILL.md`](/plugins/claudemux/skills/dispatcher/SKILL.md) | model | Always-loaded skeleton: scope check, `tm`-verb picker for the common cases, `tm` overview, scenario routing, shared invariants |
+| [`skills/dispatcher/SKILL.md`](/plugins/claudemux/skills/dispatcher/SKILL.md) | model | Always-loaded skeleton: scope check, `tm` overview, scenario routing, shared invariants |
 | `skills/dispatcher/references/*.md` | model, on demand | One file per scenario — the detailed flow for that scenario only |
 | [`templates/CLAUDE.md.template`](/plugins/claudemux/templates/CLAUDE.md.template) | model, always loaded | Copied into the dispatcher directory by `/claudemux:setup`; the dispatcher's durable identity + routing memory |
 | [`commands/setup.md`](/plugins/claudemux/commands/setup.md) | human → model | Body of the `/claudemux:setup` slash command — the guided onboarding flow |
@@ -50,20 +50,14 @@ inline steps into `SKILL.md`.
 - `commands/setup.md` **body** runs only after the human invokes
   `/claudemux:setup`. Write it as an execution guide for that one command.
 
-## Verb picker
+## Delegation invariant
 
-The skill names three `tm` verbs as the first-reach paths for delegation:
-
-| Verb | Pick when |
-|---|---|
-| `tm spawn <repo>` / `tm spawn <name> --engine codex` | Starting a long-lived teammate (Claude tmux session or Codex daemon) for ongoing work, optionally with a first task via `--prompt` |
-| `tm send <repo-or-name> --prompt "..."` | Handing a new task or follow-up turn to an existing teammate |
-| `tm resume <repo-or-name> <sid-or-thread-id>` | Re-attaching to a past Claude session or Codex thread that is no longer running |
-
-Agent Teams and raw `claude -p` are intentionally not surfaced as dispatcher
-delegation forms; the dispatcher orchestrates teammates exclusively through
-`tm` so that the ledger, identity record, and state-tracking machinery cover
-every teammate the same way.
+The dispatcher orchestrates teammates exclusively through `tm`. Agent Teams
+and raw `claude -p` are intentionally not surfaced as dispatcher delegation
+forms; routing every teammate through the same `tm` verbs is what makes the
+ledger, identity record, and state-tracking machinery cover every teammate
+the same way. The scenario-routing table in `SKILL.md` is the up-to-date
+list of `tm` verbs and the reference each one belongs to.
 
 ## Editing rule
 

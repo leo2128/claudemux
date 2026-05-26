@@ -4,5 +4,11 @@
   "initialVersions": {
     "claudemux": "1.0.0-beta.3"
   },
-  "changesets": []
+  "changesets": [
+    "codex-ipc-bridge",
+    "cute-lamps-brush",
+    "mighty-grapes-ask",
+    "migrate-release-pipeline",
+    "swift-balloons-search"
+  ]
 }

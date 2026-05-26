@@ -9,22 +9,12 @@ implementation path should be validated before changing claudemux behavior.
 
 Source scope:
 
-- claudemux worktree:
-  `/Users/bytedance/Development/claudemux-codex-multiclient`
 - upstream Codex source snapshot:
   `openai/codex@9f42c89c0112771dc29100a6f3fc904049b2655f`, inspected from a
   temporary clone outside this repo
 - local historical KB:
   [decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md)
   and [domain node-cli-orchestrator](/.agents/domains/node-cli-orchestrator.md)
-
-Two files named in the original prompt do not exist under this worktree:
-
-- `.agents/research/codex-app-server.md`
-- the legacy numbered decision path for multi-engine TUI architecture
-
-The maintained decision file is
-[`.agents/decisions/multi-engine-tui-architecture.md`](/.agents/decisions/multi-engine-tui-architecture.md).
 
 ## Current claudemux behavior
 
@@ -139,6 +129,38 @@ The old statement "stdio is single-client" is still true. It is not enough to
 explain the current product behavior, because Unix socket, WebSocket, daemon,
 and remote-control paths now exist and are service-style connection surfaces.
 
+### Reconciliation with the prior daemon/proxy rejection
+
+[domain node-cli-orchestrator](/.agents/domains/node-cli-orchestrator.md)
+records that the `codex app-server daemon` and `codex app-server proxy`
+subcommands were previously evaluated and rejected: `daemon` was tied to an
+OpenAI-hosted installation, and `proxy` is a raw byte tunnel that cannot carry
+the WebSocket-framed `app-server` listen socket. That decision still stands
+for the per-teammate spawn path it was made for — claudemux owning a private,
+self-supervised app-server.
+
+This proposal does not re-open that decision for the per-teammate mode. It
+re-examines `daemon`/`proxy` only as **a connection target to an already-running
+official server**, which is a different question:
+
+- Treating the default
+  `$CODEX_HOME/app-server-control/app-server-control.sock` as a connection
+  target is a separate path from `daemon start` — Option A's primary mode is
+  "if a live official socket exists, connect to it", not "claudemux runs the
+  daemon".
+- Whether `codex app-server daemon start` is even a viable fallback on the
+  upstream version this proposal cites must be re-verified: `daemon ready`
+  / `daemon start` semantics, whether enrollment / installation identity is
+  still required, and whether starting it conflicts with a Desktop- or
+  VS Code-owned daemon are all open. None of this is assumed; all of it is
+  in the unknowns gate below.
+- `codex app-server proxy` is still a raw stream and is referenced here only
+  as a probe tool, not as a claudemux transport.
+
+The net effect: prior decision intact for per-teammate ownership; this
+proposal extends the design space with "attach to a server claudemux did
+not start", and the daemon-as-fallback option is conditional on a live probe.
+
 ## Desktop APP / VS Code shared mechanism
 
 The open-source Codex repo confirms the app-server side of multi-client
@@ -193,6 +215,53 @@ claudemux app-servers are separate islands:
 This is compatible with the user's observation: a Desktop/VS Code conversation
 can sync because both clients are inside one discovered app-server or broker
 network, while a claudemux teammate lives in a different app-server process.
+
+## What "live sync" means here — connection model question
+
+Upstream thread subscriptions are **connection-scoped**: a connection that
+initializes, calls `thread/start` or `thread/attach`, and stays open receives
+that thread's `item/*` and `turn/completed` events; a connection that closes
+stops receiving them
+(`codex-rs/app-server/src/thread_state.rs:244`,
+`codex-rs/app-server/src/request_processors/thread_lifecycle.rs:311`).
+
+claudemux today is short-connection: `tm send` opens a client, drives one
+turn, observes `turn/completed`, and closes. There is no resident
+claudemux-side subscriber.
+
+"Live sync" can therefore mean two distinct things, and the options below
+are not equivalent under them:
+
+- **(a) Outbound visibility only.** A claudemux-created thread, persisted on
+  the shared server, becomes visible to Desktop/VS Code, which subscribe and
+  display it. claudemux remains short-connection; it never receives events
+  triggered by other clients in real time. The thread itself is the shared
+  state; the sharing happens because Desktop/VS Code are the long-lived
+  subscribers.
+- **(b) Bidirectional live subscription.** claudemux additionally keeps a
+  resident connection that stays subscribed to the thread, so that when a
+  user types in Desktop or VS Code, claudemux sees the items immediately
+  and can react (display, log, drive follow-up work).
+
+Implications for the options:
+
+- **(a)** is sufficient for the user's stated goal "I want to see my
+  claudemux teammates in Desktop / VS Code". It is also the smaller change:
+  Option A in mode (a) keeps the short-connection lifecycle and only swaps
+  the socket. Whether (a) works at all still depends on the unknowns —
+  whether Desktop/VS Code surface threads created by `clientInfo.name =
+  "claudemux"`, and whether they filter by session source.
+- **(b)** requires a new resident component in claudemux (or extending an
+  existing resident, e.g. the dispatcher process) that owns a long-lived
+  connection per active teammate thread. It changes the lifecycle model,
+  not just the transport. It is the only way claudemux can react to
+  events originated by Desktop/VS Code without polling.
+
+The default scope for this proposal is **(a)**, because it is the minimum
+that addresses the observed problem and the unknowns about product
+discovery dominate the design choice either way. Mode (b) is recorded as a
+follow-on once (a) is validated — it should not be folded into the first
+implementation.
 
 ## Option A: attach claudemux to the official managed app-server
 

@@ -14,6 +14,7 @@ import type {
   ThreadSettingsUpdateResponse,
   ThreadStatus,
   Turn,
+  TurnInterruptParams,
   TurnInterruptResponse,
   TurnStartParams,
   TurnStartResponse,
@@ -55,6 +56,7 @@ const FOLLOWER_METHODS = new Set([
   'thread-follower-permissions-request-approval-response',
   'thread-follower-submit-user-input',
   'thread-follower-submit-mcp-server-elicitation-response',
+  'thread-follower-set-queued-follow-ups-state',
 ])
 
 const TURN_START_OPTIONAL_KEYS = [
@@ -134,6 +136,8 @@ interface ConversationState {
 }
 
 type ClientRequestMethod = ClientRequest['method']
+type FollowerOkResponse = { readonly ok: true }
+type FollowerResultResponse<T> = { readonly result: T }
 
 export function isCodexFollowerIpcMethod(method: string): boolean {
   return FOLLOWER_METHODS.has(method)
@@ -326,74 +330,79 @@ export class CodexIpcBridge {
         return this.resolvePendingServerRequest(ctx.params, 'item/tool/requestUserInput')
       case 'thread-follower-submit-mcp-server-elicitation-response':
         return this.resolvePendingServerRequest(ctx.params, 'mcpServer/elicitation/request')
+      case 'thread-follower-set-queued-follow-ups-state':
+        return this.handleSetQueuedFollowUpsState(ctx.params)
       default:
         throw new Error(`unsupported codex follower IPC method: ${ctx.method}`)
     }
   }
 
-  private async handleStartTurn(params: unknown): Promise<TurnStartResponse> {
+  private async handleStartTurn(params: unknown): Promise<FollowerResultResponse<TurnStartResponse>> {
     const client = await this.requireAppClient()
     const threadId = this.requireThreadId()
     const startParams = turnStartParamsFromFollower(params, threadId)
     const response = await client.request<'turn/start', TurnStartResponse>('turn/start', startParams)
     this.scheduleSnapshot()
-    return response
+    return { result: response }
   }
 
-  private async handleCompactThread(): Promise<ThreadCompactStartResponse> {
+  private async handleCompactThread(): Promise<FollowerOkResponse> {
     const client = await this.requireAppClient()
     const threadId = this.requireThreadId()
-    const response = await client.request<'thread/compact/start', ThreadCompactStartResponse>(
+    await client.request<'thread/compact/start', ThreadCompactStartResponse>(
       'thread/compact/start',
       { threadId },
     )
     this.scheduleSnapshot()
-    return response
+    return { ok: true }
   }
 
-  private async handleSteerTurn(params: unknown): Promise<TurnSteerResponse> {
+  private async handleSteerTurn(params: unknown): Promise<FollowerResultResponse<TurnSteerResponse>> {
     const client = await this.requireAppClient()
     const threadId = this.requireThreadId()
-    const values = asRecord(params)
-    if (values === null) throw new Error('thread-follower-steer-turn params must be an object')
-    const input = values['input']
-    const expectedTurnId = values['expectedTurnId'] ?? values['turnId']
-    if (!Array.isArray(input)) throw new Error('thread-follower-steer-turn missing input array')
-    if (typeof expectedTurnId !== 'string' || expectedTurnId.length === 0) {
-      throw new Error('thread-follower-steer-turn missing expectedTurnId')
-    }
-    const steerParams: TurnSteerParams = {
+    const steerParams = turnSteerParamsFromFollower(
+      params,
       threadId,
-      input: input as TurnSteerParams['input'],
-      expectedTurnId,
+      await this.readActiveTurnId(client, threadId),
+    )
+    let response: TurnSteerResponse
+    try {
+      response = await client.request<'turn/steer', TurnSteerResponse>('turn/steer', steerParams)
+    } catch (e) {
+      const actualTurnId = expectedActiveTurnIdFromError(e)
+      if (actualTurnId === null) throw e
+      response = await client.request<'turn/steer', TurnSteerResponse>('turn/steer', {
+        ...steerParams,
+        expectedTurnId: actualTurnId,
+      })
     }
-    if ('responsesapiClientMetadata' in values) {
-      steerParams.responsesapiClientMetadata = values['responsesapiClientMetadata'] as TurnSteerParams['responsesapiClientMetadata']
-    }
-    const response = await client.request<'turn/steer', TurnSteerResponse>('turn/steer', steerParams)
     this.scheduleSnapshot()
-    return response
+    return { result: response }
   }
 
-  private async handleInterruptTurn(params: unknown): Promise<TurnInterruptResponse> {
+  private async handleInterruptTurn(params: unknown): Promise<FollowerOkResponse> {
     const client = await this.requireAppClient()
-    const values = asRecord(params)
-    const turnId = values?.['turnId']
-    if (typeof turnId !== 'string' || turnId.length === 0) {
-      throw new Error('thread-follower-interrupt-turn missing turnId')
+    const threadId = this.requireThreadId()
+    this.resolvePendingServerRequestsForInterrupt()
+    const activeTurnId = await this.readActiveTurnId(client, threadId)
+    if (activeTurnId === null) {
+      this.scheduleSnapshot()
+      return { ok: true }
     }
-    const response = await client.request<'turn/interrupt', TurnInterruptResponse>('turn/interrupt', {
-      threadId: this.requireThreadId(),
-      turnId,
-    })
+    const interruptParams = turnInterruptParamsFromFollower(
+      params,
+      threadId,
+      activeTurnId,
+    )
+    await client.request<'turn/interrupt', TurnInterruptResponse>('turn/interrupt', interruptParams)
     this.scheduleSnapshot()
-    return response
+    return { ok: true }
   }
 
   private async handleThreadSettings(
     params: unknown,
     mode: 'model' | 'collaboration',
-  ): Promise<ThreadSettingsUpdateResponse> {
+  ): Promise<FollowerOkResponse> {
     const client = await this.requireAppClient()
     const values = asRecord(params)
     if (values === null) throw new Error(`thread-follower-set-${mode} params must be an object`)
@@ -408,12 +417,25 @@ export class CodexIpcBridge {
     } else {
       copyIfPresent(values, settings, 'collaborationMode')
     }
-    const response = await client.request<'thread/settings/update', ThreadSettingsUpdateResponse>(
+    await client.request<'thread/settings/update', ThreadSettingsUpdateResponse>(
       'thread/settings/update',
       settings as ParametersFor<'thread/settings/update'>,
     )
     this.scheduleSnapshot()
-    return response
+    return { ok: true }
+  }
+
+  private async handleSetQueuedFollowUpsState(params: unknown): Promise<FollowerOkResponse> {
+    const values = asRecord(params)
+    if (values === null) throw new Error('thread-follower-set-queued-follow-ups-state params must be an object')
+    const threadId = this.requireThreadId()
+    const state = asRecord(values['state'])
+    const messages = state === null || !Array.isArray(state[threadId]) ? [] : state[threadId]
+    this.ipcClient?.broadcast('thread-queued-followups-changed', {
+      conversationId: threadId,
+      messages,
+    })
+    return { ok: true }
   }
 
   private async resolvePendingServerRequest(
@@ -438,6 +460,18 @@ export class CodexIpcBridge {
     return { ok: true }
   }
 
+  private resolvePendingServerRequestsForInterrupt(): number {
+    let resolved = 0
+    for (const pending of Array.from(this.pendingServerRequests.values())) {
+      const result = interruptServerRequestResult(pending.method)
+      if (result === null) continue
+      this.pendingServerRequests.delete(pending.id)
+      pending.resolve(result)
+      resolved += 1
+    }
+    return resolved
+  }
+
   private async requireAppClient(): Promise<CodexWsClient> {
     await this.reconcileThread()
     if (this.appClient === null) throw new Error('codex app-server client is not connected')
@@ -447,6 +481,14 @@ export class CodexIpcBridge {
   private requireThreadId(): string {
     if (this.activeThreadId === null) throw new Error('codex teammate has no active thread')
     return this.activeThreadId
+  }
+
+  private async readActiveTurnId(client: CodexWsClient, threadId: string): Promise<string | null> {
+    const read = await client.request<'thread/read', ThreadReadResponse>('thread/read', {
+      threadId,
+      includeTurns: true,
+    })
+    return activeTurnIdFromThread(read.thread)
   }
 
   private scheduleSnapshot(): void {
@@ -612,6 +654,59 @@ export function turnStartParamsFromFollower(params: unknown, threadId: string): 
   return result as TurnStartParams
 }
 
+export function turnSteerParamsFromFollower(
+  params: unknown,
+  threadId: string,
+  activeTurnId: string | null = null,
+): TurnSteerParams {
+  const outer = asRecord(params)
+  if (outer === null) throw new Error('thread-follower-steer-turn params must be an object')
+  const inner = asRecord(outer['turnSteerParams']) ?? outer
+  const input = inner['input']
+  if (!Array.isArray(input)) throw new Error('thread-follower-steer-turn missing input array')
+  const expectedTurnId = firstString(
+    inner['expectedTurnId'],
+    inner['turnId'],
+    outer['expectedTurnId'],
+    outer['turnId'],
+    activeTurnId,
+  )
+  if (expectedTurnId === null) {
+    throw new Error('thread-follower-steer-turn missing active turn id')
+  }
+  const result: TurnSteerParams = {
+    threadId,
+    input: input as TurnSteerParams['input'],
+    expectedTurnId,
+  }
+  const metadata = followerResponsesapiMetadata(inner)
+  const outerMetadata = inner === outer ? { present: false as const } : followerResponsesapiMetadata(outer)
+  const selectedMetadata = metadata.present ? metadata : outerMetadata
+  if (selectedMetadata.present) {
+    result.responsesapiClientMetadata = selectedMetadata.value as TurnSteerParams['responsesapiClientMetadata']
+  }
+  return result
+}
+
+export function turnInterruptParamsFromFollower(
+  params: unknown,
+  threadId: string,
+  activeTurnId: string | null = null,
+): TurnInterruptParams {
+  const outer = asRecord(params)
+  if (outer === null) throw new Error('thread-follower-interrupt-turn params must be an object')
+  const inner = asRecord(outer['turnInterruptParams']) ?? asRecord(outer['interruptTurnParams']) ?? outer
+  const turnId = firstString(
+    inner['turnId'],
+    inner['expectedTurnId'],
+    outer['turnId'],
+    outer['expectedTurnId'],
+    activeTurnId,
+  )
+  if (turnId === null) throw new Error('thread-follower-interrupt-turn missing active turn id')
+  return { threadId, turnId }
+}
+
 function serverRequestResult(
   method: ServerRequest['method'],
   values: Record<string, unknown>,
@@ -634,6 +729,34 @@ function serverRequestResult(
     case 'execCommandApproval':
       throw new Error(`unsupported server request response method: ${method}`)
   }
+}
+
+function interruptServerRequestResult(method: ServerRequest['method']): unknown | null {
+  switch (method) {
+    case 'item/commandExecution/requestApproval':
+    case 'item/fileChange/requestApproval':
+      return { decision: 'decline' }
+    case 'item/permissions/requestApproval':
+      return { permissions: {}, scope: 'turn' }
+    case 'item/tool/requestUserInput':
+      return { answers: {} }
+    case 'mcpServer/elicitation/request':
+      return { action: 'decline', content: null, _meta: null }
+    case 'item/tool/call':
+    case 'account/chatgptAuthTokens/refresh':
+    case 'attestation/generate':
+    case 'applyPatchApproval':
+    case 'execCommandApproval':
+      return null
+  }
+}
+
+function activeTurnIdFromThread(thread: Thread): string | null {
+  for (let i = thread.turns.length - 1; i >= 0; i -= 1) {
+    const turn = thread.turns[i]
+    if (turn?.status === 'inProgress') return turn.id
+  }
+  return null
 }
 
 function notificationMatchesThread(notif: ServerNotification, threadId: string | null): boolean {
@@ -678,6 +801,30 @@ function copyIfPresent(
   key: string,
 ): void {
   if (key in from) to[key] = from[key]
+}
+
+function firstString(...values: readonly unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return null
+}
+
+function followerResponsesapiMetadata(
+  values: Record<string, unknown>,
+): { readonly present: true; readonly value: unknown } | { readonly present: false } {
+  if ('responsesapiClientMetadata' in values) {
+    return { present: true, value: values['responsesapiClientMetadata'] }
+  }
+  const restoreMessage = asRecord(values['restoreMessage'])
+  return restoreMessage === null || !('responsesapiClientMetadata' in restoreMessage)
+    ? { present: false }
+    : { present: true, value: restoreMessage['responsesapiClientMetadata'] }
+}
+
+function expectedActiveTurnIdFromError(error: unknown): string | null {
+  const match = errorMessage(error).match(/expected active turn id `[^`]+` but found `([^`]+)`/)
+  return match?.[1] ?? null
 }
 
 function secondsToMillis(value: number): number {

@@ -5,8 +5,26 @@ import { join } from 'node:path'
 
 export const CODEX_UI_IPC_VERSION = 0
 const INITIALIZING_CLIENT_ID = 'initializing-client'
-const BROADCAST_METHOD_VERSIONS = new Map<string, number>([
+// Matches the Codex UI IPC method-version table in OpenAI ChatGPT VS Code extension 26.519.x.
+const METHOD_VERSIONS = new Map<string, number>([
   ['thread-stream-state-changed', 6],
+  ['thread-read-state-changed', 1],
+  ['thread-archived', 2],
+  ['thread-unarchived', 1],
+  ['thread-follower-start-turn', 1],
+  ['thread-follower-compact-thread', 1],
+  ['thread-follower-steer-turn', 1],
+  ['thread-follower-interrupt-turn', 1],
+  ['thread-follower-set-model-and-reasoning', 1],
+  ['thread-follower-set-collaboration-mode', 1],
+  ['thread-follower-edit-last-user-turn', 1],
+  ['thread-follower-command-approval-decision', 1],
+  ['thread-follower-file-approval-decision', 1],
+  ['thread-follower-permissions-request-approval-response', 1],
+  ['thread-follower-submit-user-input', 1],
+  ['thread-follower-submit-mcp-server-elicitation-response', 1],
+  ['thread-follower-set-queued-follow-ups-state', 1],
+  ['thread-queued-followups-changed', 1],
 ])
 
 type PendingResponse = {
@@ -149,7 +167,7 @@ export class CodexUiIpcClient {
       type: 'request',
       requestId,
       sourceClientId,
-      version: CODEX_UI_IPC_VERSION,
+      version: ipcMethodVersion(method),
       method,
       params,
       ...(options.targetClientId === undefined ? {} : { targetClientId: options.targetClientId }),
@@ -262,7 +280,7 @@ export class CodexUiIpcClient {
       type: 'client-discovery-response',
       requestId: env.requestId,
       sourceClientId: this.requireClientId(),
-      version: CODEX_UI_IPC_VERSION,
+      version: ipcMethodVersion(env.method),
       canHandle,
     })
   }
@@ -280,7 +298,7 @@ export class CodexUiIpcClient {
         requestId: env.requestId,
         sourceClientId: this.requireClientId(),
         handledByClientId: this.requireClientId(),
-        version: CODEX_UI_IPC_VERSION,
+        version: ipcMethodVersion(env.method),
         resultType: 'success',
         method: env.method,
         result,
@@ -291,7 +309,7 @@ export class CodexUiIpcClient {
         requestId: env.requestId,
         sourceClientId: this.requireClientId(),
         handledByClientId: this.requireClientId(),
-        version: CODEX_UI_IPC_VERSION,
+        version: ipcMethodVersion(env.method),
         resultType: 'error',
         method: env.method,
         error: e instanceof Error ? e.message : String(e),
@@ -326,8 +344,8 @@ function extractClientId(result: unknown): string | null {
   return typeof clientId === 'string' && clientId.length > 0 ? clientId : null
 }
 
-function ipcMethodVersion(method: string): number {
-  return BROADCAST_METHOD_VERSIONS.get(method) ?? CODEX_UI_IPC_VERSION
+export function ipcMethodVersion(method: string): number {
+  return METHOD_VERSIONS.get(method) ?? CODEX_UI_IPC_VERSION
 }
 
 function errorMessage(value: unknown): string | null {

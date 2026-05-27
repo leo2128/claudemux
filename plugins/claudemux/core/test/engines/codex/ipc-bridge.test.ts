@@ -11,7 +11,9 @@ import {
   CodexIpcBridge,
   conversationStateFromThread,
   isCodexFollowerIpcMethod,
+  turnInterruptParamsFromFollower,
   turnStartParamsFromFollower,
+  turnSteerParamsFromFollower,
 } from '../../../src/engines/codex/ipc-bridge'
 import { CodexUiIpcClient, codexUiIpcSocketPath } from '../../../src/engines/codex/ui-ipc'
 
@@ -23,11 +25,24 @@ type PendingServerRequestForTest = {
   readonly reject: (error: Error) => void
 }
 
+type MockAppClient = {
+  request: ReturnType<typeof vi.fn>
+}
+
 type BridgeInternals = {
-  ipcClient: { readonly id: string | null } | null
+  ipcClient: {
+    readonly id: string | null
+    broadcast?(method: string, params: unknown): void
+  } | null
+  appClient: MockAppClient | null
+  activeThreadId: string | null
   pendingServerRequests: Map<string, PendingServerRequestForTest>
   handleIpcBroadcast(ctx: IpcBroadcastContext): void
+  handleInterruptTurn(params: unknown): Promise<Record<string, unknown>>
+  handleSteerTurn(params: unknown): Promise<Record<string, unknown>>
+  handleSetQueuedFollowUpsState(params: unknown): Promise<Record<string, unknown>>
   resolvePendingServerRequest(params: unknown, method: string): Promise<Record<string, unknown>>
+  resolvePendingServerRequestsForInterrupt(): number
   scheduleSnapshot(): void
 }
 
@@ -86,6 +101,24 @@ function sampleThread(): Thread {
         ],
       },
     ],
+  }
+}
+
+function sampleTurn(id: string, status: Thread['turns'][number]['status']): Thread['turns'][number] {
+  const base = sampleThread().turns[0]
+  if (base === undefined) throw new Error('sample thread has no turns')
+  return {
+    ...base,
+    id,
+    status,
+    completedAt: status === 'inProgress' ? null : base.completedAt,
+  }
+}
+
+function sampleThreadWithTurns(turns: Thread['turns']): Thread {
+  return {
+    ...sampleThread(),
+    turns,
   }
 }
 
@@ -174,6 +207,9 @@ describe('codex UI IPC bridge', () => {
 
   test('advertises only follower methods the bridge can proxy', () => {
     expect(isCodexFollowerIpcMethod('thread-follower-start-turn')).toBe(true)
+    expect(isCodexFollowerIpcMethod('thread-follower-steer-turn')).toBe(true)
+    expect(isCodexFollowerIpcMethod('thread-follower-interrupt-turn')).toBe(true)
+    expect(isCodexFollowerIpcMethod('thread-follower-set-queued-follow-ups-state')).toBe(true)
     expect(isCodexFollowerIpcMethod('thread-follower-submit-user-input')).toBe(true)
     expect(isCodexFollowerIpcMethod('thread-stream-state-changed')).toBe(false)
   })
@@ -280,6 +316,80 @@ describe('codex UI IPC bridge', () => {
     client.close()
   })
 
+  test('uses Codex method versions on discovery and follower request responses', async () => {
+    const dir = mkdtempSync('/tmp/cmxipc-')
+    tempDirs.push(dir)
+    const socketPath = join(dir, 'ipc.sock')
+    const received: Record<string, unknown>[] = []
+    let connectedSocket: Socket | null = null
+    const server = createServer((socket: Socket) => {
+      connectedSocket = socket
+      const parser = { buffer: Buffer.alloc(0) }
+      socket.on('data', (chunk) => {
+        parseFrames(chunk, parser, (env) => {
+          received.push(env)
+          if (env['method'] !== 'initialize') return
+          socket.write(frame({
+            type: 'response',
+            requestId: env['requestId'],
+            resultType: 'success',
+            method: 'initialize',
+            result: { clientId: 'client-1' },
+          }))
+        })
+      })
+    })
+    servers.push(server)
+    await listen(server, socketPath)
+
+    const client = new CodexUiIpcClient({
+      socketPath,
+      clientType: 'test-client',
+      canHandle: async (ctx) => ctx.method === 'thread-follower-interrupt-turn',
+      handleRequest: async () => ({ ok: true }),
+    })
+
+    await expect(client.connect()).resolves.toBe('client-1')
+    const socket = connectedSocket as Socket | null
+    if (socket === null) throw new Error('test server did not accept a socket')
+    socket.write(frame({
+      type: 'client-discovery-request',
+      requestId: 'discovery-1',
+      sourceClientId: 'router',
+      version: 1,
+      method: 'thread-follower-interrupt-turn',
+      params: { conversationId: 'thread-1' },
+    }))
+    socket.write(frame({
+      type: 'request',
+      requestId: 'request-1',
+      sourceClientId: 'router',
+      version: 1,
+      method: 'thread-follower-interrupt-turn',
+      params: { conversationId: 'thread-1' },
+    }))
+
+    await waitFor(() =>
+      received.some((env) => env['type'] === 'client-discovery-response') &&
+      received.some((env) => env['type'] === 'response' && env['requestId'] === 'request-1'),
+    )
+    expect(received.find((env) => env['type'] === 'client-discovery-response')).toMatchObject({
+      type: 'client-discovery-response',
+      requestId: 'discovery-1',
+      version: 1,
+      canHandle: true,
+    })
+    expect(received.find((env) => env['type'] === 'response' && env['requestId'] === 'request-1')).toMatchObject({
+      type: 'response',
+      requestId: 'request-1',
+      method: 'thread-follower-interrupt-turn',
+      version: 1,
+      resultType: 'success',
+      result: { ok: true },
+    })
+    client.close()
+  })
+
   test('uses Codex method versions on outgoing stream broadcasts', async () => {
     const dir = mkdtempSync('/tmp/cmxipc-')
     tempDirs.push(dir)
@@ -318,13 +428,21 @@ describe('codex UI IPC bridge', () => {
       change: { type: 'snapshot', conversationState: {} },
       version: 6,
     })
+    client.broadcast('thread-queued-followups-changed', {
+      conversationId: 'thread-1',
+      messages: [],
+    })
 
-    await waitFor(() => received.some((env) => env['type'] === 'broadcast'))
-    const broadcast = received.find((env) => env['type'] === 'broadcast')
-    expect(broadcast).toMatchObject({
+    await waitFor(() => received.filter((env) => env['type'] === 'broadcast').length === 2)
+    expect(received.find((env) => env['method'] === 'thread-stream-state-changed')).toMatchObject({
       type: 'broadcast',
       method: 'thread-stream-state-changed',
       version: 6,
+    })
+    expect(received.find((env) => env['method'] === 'thread-queued-followups-changed')).toMatchObject({
+      type: 'broadcast',
+      method: 'thread-queued-followups-changed',
+      version: 1,
     })
     client.close()
   })
@@ -392,6 +510,154 @@ describe('codex UI IPC bridge', () => {
     })
   })
 
+  test('maps follower steer-turn params onto codex turn/steer params', () => {
+    const input = [{ type: 'text', text: 'follow up', text_elements: [] }]
+    expect(turnSteerParamsFromFollower({
+      conversationId: 'ui-thread',
+      input,
+      restoreMessage: {
+        responsesapiClientMetadata: { source: 'desktop' },
+      },
+    }, 'actual-thread', 'turn-1')).toEqual({
+      threadId: 'actual-thread',
+      input,
+      expectedTurnId: 'turn-1',
+      responsesapiClientMetadata: { source: 'desktop' },
+    })
+    expect(turnSteerParamsFromFollower({
+      conversationId: 'ui-thread',
+      turnSteerParams: {
+        input,
+        expectedTurnId: 'turn-2',
+        responsesapiClientMetadata: null,
+      },
+    }, 'actual-thread', 'turn-1')).toEqual({
+      threadId: 'actual-thread',
+      input,
+      expectedTurnId: 'turn-2',
+      responsesapiClientMetadata: null,
+    })
+    expect(() => turnSteerParamsFromFollower({
+      conversationId: 'ui-thread',
+      input,
+    }, 'actual-thread')).toThrow('missing active turn id')
+  })
+
+  test('maps follower interrupt params onto codex turn/interrupt params', () => {
+    expect(turnInterruptParamsFromFollower({
+      conversationId: 'ui-thread',
+    }, 'actual-thread', 'turn-1')).toEqual({
+      threadId: 'actual-thread',
+      turnId: 'turn-1',
+    })
+    expect(turnInterruptParamsFromFollower({
+      conversationId: 'ui-thread',
+      turnInterruptParams: { turnId: 'turn-2' },
+    }, 'actual-thread', 'turn-1')).toEqual({
+      threadId: 'actual-thread',
+      turnId: 'turn-2',
+    })
+    expect(() => turnInterruptParamsFromFollower({
+      conversationId: 'ui-thread',
+    }, 'actual-thread')).toThrow('missing active turn id')
+  })
+
+  test('retries follower steer when app-server reports the current active turn id', async () => {
+    const bridge = makeBridgeInternals()
+    const input = [{ type: 'text', text: 'follow up', text_elements: [] }]
+    const request = vi.fn()
+      .mockResolvedValueOnce({ thread: sampleThreadWithTurns([sampleTurn('turn-1', 'inProgress')]) })
+      .mockRejectedValueOnce(new Error('expected active turn id `turn-1` but found `turn-2`'))
+      .mockResolvedValueOnce({ turnId: 'turn-2' })
+    bridge.appClient = { request }
+    bridge.activeThreadId = 'thread-1'
+    bridge.scheduleSnapshot = vi.fn()
+
+    await expect(bridge.handleSteerTurn({
+      conversationId: 'thread-1',
+      input,
+    })).resolves.toEqual({ result: { turnId: 'turn-2' } })
+    expect(request).toHaveBeenNthCalledWith(1, 'thread/read', {
+      threadId: 'thread-1',
+      includeTurns: true,
+    })
+    expect(request).toHaveBeenNthCalledWith(2, 'turn/steer', {
+      threadId: 'thread-1',
+      input,
+      expectedTurnId: 'turn-1',
+    })
+    expect(request).toHaveBeenNthCalledWith(3, 'turn/steer', {
+      threadId: 'thread-1',
+      input,
+      expectedTurnId: 'turn-2',
+    })
+    expect(bridge.scheduleSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  test('fails follower steer without retry when app-server error does not include an active turn id', async () => {
+    const bridge = makeBridgeInternals()
+    const input = [{ type: 'text', text: 'follow up', text_elements: [] }]
+    const request = vi.fn()
+      .mockResolvedValueOnce({ thread: sampleThreadWithTurns([sampleTurn('turn-1', 'inProgress')]) })
+      .mockRejectedValueOnce(new Error('turn/steer failed with an unstructured error'))
+    bridge.appClient = { request }
+    bridge.activeThreadId = 'thread-1'
+    bridge.scheduleSnapshot = vi.fn()
+
+    await expect(bridge.handleSteerTurn({
+      conversationId: 'thread-1',
+      input,
+    })).rejects.toThrow('turn/steer failed with an unstructured error')
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(bridge.scheduleSnapshot).not.toHaveBeenCalled()
+  })
+
+  test('treats follower interrupt with no active turn as an idempotent no-op', async () => {
+    const bridge = makeBridgeInternals()
+    const request = vi.fn()
+      .mockResolvedValueOnce({ thread: sampleThreadWithTurns([sampleTurn('turn-1', 'completed')]) })
+    bridge.appClient = { request }
+    bridge.activeThreadId = 'thread-1'
+    bridge.scheduleSnapshot = vi.fn()
+
+    await expect(bridge.handleInterruptTurn({
+      conversationId: 'thread-1',
+    })).resolves.toEqual({ ok: true })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('thread/read', {
+      threadId: 'thread-1',
+      includeTurns: true,
+    })
+    expect(bridge.scheduleSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  test('broadcasts queued follow-up state changes to connected UI clients', async () => {
+    const bridge = makeBridgeInternals()
+    const broadcasts: { method: string; params: unknown }[] = []
+    bridge.activeThreadId = 'thread-1'
+    bridge.ipcClient = {
+      id: 'bridge-client',
+      broadcast: (method, params) => {
+        broadcasts.push({ method, params })
+      },
+    }
+    const message = { id: 'message-1', text: 'next', createdAt: 1 }
+
+    await expect(bridge.handleSetQueuedFollowUpsState({
+      conversationId: 'thread-1',
+      state: { 'thread-1': [message] },
+    })).resolves.toEqual({ ok: true })
+    expect(broadcasts).toEqual([
+      {
+        method: 'thread-queued-followups-changed',
+        params: {
+          conversationId: 'thread-1',
+          messages: [message],
+        },
+      },
+    ])
+  })
+
   test('resolves pending approval and input requests with explicit error paths', async () => {
     const bridge = makeBridgeInternals()
 
@@ -442,5 +708,48 @@ describe('codex UI IPC bridge', () => {
       }, 'item/tool/requestUserInput'),
     ).resolves.toEqual({ ok: true })
     expect(inputResolve).toHaveBeenCalledWith({ answers: { question: { answers: ['yes'] } } })
+  })
+
+  test('declines pending approval and input requests before interrupting a turn', () => {
+    const bridge = makeBridgeInternals()
+    const commandResolve = vi.fn()
+    const permissionResolve = vi.fn()
+    const inputResolve = vi.fn()
+    const elicitationResolve = vi.fn()
+    bridge.pendingServerRequests.set('command-1', {
+      id: 'command-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {},
+      resolve: commandResolve,
+      reject: vi.fn(),
+    })
+    bridge.pendingServerRequests.set('permission-1', {
+      id: 'permission-1',
+      method: 'item/permissions/requestApproval',
+      params: {},
+      resolve: permissionResolve,
+      reject: vi.fn(),
+    })
+    bridge.pendingServerRequests.set('input-1', {
+      id: 'input-1',
+      method: 'item/tool/requestUserInput',
+      params: {},
+      resolve: inputResolve,
+      reject: vi.fn(),
+    })
+    bridge.pendingServerRequests.set('elicitation-1', {
+      id: 'elicitation-1',
+      method: 'mcpServer/elicitation/request',
+      params: {},
+      resolve: elicitationResolve,
+      reject: vi.fn(),
+    })
+
+    expect(bridge.resolvePendingServerRequestsForInterrupt()).toBe(4)
+    expect(commandResolve).toHaveBeenCalledWith({ decision: 'decline' })
+    expect(permissionResolve).toHaveBeenCalledWith({ permissions: {}, scope: 'turn' })
+    expect(inputResolve).toHaveBeenCalledWith({ answers: {} })
+    expect(elicitationResolve).toHaveBeenCalledWith({ action: 'decline', content: null, _meta: null })
+    expect(bridge.pendingServerRequests.size).toBe(0)
   })
 })

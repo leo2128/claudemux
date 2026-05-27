@@ -1,5 +1,11 @@
 # claudemux
 
+## 1.0.0-beta.7
+
+### Patch Changes
+
+- 41a40a4: fix Codex UI IPC discovery for follower control requests
+
 ## 1.0.0-beta.6
 
 ### Patch Changes

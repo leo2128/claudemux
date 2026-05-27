@@ -43,13 +43,20 @@ jobs:
       - name: Version and push if changesets exist
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
         run: |
           cd plugins/claudemux
-          # check if there are any changesets to consume
-          if [ -z "$(ls .changeset/*.md 2>/dev/null | grep -v README.md)" ]; then
-            echo 'No changesets found, skipping bump.'
+          changed_changesets="$(
+            git diff --name-only --diff-filter=A "$PUSH_BEFORE" "$PUSH_SHA" -- '.changeset/*.md' \
+              | grep -v '/README.md$' || true
+          )"
+          if [ -z "$changed_changesets" ]; then
+            echo 'No newly added changesets in this push, skipping bump.'
             exit 0
           fi
+
+          node scripts/prepare-prerelease-changesets.mjs $changed_changesets
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git config user.name 'github-actions[bot]'
           pnpm version-packages

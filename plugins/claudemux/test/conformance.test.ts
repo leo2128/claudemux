@@ -81,7 +81,7 @@ import {
 import type { TmResult } from '../src/tm'
 import { runTmux } from '../src/tmux'
 
-/** This test file's directory — `core/test`. */
+/** This test file's directory — `test`. */
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url))
 /** The fake `tmux` dir — the native runner reaches it through `CLAUDEMUX_TMUX`. */
 const FAKE_TMUX_DIR = join(HARNESS_DIR, 'fixtures', 'fake-tmux-bin')

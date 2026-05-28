@@ -273,7 +273,7 @@ to point at any other launcher (a checked-out fork, a wrapper for
 profiling) without touching the suite:
 
 ```bash
-cd plugins/claudemux/core
+cd plugins/claudemux
 npx vitest run --config vitest.integration.config.ts
 ```
 

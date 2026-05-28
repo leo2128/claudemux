@@ -189,20 +189,27 @@ claude
 
 `/reload-plugins` 热加载 skill / command / hook / `tm` 脚本,不用重启。
 
-clone 后跑一次启用 pre-commit hook:
+pre-commit hook 在安装依赖时自动启用:
 
 ```bash
-git config core.hooksPath .githooks
+pnpm install
 ```
 
-它会拦截 author email 不合法的 commit。claudemux 的发版意图用官方
-Changesets fragment 声明:
+它会拦截 author email 不合法的 commit。claudemux 的发版意图通过直接写
+Changesets fragment 文件声明,不要用交互式 CLI:
 
 ```bash
-pnpm --dir plugins/claudemux changeset
+# 直接写 .changeset/<slug>.md，例如:
+cat > .changeset/my-change.md << 'EOF'
+---
+"claudemux": patch
+---
+
+Fix: 描述本次改动。
+EOF
 ```
 
-feature PR 提交生成的 `.changeset/*.md`;后续 release PR 会消费这些
+feature PR 将 `.changeset/*.md` 随改动一起提交;后续 release PR 会消费这些
 fragment,更新插件版本和 changelog。
 
 ## 卸载

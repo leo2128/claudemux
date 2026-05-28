@@ -53,10 +53,10 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | Path | What it is |
 |---|---|
 | `plugins/claudemux/` | The claudemux plugin: `bin/tm`, `hooks/`, `skills/`, `templates/`, `commands/` |
-| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript + Bun). **WIP**, currently on branch `feishu-channel-plugin` |
+| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript + Node/pnpm). **WIP**, currently on branch `feishu-channel-plugin` |
 | `bin/` | Repo-level dev tooling — `check-author`, `tm` test runners |
 | `.githooks/` | `pre-commit` — author-email check |
-| `.github/workflows/ci.yml` | CI — shellcheck + bats for claudemux, plus a Bun job for feishu-channel |
+| `.github/workflows/ci.yml` | CI — shellcheck + bats for claudemux, plus a pnpm job for feishu-channel |
 | `tests/` | bats tests for `tm` (pure functions + `--help` snapshots) |
 | `.claude-plugin/marketplace.json` | Marketplace manifest listing the plugins |
 | `.agents/` | This knowledge base |

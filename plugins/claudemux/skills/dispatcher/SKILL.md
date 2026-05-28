@@ -59,6 +59,8 @@ For any verb's flag/output contract: `tm <verb> --help`. Do not reason about `tm
 
 Run every verb that may block longer than a couple of seconds with `run_in_background: true` on the Bash tool. This covers `tm send` (sync default, blocks until Stop), `tm wait`, `tm spawn --prompt`, `tm resume --prompt`, `tm compact` (default 1800 s cap), `tm poll`, `tm reload`, and any file-polling loop you write yourself. After the call is backgrounded, wait for the task notification; do not chain `sleep N && cat <output-file>` to peek at the background output file.
 
+Agent tool calls must also carry `run_in_background: true`. Without it, the call blocks the dispatcher for the full subagent turn. This is unconditional — every Agent tool call the dispatcher makes (investigation, research, code lookup, any other purpose) runs in the background, and the dispatcher picks up the result through the task-completion notification just like a backgrounded Bash call.
+
 Foreground waits block the dispatcher end-to-end, so keep foreground use to non-wait operations such as `tm ls`, `tm states`, `tm status`, `tm last`, `tm history`, `tm archive`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, and `tm spawn` without `--prompt` when you intentionally want launch readiness before continuing.
 
 The harness sandbox blocks `sleep` calls longer than a few seconds. To wait for an external condition (a file appearing, a process exiting, a status flipping), run a bounded polling loop in the background: `until <check>; do sleep 4; done` wrapped in `run_in_background: true`. The sandbox doesn't object to many short sleeps; it objects to one long one.

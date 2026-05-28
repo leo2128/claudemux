@@ -44,9 +44,11 @@ export interface GateInput {
   /**
    * open_ids of peer bots known via /introduce in this specific chat. Populated
    * by the caller for group messages only; `undefined` for direct messages.
-   * Entries exist only because an authorized human sender previously ran
-   * /introduce in this same group — trust is transitively established by the
-   * gate that governed that /introduce delivery.
+   * Entries arise from two sources, both scoped to this chatId:
+   *  - an authorized human sender ran /introduce (trust via the gate that
+   *    governed that delivery), or
+   *  - a bot sender broadcast /introduce in an authorized group (ambient
+   *    self-recording; `isBotSenderType` and `isGroupAuthorized` are the guards).
    */
   observedBotIds?: ReadonlySet<string>
 }
@@ -156,10 +158,10 @@ function gateGroup(input: GateInput, access: Access, changed: boolean): GateResu
  * chat. A non-mention message, or a mention from an unrecognized sender, is
  * dropped; no pairing code is posted into a group.
  *
- * The observed-bot path is safe because entries only exist because an
- * authorized human sender (already on `allowFrom`) ran /introduce in this same
- * group — trust flows transitively through the gate that governed that
- * delivery, and entries are scoped to the specific chatId.
+ * The observed-bot path is safe: entries are per-chatId and arise from two
+ * guarded sources — an authorized human /introduce delivery, or a bot that
+ * broadcast /introduce in an authorized group (ambient path, guarded by
+ * `isBotSenderType` + `isGroupAuthorized`). Both scope trust to this chat.
  */
 function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean): GateResult {
   if (input.botOpenId === undefined) {

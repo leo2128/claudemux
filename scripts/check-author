@@ -5,7 +5,7 @@
 #   - .githooks/pre-commit       checks the identity the next commit would use.
 #   - .github/workflows/ci.yml   checks every commit a push or PR introduces.
 #
-# Usage:  bin/check-author <email>
+# Usage:  scripts/check-author <email>
 # Exit:   0  the email is a real, well-formed address.
 #         1  unparseable, or a machine-default identity (git's
 #            whoami@hostname guess) — reason printed to stderr.

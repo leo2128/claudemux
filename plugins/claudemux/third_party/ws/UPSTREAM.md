@@ -10,16 +10,16 @@ The `tm` CLI runs TypeScript sources directly through
 `node --experimental-transform-types`; the zero-install shape forbids a
 runtime `npm install` step. `ws` is `tm`'s only runtime npm dependency, so
 its source is committed here verbatim and consumed via the
-`#ws` subpath in the core `package.json` `imports` map.
+`#ws` subpath in the plugin's `package.json` `imports` map.
 
 ## Updating
 
-1. `npm install ws@<new-version> --no-save` in `plugins/claudemux/core/`.
+1. `npm install ws@<new-version> --no-save` in `plugins/claudemux/`.
 2. `rsync` the runtime files into this directory:
    ```
    cp node_modules/ws/{index.js,wrapper.mjs,browser.js,LICENSE,README.md} \
-      plugins/claudemux/core/third_party/ws/
-   cp node_modules/ws/lib/*.js plugins/claudemux/core/third_party/ws/lib/
+      plugins/claudemux/third_party/ws/
+   cp node_modules/ws/lib/*.js plugins/claudemux/third_party/ws/lib/
    ```
 3. Bump `version` in this directory's `package.json` *and* the
    `Tag:` line at the top of this file — both are the authoritative
@@ -27,7 +27,7 @@ its source is committed here verbatim and consumed via the
 4. Skim the diff for new transitive `require()` calls — ws's runtime
    surface is `index.js` + `lib/*.js`; anything new outside those is a
    signal that the vendoring shape changed.
-5. Run `npm test` in `plugins/claudemux/core/`.
+5. Run `npm test` in `plugins/claudemux/`.
 
 ## Security advisories
 
@@ -45,7 +45,7 @@ Two practices that cover the gap together:
   one person noticing the email.
 - **Run the drift check at every release.** Before cutting a release
   for the `claudemux` plugin, run
-  `bash plugins/claudemux/core/scripts/check-ws-drift.sh`: it prints
+  `bash plugins/claudemux/scripts/check-ws-drift.sh`: it prints
   the vendored version, fetches the upstream `latest` dist-tag via
   `npm view`, and exits non-zero when the two diverge. Any non-zero
   exit means re-do the **Updating** flow before releasing.

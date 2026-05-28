@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-ws-drift.sh — compare the vendored `ws` version under
-# `core/third_party/ws/` against the latest upstream release on npm.
+# `third_party/ws/` against the latest upstream release on npm.
 #
 # Why: `ws` is no longer in the npm tree, so `npm audit` and Dependabot
 # do not cover it. This script is the manual mirror — run it before
@@ -56,5 +56,5 @@ if [[ "$vendored" == "$upstream" ]]; then
 fi
 
 echo "check-ws-drift: vendored ws is behind upstream — see" \
-    "plugins/claudemux/core/third_party/ws/UPSTREAM.md §Updating" >&2
+    "plugins/claudemux/third_party/ws/UPSTREAM.md §Updating" >&2
 exit 1

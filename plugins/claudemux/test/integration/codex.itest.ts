@@ -21,7 +21,7 @@
  *
  * Run it explicitly (never via `npm test`):
  *
- *   cd plugins/claudemux/core
+ *   cd plugins/claudemux
  *   npx vitest run --config vitest.integration.config.ts test/integration/codex.itest.ts
  *
  * Add `CLAUDEMUX_CODEX_SPEND_TOKENS=1` to also run the turn-spending

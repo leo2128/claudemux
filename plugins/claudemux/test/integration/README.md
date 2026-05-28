@@ -23,7 +23,7 @@ behavior only proves out against the real binaries — that is this suite's job.
 ## Running it
 
 ```bash
-cd plugins/claudemux/core
+cd plugins/claudemux
 npx vitest run --config vitest.integration.config.ts
 ```
 

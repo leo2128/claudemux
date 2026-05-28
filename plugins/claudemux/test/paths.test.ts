@@ -5,8 +5,13 @@
  * strings are pinned.
  */
 
-import { describe, expect, test } from 'vitest'
+import { existsSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 
+import { afterEach, describe, expect, test } from 'vitest'
+
+import { pluginJsonPath, tmWrapperPath } from '../src/plugin-root'
+import { resolveTmBinary } from '../src/tm'
 import {
   busyMarkerFor,
   cwdFile,
@@ -85,5 +90,42 @@ describe.skip('codex-daemon registry paths', () => {
   test('nested teammate names keep their relative directory shape', () => {
     expect(codexTeammateDir('codex/foo')).toBe('/tmp/teammate-codex/codex/foo')
     expect(codexSocketPath('codex/foo')).toBe('/tmp/teammate-codex/codex/foo/socket')
+  })
+})
+
+describe('plugin-root helpers resolve to real files under plugins/claudemux/', () => {
+  // These helpers walk up from their module's `import.meta.url` to the plugin
+  // root. The walk depth is coupled to where the source tree sits; pinning
+  // each resolved path to a file that must exist on disk — and to `claudemux`
+  // as the plugin-root directory name — makes any future change to the tree
+  // depth fail here instead of at a teammate spawn or a plugin.json read.
+  test('tmWrapperPath points at the shipped bin/tm launcher', () => {
+    const p = tmWrapperPath()
+    expect(existsSync(p)).toBe(true)
+    expect(p.endsWith('/bin/tm')).toBe(true)
+    expect(basename(dirname(dirname(p)))).toBe('claudemux')
+  })
+
+  test('pluginJsonPath points at the shipped plugin manifest', () => {
+    const p = pluginJsonPath()
+    expect(existsSync(p)).toBe(true)
+    expect(p.endsWith('/.claude-plugin/plugin.json')).toBe(true)
+    expect(basename(dirname(dirname(p)))).toBe('claudemux')
+  })
+
+  describe('resolveTmBinary with no CLAUDEMUX_TM override', () => {
+    const savedOverride = process.env.CLAUDEMUX_TM
+    afterEach(() => {
+      if (savedOverride === undefined) delete process.env.CLAUDEMUX_TM
+      else process.env.CLAUDEMUX_TM = savedOverride
+    })
+
+    test('points at the same shipped bin/tm launcher', () => {
+      delete process.env.CLAUDEMUX_TM
+      const p = resolveTmBinary()
+      expect(existsSync(p)).toBe(true)
+      expect(p.endsWith('/bin/tm')).toBe(true)
+      expect(basename(dirname(dirname(p)))).toBe('claudemux')
+    })
   })
 })

@@ -2,5 +2,5 @@
 # language-stats ignores them. The contents are emitted by external tools
 # (`codex app-server generate-ts` for the codex protocol bindings; esbuild for
 # the production CLI bundle) and never hand-edited.
-plugins/claudemux/core/src/codex-protocol/** linguist-generated=true
-plugins/claudemux/core/dist/** linguist-generated=true
+plugins/claudemux/src/codex-protocol/** linguist-generated=true
+plugins/claudemux/dist/** linguist-generated=true

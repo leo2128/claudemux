@@ -49,6 +49,6 @@ export const EXIT_SYNC_WAIT_EXPIRED = 124
 export function resolveTmBinary(): string {
   const override = process.env.CLAUDEMUX_TM
   if (override && override.length > 0) return override
-  // core/src/tm.ts → plugins/claudemux/bin/tm
-  return join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'tm')
+  // src/tm.ts → plugins/claudemux/bin/tm
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'tm')
 }

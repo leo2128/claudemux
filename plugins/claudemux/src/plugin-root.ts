@@ -2,7 +2,7 @@
  * `<plugin-root>/bin/tm` and `<plugin-root>/.claude-plugin/plugin.json`
  * path computation, in one place.
  *
- * This file lives at `core/src/plugin-root.ts`; the two-`..` walk from its
+ * This file lives at `src/plugin-root.ts`; the single-`..` walk from its
  * `import.meta.url` lands at `plugins/claudemux/` regardless of how the
  * launcher invoked Node, so callers do not have to think about it.
  */
@@ -22,5 +22,5 @@ export function pluginJsonPath(): string {
 
 function pluginRoot(): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url))
-  return join(moduleDir, '..', '..')
+  return join(moduleDir, '..')
 }

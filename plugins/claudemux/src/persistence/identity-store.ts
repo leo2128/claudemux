@@ -3,7 +3,7 @@
  * `/tmp/teammate-<name>.json`. Decision multi-engine-tui-architecture §"TeammateRecord" anchors this
  * file as the single source of truth for the base `TeammateRecord`, and
  * §"Enforcement against silent regression" pins the constraint: no other
- * file in `plugins/claudemux/core/src/` may touch the JSON marker.
+ * file in `plugins/claudemux/src/` may touch the JSON marker.
  *
  * Three surfaces matter:
  *

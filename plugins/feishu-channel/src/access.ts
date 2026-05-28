@@ -21,7 +21,11 @@ export const PAIRING_TTL_MS = 60 * 60 * 1000
 export interface GateInput {
   /** open_id of the message sender. */
   senderId: string
-  /** Feishu sender_type — `'user'` for a human, `'bot'` for an app/bot. */
+  /**
+   * Feishu sender_type. Feishu uses `'bot'` for cross-bot card messages and
+   * `'app'` for custom-bot messages in some scenarios; `'user'` for humans.
+   * Absent when the field is missing from the raw payload.
+   */
   senderType?: string
   /** chat_id the message arrived in. */
   chatId: string
@@ -171,7 +175,7 @@ function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean)
   }
   const onAllowlist = access.allowFrom.includes(input.senderId)
   const isIntroducedBot =
-    input.senderType === 'bot' && (input.observedBotIds?.has(input.senderId) ?? false)
+    isBotSenderType(input.senderType) && (input.observedBotIds?.has(input.senderId) ?? false)
   if (!onAllowlist && !isIntroducedBot) {
     return { action: 'drop', access, changed, reason: 'sender not on allowlist' }
   }
@@ -293,4 +297,28 @@ export function pruneExpiredPending(
     }
   }
   return changed ? { access: { ...access, pending: kept }, changed: true } : { access, changed: false }
+}
+
+/**
+ * True when `senderType` identifies a Feishu bot or app.
+ * Feishu uses `'bot'` for cross-bot messages and `'app'` for custom-bot
+ * messages in some event contexts; both are non-human senders.
+ */
+export function isBotSenderType(senderType: string | undefined): boolean {
+  return senderType === 'bot' || senderType === 'app'
+}
+
+/**
+ * True when the given group is "authorized" — i.e. the channel is actively
+ * serving it and ambient side effects (like /introduce recording) are appropriate.
+ *
+ *  - `block`       → never authorized; the bot ignores all groups.
+ *  - `follow-user` → always authorized; any group can receive messages.
+ *  - `allowlist`   → authorized only when the group has been paired and is
+ *                    present in `access.groups`.
+ */
+export function isGroupAuthorized(access: Access, chatId: string): boolean {
+  if (access.groupPolicy === 'block') return false
+  if (access.groupPolicy === 'follow-user') return true
+  return access.groups[chatId] !== undefined
 }

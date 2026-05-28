@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import {
   gate,
   isBotMentioned,
+  isBotSenderType,
+  isGroupAuthorized,
   MAX_PAIRING_REPLIES,
   MAX_PENDING,
   PAIRING_TTL_MS,
@@ -434,5 +436,32 @@ describe('isBotMentioned', () => {
 
   test('false when no mention is the bot', () => {
     expect(isBotMentioned([{ key: '@_user_1', id: { open_id: 'ou_human' } }], 'ou_bot')).toBe(false)
+  })
+})
+
+describe('isBotSenderType', () => {
+  test("true for 'bot'", () => expect(isBotSenderType('bot')).toBe(true))
+  test("true for 'app' (custom-bot scenario)", () => expect(isBotSenderType('app')).toBe(true))
+  test("false for 'user'", () => expect(isBotSenderType('user')).toBe(false))
+  test('false for undefined (missing field)', () => expect(isBotSenderType(undefined)).toBe(false))
+  test('false for empty string', () => expect(isBotSenderType('')).toBe(false))
+})
+
+describe('isGroupAuthorized', () => {
+  test('block policy — never authorized', () => {
+    expect(isGroupAuthorized(access({ groupPolicy: 'block' }), 'oc_any')).toBe(false)
+  })
+
+  test('follow-user policy — always authorized', () => {
+    expect(isGroupAuthorized(access({ groupPolicy: 'follow-user' }), 'oc_any')).toBe(true)
+  })
+
+  test('allowlist policy — authorized when group is configured', () => {
+    const a = access({ groupPolicy: 'allowlist', groups: { oc_chat: { requireMention: false, allowFrom: [] } } })
+    expect(isGroupAuthorized(a, 'oc_chat')).toBe(true)
+  })
+
+  test('allowlist policy — not authorized when group is absent', () => {
+    expect(isGroupAuthorized(access({ groupPolicy: 'allowlist' }), 'oc_chat')).toBe(false)
   })
 })

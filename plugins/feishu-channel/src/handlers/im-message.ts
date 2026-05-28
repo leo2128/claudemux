@@ -9,7 +9,7 @@
  * it directly.
  */
 
-import { gate } from '../access'
+import { gate, isBotSenderType, isGroupAuthorized } from '../access'
 import { loadAccess, saveAccess } from '../access-store'
 import { parseInbound } from '../content'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
@@ -64,6 +64,30 @@ export function createImMessageHandler(): EventHandler {
         ctx.logError('access.json was unreadable; started from defaults')
       }
 
+      // Hoist the /introduce detection once; both paths below reuse this result.
+      const isIntroduce = isIntroduceCommand(event.content, event.messageType, event.mentions)
+
+      // Ambient /introduce: a bot sender that broadcasts /introduce in an
+      // authorized group is recorded even without @-mentioning us. Runs before
+      // observedBotIds is loaded so the sender is included in the gate check on
+      // this same message (enabling single-step self-introduction).
+      if (
+        event.chatType === 'group' &&
+        isBotSenderType(event.senderType) &&
+        isIntroduce &&
+        isGroupAuthorized(loaded.access, event.chatId)
+      ) {
+        const name =
+          event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? event.senderId
+        try {
+          recordObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId, [
+            { openId: event.senderId, name },
+          ])
+        } catch (err) {
+          ctx.logError('ambient /introduce: failed to persist sender bot', err)
+        }
+      }
+
       const observedBotIds =
         event.chatType === 'group'
           ? new Set(
@@ -87,14 +111,14 @@ export function createImMessageHandler(): EventHandler {
         if (decision.changed) saveAccess(ctx.accessFile, decision.access)
       }
 
-      // /introduce collaboration handshake — intercept before normal routing.
-      // Detect using raw content + mention keys (not display names) so names
-      // with spaces don't break the prefix-strip. Side effects only fire when
-      // the access gate would deliver; for pair/drop we consume silently without
-      // persisting — saving a pair decision here would create a phantom pairing
-      // code that was never shown to anyone, causing "group pairing already
-      // pending" to block legitimate pairings until the entry expires.
-      if (isIntroduceCommand(event.content, event.messageType, event.mentions)) {
+      // @-mention /introduce collaboration handshake — intercept before normal
+      // routing. Detect using raw content + mention keys (not display names) so
+      // names with spaces don't break the prefix-strip. Side effects only fire
+      // when the access gate would deliver; for pair/drop we consume silently
+      // without persisting — saving a pair decision here would create a phantom
+      // pairing code that was never shown to anyone, causing "group pairing
+      // already pending" to block legitimate pairings until the entry expires.
+      if (isIntroduce) {
         if (decision.action === 'deliver') {
           persist()
           await handleIntroduce(event, ctx)

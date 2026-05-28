@@ -10,7 +10,7 @@ workflow.
 |---|---|
 | [`/scripts/check-author`](/scripts/check-author) | Validate one git author email — the single source of truth for the author rule |
 | [`/package.json`](/package.json) | pnpm workspace root — declares `packageManager`, root devDeps (`@changesets/cli`, `husky`), and the `prepare` script that installs hooks |
-| [`/pnpm-workspace.yaml`](/pnpm-workspace.yaml) | Workspace package list: `plugins/claudemux`, `plugins/feishu-channel`, `packages/tm` |
+| [`/pnpm-workspace.yaml`](/pnpm-workspace.yaml) | Workspace package list: `plugins/claudemux`, `plugins/feishu-channel` |
 | [`/.changeset/config.json`](/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, release-surface globs for claudemux and feishu-channel |
 | [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Claudemux package manifest — `version-packages` and `version-ga` release scripts |
 | [`/plugins/claudemux/scripts/sync-plugin-version.mjs`](/plugins/claudemux/scripts/sync-plugin-version.mjs) | Mirror `package.json.version` into `.claude-plugin/plugin.json.version` after Changesets versions packages |

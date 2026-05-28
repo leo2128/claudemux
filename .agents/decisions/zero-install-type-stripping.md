@@ -61,7 +61,11 @@ Two facts shifted what [node-cli-committed-bundle](./node-cli-committed-bundle.m
 
 - **Zero install for users.** A `git pull` on the marketplace cache or a
   fresh clone of this repo gives the user a working `tm` immediately, with
-  no follow-up step. The only host requirement is Node 22.7+, the version
+  no follow-up step. This is a hard constraint, not a convenience: Claude
+  Code installs and upgrades a plugin by syncing its files and never runs
+  `npm install` for one, so any dependency that is not committed is simply
+  absent at runtime — which is the whole reason `ws` is vendored rather than
+  declared. The only host requirement is Node 22.7+, the version
   where `--experimental-transform-types` shipped — that flag is the entire
   basis for the Node-version floor; nothing else here pins a higher one.
 - **The 1500 relative imports stay untouched.** Sweeping them to add `.ts`

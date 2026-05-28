@@ -52,10 +52,15 @@ MCP server, and no socket.
   are **kept** and become the body of the new CLI. What is dropped is the
   MCP wrapper around them — the resident server, the socket transport,
   and the in-memory teammate registry.
-- **Runtime: Bun → Node.** The `core/` package runs on Bun today; the rewritten
-  `tm` runs on Node, the broader-installed runtime for a tool shipped onto
-  users' machines. The Bun → Node move that mcp-native-orchestration-core's spec had parked on its
-  backlog is pulled forward into the pivot.
+- **Runtime: Bun → Node.** The orchestrator's TypeScript package began on Bun — the first cut
+  mirrored the `feishu-channel` plugin's stack, where a long-lived server made
+  Bun a reasonable fit — and the rewritten `tm` moves to **Node**. The force is
+  reach, not runtime preference: `tm` ships onto users' machines, and Node is
+  the runtime frontend and general developers already have, whereas Bun's
+  install base is narrow. A CLI that makes the user install a second runtime
+  before it works is imposing a barrier an orchestrator should not; Node's
+  ubiquity removes it. The Bun → Node move that mcp-native-orchestration-core's
+  spec had parked on its backlog is pulled forward into the pivot.
 - **Codex teammates connect to a self-spawned `app-server`.** Empirically:
   `codex app-server`'s `daemon` subcommand requires an OpenAI-hosted
   installation and is unusable here; its `proxy` subcommand is a raw byte

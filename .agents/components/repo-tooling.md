@@ -80,7 +80,7 @@ when `pnpm install` runs the `prepare` script. Two hooks are active:
 - **`.husky/pre-push`** — runs `pnpm changeset status --since=origin/next` to
   catch missing changeset fragments before a push lands in CI.
 
-On a fresh clone, `pnpm install` sets `core.hooksPath=.husky` and installs
+On a fresh clone, `pnpm install` sets `core.hooksPath=.husky/_` and installs
 both hooks automatically. No manual `git config core.hooksPath` is needed.
 
 ## The author-email rule
@@ -110,12 +110,13 @@ jobs:
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`
-  only. It installs Bun and runs the plugin's `bun test` suite and
-  type-check. That suite is OS-agnostic TypeScript, so one OS is enough; it
-  is a separate job so the Bun toolchain stays off the bats lane. A final
-  step runs `test/feishu-live.ts` against the real Feishu platform, using the
-  `FEISHU_APP_ID` / `FEISHU_APP_SECRET` repository secrets; that test skips
-  itself when the secrets are absent.
+  only. It installs pnpm at the workspace root and runs typecheck and tests
+  via `pnpm --filter claude-channel-feishu run typecheck` /
+  `pnpm --filter claude-channel-feishu run test`. That suite is OS-agnostic
+  TypeScript, so one OS is enough; it is a separate job so its toolchain stays
+  off the bats lane. A final step runs `test/feishu-live.ts` against the real
+  Feishu platform, using the `FEISHU_APP_ID` / `FEISHU_APP_SECRET` repository
+  secrets; that test skips itself when the secrets are absent.
 
 The `feishu-channel` job covers a plugin that is still on a branch — see
 [components/feishu-channel.md](/.agents/components/feishu-channel.md).

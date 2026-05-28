@@ -209,21 +209,30 @@ claude
 `/reload-plugins` hot-reloads skills, commands, hooks, and `tm` — no
 restart needed.
 
-Enable the pre-commit hook once after cloning:
+The pre-commit hook installs automatically when you run:
 
 ```bash
-git config core.hooksPath .githooks
+pnpm install
 ```
 
 It rejects commits with an invalid author email. Claudemux release intent is
-declared with official Changesets fragments:
+declared by writing a Changesets fragment directly at the repo root — do not
+use the interactive CLI:
 
 ```bash
-pnpm --dir plugins/claudemux changeset
+# Write .changeset/<slug>.md directly, e.g.:
+cat > .changeset/my-change.md << 'EOF'
+---
+"claudemux": patch
+---
+
+Fix: describe the change here.
+EOF
 ```
 
-Feature PRs commit the generated `.changeset/*.md` file; generated release PRs
-later consume those fragments into the plugin version and changelog.
+Feature PRs commit the generated `.changeset/*.md` file alongside the change;
+generated release PRs later consume those fragments into the plugin version and
+changelog.
 
 ## Uninstall
 

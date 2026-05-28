@@ -1,0 +1,2 @@
+# Delegate the commit author check to .githooks/pre-commit (same rule as CI).
+.githooks/pre-commit

@@ -10,30 +10,38 @@ workflow.
 |---|---|
 | [`/bin/check-author`](/bin/check-author) | Validate one git author email — the single source of truth for the author rule |
 | [`/bin/test-tm-mem`](/bin/test-tm-mem), `/bin/test-tm-prompt-splat` | Standalone `tm` behavior test runners |
-| [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Official Changesets package manifest for claudemux release automation |
-| [`/plugins/claudemux/.changeset/config.json`](/plugins/claudemux/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, and claudemux release-surface globs |
+| [`/package.json`](/package.json) | pnpm workspace root — declares `packageManager`, root devDeps (`@changesets/cli`, `husky`), and the `prepare` script that installs hooks |
+| [`/pnpm-workspace.yaml`](/pnpm-workspace.yaml) | Workspace package list: `plugins/claudemux`, `plugins/feishu-channel`, `packages/tm` |
+| [`/.changeset/config.json`](/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, release-surface globs for claudemux and feishu-channel |
+| [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Claudemux package manifest — `version-packages` and `version-ga` release scripts |
 | [`/plugins/claudemux/scripts/sync-plugin-version.mjs`](/plugins/claudemux/scripts/sync-plugin-version.mjs) | Mirror `package.json.version` into `.claude-plugin/plugin.json.version` after Changesets versions packages |
-| [`/.githooks/pre-commit`](/.githooks/pre-commit) | Local author-email check |
+| [`/.githooks/pre-commit`](/.githooks/pre-commit) | Author-email check (source of truth); called by `.husky/pre-commit` |
+| [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — delegates to `.githooks/pre-commit` |
+| [`/.husky/pre-push`](/.husky/pre-push) | Husky hook — runs `pnpm changeset status --since=origin/next` before push |
 | [`/.github/workflows/ci.yml`](/.github/workflows/ci.yml) | CI — shellcheck + bats on an Ubuntu/macOS matrix |
 | [`/tests/`](/tests) | bats tests — `cli/` covers repo tooling and hook regressions; TypeScript core conformance lives under `plugins/claudemux/core/test/` |
 
 ## Versioning — official Changesets
 
-Claudemux is versioned with official Changesets, scoped to
-`plugins/claudemux/`. The Claude Code plugin manifest remains
-`plugins/claudemux/.claude-plugin/plugin.json`, but Changesets reads and writes
-`plugins/claudemux/package.json`.
+The repo is a pnpm workspace (`pnpm-workspace.yaml`). Changesets operates
+from the workspace root: the config lives at `/.changeset/config.json` and
+fragments land in `/.changeset/<slug>.md`.
 
-A feature commit never edits either version field. It declares release intent
-with an official Changesets fragment:
+A feature commit never edits a `version` field. It declares release intent
+by writing a fragment directly — do not use the interactive CLI:
 
-```bash
-pnpm --dir plugins/claudemux changeset
+```
+---
+"claudemux": patch
+---
+
+<one-paragraph description>
 ```
 
-Commit the generated `plugins/claudemux/.changeset/*.md` file alongside the
-change. Release automation later runs `pnpm --dir plugins/claudemux
-version-packages`, which calls `changeset version` and then mirrors the
+For `feishu-channel`, use package name `"claude-channel-feishu"` instead.
+Commit the fragment alongside the change. Release automation later runs
+`pnpm --dir plugins/claudemux version-packages`, which calls
+`changeset version` (walks up to find `/.changeset/`) and then mirrors the
 resulting package version into `.claude-plugin/plugin.json`.
 
 Each feature commit therefore adds a new fragment rather than editing the
@@ -48,27 +56,32 @@ backward-compatible feature; `major` = breaking change to a documented
 contract (a CLI flag, a file path, an on-disk format).
 
 What counts as feature-class is per-plugin, because the plugins differ in
-shape. Claudemux's release surface is declared in
-`plugins/claudemux/.changeset/config.json`:
+shape. The release surface is declared in `/.changeset/config.json` under
+`changedFilePatterns`:
 
 - `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any
   `skills/*/SKILL.md`; plus `core/src/*`, `core/package.json`,
   `core/resolver.mjs`, `core/resolver-register.mjs`, and
   `core/third_party/*`.
-- `feishu-channel` (TypeScript) — `src/`, `.mcp.json`, `package.json`, and
-  any `skills/*/SKILL.md`.
+- `claude-channel-feishu` (TypeScript) — `src/**`.
 
 Pure-docs commits (README, `CLAUDE.md`, KB files, any `*.md` that is not a
 `SKILL.md`), CI/test changes, and manifest description/keyword edits are
 **exempt**. The `.agents/` KB is not a feature-class path — KB changes never
 need a changeset.
 
-## The pre-commit hook
+## Local hooks
 
-[`/.githooks/pre-commit`](/.githooks/pre-commit) delegates the author-email
-rule to `bin/check-author`. Changeset enforcement belongs to CI, not to the
-local hook. Enable the hook once per clone:
-`git config core.hooksPath .githooks`.
+The repo uses Husky (`/.husky/`) for local git hooks, installed automatically
+when `pnpm install` runs the `prepare` script. Two hooks are active:
+
+- **`.husky/pre-commit`** — delegates to [`.githooks/pre-commit`](/.githooks/pre-commit),
+  which runs `bin/check-author` to validate the commit author email.
+- **`.husky/pre-push`** — runs `pnpm changeset status --since=origin/next` to
+  catch missing changeset fragments before a push lands in CI.
+
+On a fresh clone, `pnpm install` sets `core.hooksPath=.husky` and installs
+both hooks automatically. No manual `git config core.hooksPath` is needed.
 
 ## The author-email rule
 

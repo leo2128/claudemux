@@ -83,14 +83,19 @@ Release-surface paths are declared in `.changeset/config.json` under `changedFil
 - `core/src/*`, `core/package.json`, `core/resolver.mjs`, `core/resolver-register.mjs`, `core/third_party/*` (claudemux core)
 - `src/**` (feishu-channel — use package name `"claude-channel-feishu"`)
 
-The pre-commit hook at `.githooks/pre-commit` checks only the commit author email. The `.husky/pre-push` hook runs `pnpm changeset status --since=origin/next` to catch missing fragments before push. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
+Two local hooks run via Husky (installed by `pnpm install`):
 
-To enable all hooks on a fresh clone: `git config core.hooksPath .githooks && pnpm install` (husky installs the pre-push hook via the `prepare` script).
+- `.husky/pre-commit` — delegates to `.githooks/pre-commit`, which checks the commit author email via `bin/check-author`.
+- `.husky/pre-push` — runs `pnpm changeset status --since=origin/next` to catch missing changeset fragments before push.
+
+Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
+
+To enable all hooks on a fresh clone: `pnpm install` (the `prepare` script sets `core.hooksPath=.husky` automatically).
 
 ## Commit Author
 
 Commit author email must be a real, well-formed address — not a machine-default identity (git's `whoami@hostname` guess, e.g. `dyzhu@MacBook.local`, which git fabricates when `user.email` is unset). Any valid public email passes; there is no per-person whitelist.
 
-The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`). Enable the hook with `git config core.hooksPath .githooks`.
+The rule lives in `bin/check-author` — one source of truth, called from two places: `.githooks/pre-commit` (invoked via `.husky/pre-commit`) checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`).
 
 To stop machine-default identities at the root, set once per machine: `git config --global user.useConfigOnly true` — git then refuses to commit until `user.email` is explicitly configured, instead of silently guessing.

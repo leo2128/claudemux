@@ -1,5 +1,5 @@
 {
   "code": 0,
   "stdout": "killed: claudemux-conftest-64f0c0ff0e9a\n",
-  "stderr": "claudemux-conftest-64f0c0ff0e9a: /exit did not return SessionEnd within 8s — fell back to tmux kill-session (SIGHUP). Any worktree Claude created is preserved; remove with 'git worktree remove --force' if no longer needed.\n"
+  "stderr": "claudemux-conftest-64f0c0ff0e9a: /exit did not return SessionEnd within 50ms — fell back to tmux kill-session (SIGHUP). Any worktree Claude created is preserved; remove with 'git worktree remove --force' if no longer needed.\n"
 }

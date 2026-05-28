@@ -13,12 +13,15 @@
  * the rest of the spawn flow).
  */
 
-import { remove as removeIdentity } from './identity-store'
+import { archive as archiveIdentity, remove as removeIdentity } from './identity-store'
 import type { IdentityStore } from '../verbs/context'
 import type { TeammateName } from '../engines/types'
 
-/** Production `IdentityStore` — deletes the JSON file. Idempotent. */
+/** Production `IdentityStore` — archives + deletes the JSON file. Idempotent. */
 export class ProductionIdentityStore implements IdentityStore {
+  async archive(name: TeammateName): Promise<void> {
+    archiveIdentity(name)
+  }
   async remove(name: TeammateName): Promise<void> {
     removeIdentity(name)
   }

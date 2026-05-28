@@ -32,6 +32,14 @@ import type { TeammateRouter } from '../identity/router'
  * implementation under `persistence/identity-store.ts`.
  */
 export interface IdentityStore {
+  /**
+   * Snapshot the live identity JSON into the archive directory. Called by
+   * `tm kill` before `remove(name)` so a later `tm resume <name> <sid>`
+   * or `tm history <name>` can recover cwd / repo / worktreeSlug /
+   * displayName for the killed teammate without the agent shelling into
+   * `/tmp`. No-op when there is no live record to archive.
+   */
+  archive(name: TeammateName): Promise<void>
   /** Remove the identity JSON for `name`. Idempotent — missing file is OK. */
   remove(name: TeammateName): Promise<void>
 }
@@ -51,6 +59,9 @@ export interface VerbContext {
 
 /** Phase 1 no-op identity store — Phase 2 ships the real writer. */
 export class NoopIdentityStore implements IdentityStore {
+  async archive(_name: TeammateName): Promise<void> {
+    return
+  }
   async remove(_name: TeammateName): Promise<void> {
     return
   }

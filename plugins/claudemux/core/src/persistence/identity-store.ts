@@ -67,6 +67,27 @@ export function identityFile(name: TeammateName): string {
   return `${identityRoot()}/teammate-${name}.json`
 }
 
+/**
+ * Directory holding archived identity records — written when `tm kill`
+ * tears down a teammate, so a later `tm resume <name> <sid>` or
+ * `tm history <name>` can look up the killed teammate's cwd / repo /
+ * worktreeSlug / displayName without the agent reading `/tmp` files
+ * by hand.
+ *
+ * Lives under `identityRoot()` so `CLAUDEMUX_IDENTITY_ROOT` covers
+ * both the live and archived sides for tests. The directory name has
+ * no `.json` suffix, so `TOP_LEVEL_FILENAME` skips it and `list()`
+ * never enumerates archived records as live teammates.
+ */
+function archiveDir(): string {
+  return join(identityRoot(), 'teammate-archive')
+}
+
+/** Absolute path of the archived identity JSON for a teammate. */
+export function archivedIdentityFile(name: TeammateName): string {
+  return join(archiveDir(), `${name}.json`)
+}
+
 /** Regex pinning the top-level identity-file name shape; capture group 1 is the name. */
 const TOP_LEVEL_FILENAME = /^teammate-(.+)\.json$/
 
@@ -133,6 +154,42 @@ export function read(name: TeammateName): TeammateRecordJson | null {
 /** Remove the identity file; idempotent. */
 export function remove(name: TeammateName): void {
   removeIfPresent(identityFile(name))
+}
+
+/**
+ * Snapshot the live identity record to the archive directory. Called
+ * by `tm kill` immediately before the live record is removed; after
+ * this call `readArchived(name)` returns the same record that
+ * `read(name)` returned just before the kill.
+ *
+ * No-op when there is no live record — `tm kill` running on a name
+ * with only a stale tmux session leaves nothing to archive, and the
+ * archive directory stays as it was (carrying the previous kill's
+ * snapshot if any). Returns whether anything was archived, so the
+ * verb layer can tell apart "archived a real identity" from
+ * "nothing to archive".
+ */
+export function archive(name: TeammateName): boolean {
+  const raw = readIfPresent(identityFile(name))
+  if (raw === null) return false
+  atomicWrite(archivedIdentityFile(name), raw)
+  return true
+}
+
+/**
+ * Read a teammate's archived record — what was on disk the last time
+ * `tm kill` archived this name. Returns `null` for "no such archive"
+ * (never killed under this scheme, or removed by `removeArchived`).
+ */
+export function readArchived(name: TeammateName): TeammateRecordJson | null {
+  const raw = readIfPresent(archivedIdentityFile(name))
+  if (raw === null) return null
+  return parse(raw)
+}
+
+/** Remove the archived identity file; idempotent. */
+export function removeArchived(name: TeammateName): void {
+  removeIfPresent(archivedIdentityFile(name))
 }
 
 /**

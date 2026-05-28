@@ -7,6 +7,7 @@ import { readBaseRecord, readCodexMeta } from '../engines/codex/persistence'
 import { worktreePathFor } from '../persistence/paths'
 import {
   read as readIdentity,
+  readArchived as readArchivedIdentity,
   readRawSchema,
 } from '../persistence/identity-store'
 import type { EngineKind } from '../engines/types'
@@ -163,11 +164,17 @@ function normalizeExistingCwd(cwd: string): string {
 
 /**
  * Resolve the runtime cwd for a verb that targets an existing
- * teammate by name. Reads the identity record, then the Codex
- * registry's cwd hint, then a `<dispatcherDir>/<name>` probe (the
- * shape `tm resume` accepts after a clean kill that erased the
- * identity but left the source directory on disk), and finally
- * the dispatcher dir itself.
+ * teammate by name. Reads, in order:
+ *
+ *  1. the live identity record (running or just-spawned teammate);
+ *  2. the archived identity record written at `tm kill` time — so a
+ *     post-kill `tm resume <name> <sid>` or `tm history <name>` lands
+ *     on the worktree-encoded project-dir slug rather than the
+ *     dispatcher's slug;
+ *  3. the Codex registry's cwd hint (Codex daemon meta + base record);
+ *  4. a `<dispatcherDir>/<name>` probe — the shape `tm resume`
+ *     accepts when the source directory lives under the dispatcher;
+ *  5. the dispatcher dir itself, as the last-resort fallback.
  *
  * The fallback is **never** `process.cwd()`: a `tm` invocation that
  * lands here typically runs from somewhere unrelated to the
@@ -179,6 +186,8 @@ function normalizeExistingCwd(cwd: string): string {
 export function cwdForName(name: string, env: NativeEnv): string {
   const identity = readIdentity(name)
   if (identity !== null) return normalizeExistingCwd(identity.cwd)
+  const archived = readArchivedIdentity(name)
+  if (archived !== null) return normalizeExistingCwd(archived.cwd)
   const codexMetaCwd = readCodexMeta(name)?.cwd
   if (codexMetaCwd !== undefined) return normalizeExistingCwd(codexMetaCwd)
   const codexBaseCwd = readBaseRecord(name)?.cwd
@@ -191,6 +200,7 @@ export function cwdForName(name: string, env: NativeEnv): string {
 /** Whether `tm resume` can probe a teammate's cwd for resumable history. */
 export function resumeCwdProbeable(name: string, env: NativeEnv): boolean {
   if (readIdentity(name) !== null) return true
+  if (readArchivedIdentity(name) !== null) return true
   if (readBaseRecord(name) !== null) return true
   if (readCodexMeta(name) !== null) return true
   const dispatcherChild = join(env.dispatcherDir, name)

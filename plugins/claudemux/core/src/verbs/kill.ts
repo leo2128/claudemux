@@ -42,7 +42,12 @@ export async function killVerb(name: TeammateName, ctx: VerbContext): Promise<Tm
   if (engine === undefined) return formatKill(name, { kind: 'not-found' })
   const hadIdentityFile = existsSync(identityFile(name))
   const result = await engine.kill({ name }, ctx.engineContext)
+  // Archive before remove: a later `tm resume <name> <sid>` /
+  // `tm history <name>` reads the snapshot to recover the killed
+  // teammate's cwd / repo / worktreeSlug / displayName, so the agent
+  // never has to scrape `/tmp` directly.
   if (result.kind === 'killed' || (result.kind === 'not-found' && hadIdentityFile)) {
+    await ctx.identity.archive(name)
     await ctx.identity.remove(name)
   }
   if (result.kind === 'not-found' && hadIdentityFile) {

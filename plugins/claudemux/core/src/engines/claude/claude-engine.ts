@@ -119,6 +119,36 @@ function readSid(name: string): string | null {
   return raw === null ? null : rstrip(raw)
 }
 
+/**
+ * Compact representation of an idle marker's existence + mtime — enough
+ * for the kill-path SessionEnd watcher to tell "the marker was just
+ * touched" from "nothing happened". `null` means the file did not
+ * exist; otherwise the value is `mtimeMs`. Captured once before
+ * `/exit` is sent and compared on each poll tick.
+ */
+type MarkerSignature = number | null
+
+function markerSignature(path: string): MarkerSignature {
+  try {
+    return statSync(path).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether `current` reflects a marker touch that happened *after*
+ * `baseline` was sampled. `on-stop.sh` re-touches the idle marker on
+ * every Stop event — including SessionEnd — so an mtime that advances
+ * past the baseline (or a marker that appears where there was none)
+ * is the positive SessionEnd signal the kill path waits for.
+ */
+function markerAdvanced(baseline: MarkerSignature, current: MarkerSignature): boolean {
+  if (current === null) return false
+  if (baseline === null) return true
+  return current > baseline
+}
+
 /** Lookup a teammate's recorded cwd; `null` if absent. */
 function readCwd(name: string): string | null {
   const raw = readIfNonEmpty(cwdFile(name))
@@ -126,12 +156,24 @@ function readCwd(name: string): string | null {
 }
 
 /**
- * Production grace budget (ms) for the graceful kill path —
- * 5s wait for SessionEnd after `/exit`, plus 3s wait for SessionEnd
+ * Production grace budget (ms) for the graceful kill path — 15s
+ * wait for SessionEnd after `/exit`, plus 5s wait for SessionEnd
  * after the Enter that confirms the dirty-worktree "Keep" prompt.
+ *
+ * The success signal in production is the idle marker
+ * (`/tmp/claude-idle/<sid>`) being touched by `on-stop.sh` when
+ * SessionEnd fires — that runs *before* the tmux pane dies, so on a
+ * slow box where REPL teardown takes a few seconds the budget is
+ * mostly headroom rather than a wait every kill pays. The 8s
+ * predecessor was tight enough that even a fast Linux box on Opus
+ * 4.7 would expire it and SIGHUP every kill; 20s leaves the slow
+ * tail covered while keeping the fallback well clear of any human
+ * impatience threshold.
+ *
  * Override via `CLAUDEMUX_KILL_GRACE_MS` so the conformance harness
- * (fake tmux that never reports a pane gone) can keep tests under
- * vitest's default 5s timeout.
+ * (fake tmux that never reports a pane gone, no real on-stop hook
+ * to touch the marker) can keep tests under vitest's default 5s
+ * timeout.
  */
 function killGraceMs(): number {
   const override = process.env['CLAUDEMUX_KILL_GRACE_MS']
@@ -139,7 +181,18 @@ function killGraceMs(): number {
     const parsed = Number(override)
     if (Number.isFinite(parsed) && parsed >= 0) return parsed
   }
-  return 8000
+  return 20000
+}
+
+/**
+ * Format a graceful-exit budget for the SIGHUP-fallback note. Renders
+ * whole seconds as `Ns` (`20s`); sub-second budgets — the conformance
+ * harness's `CLAUDEMUX_KILL_GRACE_MS=50` shape — render as `Nms` so
+ * the message stays truthful when the override is short.
+ */
+function describeKillGrace(ms: number): string {
+  if (ms >= 1000) return `${Math.round(ms / 1000)}s`
+  return `${ms}ms`
 }
 
 /** Whether the teammate's tmux session is alive. */
@@ -352,7 +405,7 @@ export class ClaudeEngine implements Engine {
       return {
         kind: 'killed',
         note:
-          `${req.name}: /exit did not return SessionEnd within 8s — fell back to ` +
+          `${req.name}: /exit did not return SessionEnd within ${describeKillGrace(killGraceMs())} — fell back to ` +
           `tmux kill-session (SIGHUP). Any worktree Claude created is preserved; ` +
           `remove with 'git worktree remove --force' if no longer needed.\n`,
       }
@@ -364,16 +417,26 @@ export class ClaudeEngine implements Engine {
    * Graceful Claude exit:
    *   1. send `/exit\n` to the pane — clean worktree → auto-clean +
    *      SessionEnd; dirty worktree → TUI prompt waits for input.
-   *   2. poll the tmux session for up to the first budget.
-   *   3. if still alive, send `Enter` (picks the default "Keep
-   *      worktree" choice on the dirty prompt) and poll for the
-   *      second budget.
-   *   4. if still alive, fall back to `tmux kill-session` (SIGHUP).
+   *   2. poll for a SessionEnd signal for up to the first budget.
+   *   3. if no signal yet, send `Enter` (picks the default "Keep
+   *      worktree" choice on the dirty prompt) and poll again for
+   *      the second budget.
+   *   4. if still no signal, fall back to `tmux kill-session` (SIGHUP).
    *
-   * Budgets default to 5s + 3s in production. The conformance
+   * The SessionEnd signal is *either* the tmux session disappearing
+   * (process-level teardown finished) *or* the teammate's idle
+   * marker — `/tmp/claude-idle/<sid>` — being touched by `on-stop.sh`
+   * when SessionEnd fires. The hook touches the marker before the
+   * REPL exits and tmux reaps the pane, so on a slow box the marker
+   * flips seconds before `has-session` reports gone. Polling both
+   * means a clean kill returns in ~one tick instead of paying the
+   * full process-teardown wall-clock.
+   *
+   * Budgets default to 15s + 5s in production. The conformance
    * harness sets `CLAUDEMUX_KILL_GRACE_MS` to a short value so the
-   * fake tmux (which never reports a pane gone after send-keys) does
-   * not blow the per-test timeout — production is unaffected.
+   * fake tmux (which never reports a pane gone after send-keys, and
+   * has no real `on-stop.sh` to touch the marker) does not blow the
+   * per-test timeout — production is unaffected.
    *
    * Returns `'graceful'` when SessionEnd was reached cleanly,
    * `'forced'` when the SIGHUP fallback fired, `'absent'` when the
@@ -381,11 +444,12 @@ export class ClaudeEngine implements Engine {
    */
   private async runGracefulExit(
     sessionName: string,
-    _sid: string | null,
+    sid: string | null,
   ): Promise<'graceful' | 'forced' | 'absent'> {
     const totalGrace = killGraceMs()
-    const exitWait = Math.max(50, Math.floor(totalGrace * 0.625))
+    const exitWait = Math.max(50, Math.floor(totalGrace * 0.75))
     const keepWait = Math.max(50, totalGrace - exitWait)
+    const markerBaseline = sid === null ? null : markerSignature(idleMarkerFor(sid))
     try {
       const sendExit = await this.env.runTmux(['send-keys', '-t', sessionName, '/exit', 'Enter'])
       if (sendExit.code !== 0) {
@@ -394,13 +458,17 @@ export class ClaudeEngine implements Engine {
     } catch {
       return 'absent'
     }
-    if (await this.waitForPaneGone(sessionName, exitWait)) return 'graceful'
+    if (await this.waitForExitSignal(sessionName, sid, markerBaseline, exitWait)) {
+      return 'graceful'
+    }
     try {
       await this.env.runTmux(['send-keys', '-t', sessionName, 'Enter'])
     } catch {
       // best-effort; keep going to the SIGHUP fallback.
     }
-    if (await this.waitForPaneGone(sessionName, keepWait)) return 'graceful'
+    if (await this.waitForExitSignal(sessionName, sid, markerBaseline, keepWait)) {
+      return 'graceful'
+    }
     try {
       await this.env.runTmux(['kill-session', '-t', `=${sessionName}`])
     } catch {
@@ -410,20 +478,35 @@ export class ClaudeEngine implements Engine {
   }
 
   /**
-   * Poll `tmux has-session` until the session reports gone, or until
-   * `budgetMs` elapses. Returns `true` on cleanup, `false` on
-   * timeout.
+   * Poll for any of three SessionEnd signals — `tmux has-session`
+   * reports gone, the idle marker mtime advances past `baseline`, or
+   * a previously absent idle marker appears — until `budgetMs`
+   * elapses. Returns `true` on cleanup, `false` on timeout.
    *
    * Wall-clock is read via `process.hrtime.bigint()` so the
    * conformance harness's `vi.useFakeTimers({ toFake: ['Date'] })`
    * does not freeze the loop. The 200ms interval matches `pollReady`
    * — fast enough to surface a clean exit immediately, cheap enough
    * not to flood tmux during the dirty-prompt wait.
+   *
+   * When `sid` is `null` the teammate had no recorded session id, so
+   * the marker file does not exist and is never touched; the loop
+   * degrades cleanly to a pane-gone-only watch.
    */
-  private async waitForPaneGone(sessionName: string, budgetMs: number): Promise<boolean> {
+  private async waitForExitSignal(
+    sessionName: string,
+    sid: string | null,
+    baseline: MarkerSignature,
+    budgetMs: number,
+  ): Promise<boolean> {
     const start = process.hrtime.bigint()
     const budgetNs = BigInt(budgetMs) * 1_000_000n
+    const markerPath = sid === null ? null : idleMarkerFor(sid)
     while (process.hrtime.bigint() - start < budgetNs) {
+      if (markerPath !== null) {
+        const current = markerSignature(markerPath)
+        if (markerAdvanced(baseline, current)) return true
+      }
       try {
         const present = (await this.env.runTmux(['has-session', '-t', `=${sessionName}`])).code === 0
         if (!present) return true

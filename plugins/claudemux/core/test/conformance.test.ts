@@ -67,7 +67,8 @@ import {
   sendAtFile,
   sidFile,
 } from '../src/persistence/paths'
-import { identityFile } from '../src/persistence/identity-store'
+import { archivedIdentityFile, identityFile } from '../src/persistence/identity-store'
+import { TEAMMATE_RECORD_SCHEMA } from '../src/engines/teammate-record'
 import {
   codexBorrowLockFile,
   codexLastSeenFile,
@@ -2056,6 +2057,51 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           makeRepoDir(repo)
           mkdirSync(historyProjectDir(repo), { recursive: true })
           return { args: [repo, 'fa48af8f-2d2e-4fd2'] }
+        },
+      },
+      {
+        // P0-2 (beta.10) — after `tm kill` removes the live identity, the
+        // archive snapshot must drive `cwdForName`. Without that, resume
+        // probes for the jsonl at the dispatcher-encoded slug and reports
+        // "no transcript at .../<dispatcher-encoded>/<sid>.jsonl" even
+        // when the transcript lives at the worktree-encoded slug. This
+        // scenario pins the post-fix error path: cwd recovers from the
+        // archive, the probe references the worktree-encoded slug, and
+        // the "no transcript at" line carries the correct path so the
+        // operator's next move (ls under the named dir, or respawn) is
+        // unambiguous.
+        name: 'explicit sid after kill (archive recovers worktree cwd) → no-transcript error names the worktree slug',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          // Plant only the archive — the live identity record stays
+          // gone (this is the post-kill shape). The archived cwd
+          // points at a worktree path under the repo so the encoded
+          // slug differs from the dispatcher's; the directory does
+          // not exist on disk, mirroring the "worktree was reaped"
+          // case the fix needs to cover.
+          const repoPhys = realpathSync(join(dispatcherDir, repo))
+          const archivedCwd = `${repoPhys}/.claude/worktrees/${repo}`
+          const archivePath = archivedIdentityFile(repo)
+          mkdirSync(dirname(archivePath), { recursive: true })
+          writeFileSync(
+            archivePath,
+            JSON.stringify(
+              {
+                schema: TEAMMATE_RECORD_SCHEMA,
+                name: repo,
+                engine: 'claude',
+                repo: repoPhys,
+                cwd: archivedCwd,
+                worktreeSlug: repo,
+                createdAt: 1747900000,
+                displayName: null,
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+          return { args: [repo, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'] }
         },
       },
     ],

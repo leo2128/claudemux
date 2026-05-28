@@ -9,10 +9,21 @@
  *    regression).
  */
 
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 
 import { ClaudeEngine } from '../../src/engines/claude/claude-engine'
 import type { NativeEnv } from '../../src/env'
+import {
+  busyMarkerFor,
+  cwdFile,
+  idleDir,
+  idleMarkerFor,
+  lastFileFor,
+  readyFile,
+  sendAtFile,
+  sidFile,
+} from '../../src/persistence/paths'
 import type { TmuxRunner, TmuxResult } from '../../src/tmux'
 
 const noopColumn = async () => ({ code: 0, stdout: '', stderr: '' })
@@ -137,5 +148,115 @@ describe('ClaudeEngine.status — failure propagation', () => {
     const result = await engine.status({ name: 'missing', lines: 80 }, { now: () => 0, env: {} })
     expect(result.kind).toBe('not-found')
     expect(calls).toEqual(['has-session'])
+  })
+})
+
+describe('ClaudeEngine.kill — graceful exit via idle-marker signal', () => {
+  // P0-1 (beta.10) — runGracefulExit used to wait only for `tmux
+  // has-session` to report gone. On a slow box the REPL teardown
+  // outran the 5+3s budget and every clean kill SIGHUP'd, leaving
+  // `claude --worktree` worktrees alive. The fix watches the idle
+  // marker (`/tmp/claude-idle/<sid>`) too — on-stop.sh touches it
+  // when SessionEnd fires, *before* tmux reaps the pane, so an
+  // observed mtime advance is the positive "session ended" signal
+  // the kill path returns on.
+  const name = `claudemux-kill-marker-${process.pid}-${Date.now()}`
+  const sid = `kill-marker-${process.pid}-${Date.now()}`
+
+  afterEach(() => {
+    for (const file of [
+      sidFile(name),
+      cwdFile(name),
+      sendAtFile(name),
+      readyFile(name),
+      idleMarkerFor(sid),
+      busyMarkerFor(sid),
+      lastFileFor(sid),
+    ]) {
+      rmSync(file, { force: true })
+    }
+  })
+
+  test('marker mtime advancing mid-poll returns graceful — no SIGHUP note', async () => {
+    const savedGrace = process.env['CLAUDEMUX_KILL_GRACE_MS']
+    process.env['CLAUDEMUX_KILL_GRACE_MS'] = '2000'
+    try {
+      mkdirSync(idleDir(), { recursive: true })
+      writeFileSync(sidFile(name), `${sid}\n`)
+      writeFileSync(idleMarkerFor(sid), '')
+      // Set baseline mtime in the past so a subsequent touch is observably newer.
+      const past = new Date(Date.now() - 1000)
+      utimesSync(idleMarkerFor(sid), past, past)
+
+      let sendKeysCalls = 0
+      let killSessionCalled = false
+      const env = makeEnv(async (args) => {
+        if (args[0] === 'has-session') return tmuxOk('')
+        if (args[0] === 'send-keys') {
+          sendKeysCalls++
+          // First send-keys is `/exit`. Simulate `on-stop.sh` touching
+          // the idle marker shortly after `SessionEnd` fires — well
+          // inside the 2s budget but far enough out that the first
+          // poll iteration misses, so the test exercises the
+          // "marker flips between iterations" code path.
+          if (sendKeysCalls === 1) {
+            setTimeout(() => {
+              writeFileSync(idleMarkerFor(sid), '')
+            }, 100)
+          }
+          return tmuxOk('')
+        }
+        if (args[0] === 'kill-session') {
+          killSessionCalled = true
+          return tmuxOk('')
+        }
+        return tmuxOk('')
+      })
+
+      const engine = new ClaudeEngine(env)
+      const result = await engine.kill({ name }, { now: () => 0, env: {} })
+
+      expect(result.kind).toBe('killed')
+      if (result.kind === 'killed') {
+        // A graceful exit does not set the SIGHUP-fallback note.
+        expect(result.note).toBeUndefined()
+      }
+      expect(killSessionCalled).toBe(false)
+    } finally {
+      if (savedGrace === undefined) delete process.env['CLAUDEMUX_KILL_GRACE_MS']
+      else process.env['CLAUDEMUX_KILL_GRACE_MS'] = savedGrace
+    }
+  })
+
+  test('marker that never advances yields the SIGHUP-fallback note with the budget rendered', async () => {
+    const savedGrace = process.env['CLAUDEMUX_KILL_GRACE_MS']
+    process.env['CLAUDEMUX_KILL_GRACE_MS'] = '50'
+    try {
+      mkdirSync(idleDir(), { recursive: true })
+      writeFileSync(sidFile(name), `${sid}\n`)
+      writeFileSync(idleMarkerFor(sid), '')
+
+      let killSessionCalled = false
+      const env = makeEnv(async (args) => {
+        if (args[0] === 'has-session') return tmuxOk('')
+        if (args[0] === 'kill-session') {
+          killSessionCalled = true
+          return tmuxOk('')
+        }
+        return tmuxOk('')
+      })
+
+      const engine = new ClaudeEngine(env)
+      const result = await engine.kill({ name }, { now: () => 0, env: {} })
+
+      expect(result.kind).toBe('killed')
+      if (result.kind === 'killed') {
+        expect(result.note).toMatch(/did not return SessionEnd within 50ms/)
+      }
+      expect(killSessionCalled).toBe(true)
+    } finally {
+      if (savedGrace === undefined) delete process.env['CLAUDEMUX_KILL_GRACE_MS']
+      else process.env['CLAUDEMUX_KILL_GRACE_MS'] = savedGrace
+    }
   })
 })

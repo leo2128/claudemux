@@ -46,7 +46,10 @@ import {
   spawnCwdFor,
   triggersHelp,
 } from './parse'
-import { read as readIdentity } from '../persistence/identity-store'
+import {
+  read as readIdentity,
+  readArchived as readArchivedIdentity,
+} from '../persistence/identity-store'
 import { validateTeammateName } from '../identity/name'
 
 interface FleetTarget {
@@ -247,16 +250,24 @@ async function dispatchEngineVerb(
       }
       const legacy = legacySchemaError(parsed.name, 'resume')
       if (legacy !== null) return legacy
-      const identity = readIdentity(parsed.name)
+      // After a clean kill the live identity is gone, but the archive
+      // snapshot — written by `tm kill` before the live record was
+      // deleted — still carries the launch context (repo /
+      // worktreeSlug / displayName). Fall back to it so the resume
+      // verb has the same `repo` / `worktreeSlug` it would have had
+      // pre-kill; without that, `tm resume <name> <sid>` after a
+      // clean kill cannot re-provision the worktree.
+      const liveIdentity = readIdentity(parsed.name)
+      const recordSource = liveIdentity ?? readArchivedIdentity(parsed.name)
       return resumeVerb(
         {
           name: parsed.name,
-          repo: identity?.repo ?? null,
+          repo: recordSource?.repo ?? null,
           cwd: cwdForName(parsed.name, env),
-          worktreeSlug: identity?.worktreeSlug ?? null,
+          worktreeSlug: recordSource?.worktreeSlug ?? null,
           checkpoint: parsed.sid.length === 0 ? null : parsed.sid,
           prompt: parsed.hasPrompt ? parsed.prompt : null,
-          displayName: null,
+          displayName: recordSource?.displayName ?? null,
           engineHint: parsed.engine,
           projectsDir: env.projectsDir,
           cwdProbeable: resumeCwdProbeable(parsed.name, env),

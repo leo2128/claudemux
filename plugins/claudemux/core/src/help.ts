@@ -292,15 +292,20 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
   kill: `tm kill <name>
 
       Graceful teammate shutdown. For a Claude teammate the verb
-      sends \`/exit\` to the REPL and waits up to 5s for the
-      SessionEnd hook. \`/exit\` in a clean worktree auto-removes
-      both the worktree directory and the \`worktree-<slug>\`
-      branch; in a dirty worktree Claude shows an interactive
-      "Keep / Remove worktree" prompt — the verb presses Enter
-      (default: Keep) and waits another 3s. If the pane still does
-      not exit, the verb falls back to \`tmux kill-session\`
-      (SIGHUP) and prints a stderr note pointing at the leftover
-      worktree.
+      sends \`/exit\` to the REPL and waits up to 15s for the
+      SessionEnd hook to fire (observed as either the tmux pane
+      disappearing or the teammate's idle marker being touched by
+      \`on-stop.sh\`, whichever comes first). \`/exit\` in a clean
+      worktree auto-removes both the worktree directory and the
+      \`worktree-<slug>\` branch; in a dirty worktree Claude shows
+      an interactive "Keep / Remove worktree" prompt — the verb
+      presses Enter (default: Keep) and waits another 5s. If
+      neither signal lands inside that 20s combined budget, the
+      verb falls back to \`tmux kill-session\` (SIGHUP) and prints
+      a stderr note pointing at the leftover worktree.
+
+      Override the combined budget via \`CLAUDEMUX_KILL_GRACE_MS\`
+      (used by the conformance harness to keep test runs fast).
 
       For a Codex teammate the verb SIGTERMs the daemon. When the
       identity record carries a \`worktreeSlug\`, the verb tries

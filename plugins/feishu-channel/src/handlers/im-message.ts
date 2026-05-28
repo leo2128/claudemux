@@ -165,8 +165,8 @@ export function createImMessageHandler(): EventHandler {
 // A user sends `@BotA @BotB /introduce` in a group. Each bot receives the
 // same event with mentions[] populated from its own app's perspective — the
 // open_ids in that list are exactly the ids this app must use to @-mention the
-// others. We persist them so `available_bots` can be injected on every later
-// delivery in that group.
+// others. We persist them so the observed-bot gate can authorize messages
+// from peer bots in that group.
 //
 // Feishu has no public API to list bot members of a group; /introduce is the
 // only reliable path to learn a peer bot's open_id.

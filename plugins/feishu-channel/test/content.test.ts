@@ -95,6 +95,86 @@ describe('extractPostText', () => {
   })
 })
 
+describe('parseInbound — interactive', () => {
+  function card(header: unknown, elements: unknown[]): unknown {
+    return {
+      schema: '2.0',
+      config: { update_multi: true },
+      ...(header ? { header } : {}),
+      body: { elements },
+    }
+  }
+
+  test('extracts markdown element content', () => {
+    const c = card(undefined, [
+      { tag: 'markdown', content: 'hello **world**' },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('hello **world**')
+  })
+
+  test('prepends header title when present', () => {
+    const c = card({ title: { tag: 'plain_text', content: 'My Title' } }, [
+      { tag: 'markdown', content: 'body text' },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('My Title\nbody text')
+  })
+
+  test('skips hr elements silently', () => {
+    const c = card(undefined, [
+      { tag: 'markdown', content: 'before' },
+      { tag: 'hr' },
+      { tag: 'markdown', content: 'after' },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('before\nafter')
+  })
+
+  test('extracts div with nested text.content (other-bot format)', () => {
+    const c = card(undefined, [
+      { tag: 'div', text: { tag: 'lark_md', content: 'nested text' } },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('nested text')
+  })
+
+  test('extracts div.fields[] lark_md cells', () => {
+    const c = card(undefined, [
+      {
+        tag: 'div',
+        fields: [
+          { text: { tag: 'lark_md', content: 'field one' } },
+          { text: { tag: 'lark_md', content: 'field two' } },
+        ],
+      },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('field one\nfield two')
+  })
+
+  test('recurses into column_set columns', () => {
+    const c = card(undefined, [
+      {
+        tag: 'column_set',
+        columns: [
+          { elements: [{ tag: 'markdown', content: 'col A' }] },
+          { elements: [{ tag: 'markdown', content: 'col B' }] },
+        ],
+      },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('col A\ncol B')
+  })
+
+  test('unwraps user_dsl envelope from WebSocket events', () => {
+    const inner = card({ title: { tag: 'plain_text', content: 'WS Title' } }, [
+      { tag: 'markdown', content: 'ws body' },
+    ])
+    const wrapped = { user_dsl: JSON.stringify(inner) }
+    expect(parseInbound(message('interactive', wrapped)).text).toBe('WS Title\nws body')
+  })
+
+  test('falls back to (interactive card) when no extractable text', () => {
+    const c = card(undefined, [{ tag: 'hr' }, { tag: 'table' }])
+    expect(parseInbound(message('interactive', c)).text).toBe('(interactive card)')
+  })
+})
+
 describe('applyMentions', () => {
   test('returns the text unchanged when there are no mentions', () => {
     expect(applyMentions('plain', undefined)).toBe('plain')

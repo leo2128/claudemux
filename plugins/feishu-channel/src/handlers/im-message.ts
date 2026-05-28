@@ -14,7 +14,7 @@ import { loadAccess, saveAccess } from '../access-store'
 import { parseInbound } from '../content'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
 import { asString, isRecord } from '../json'
-import { recordObservedBots } from '../observed-bots-store'
+import { listObservedBots, recordObservedBots } from '../observed-bots-store'
 import type { Mention } from '../types'
 
 /** The Feishu event_type this handler subscribes to. */
@@ -62,6 +62,13 @@ export function createImMessageHandler(): EventHandler {
         ctx.logError('access.json was unreadable; started from defaults')
       }
 
+      const observedBotIds =
+        event.chatType === 'group'
+          ? new Set(
+              listObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId).map((b) => b.openId),
+            )
+          : undefined
+
       const decision = gate({
         senderId: event.senderId,
         chatId: event.chatId,
@@ -71,6 +78,7 @@ export function createImMessageHandler(): EventHandler {
         newCode: ctx.generateCode(),
         mentions: event.mentions,
         botOpenId: ctx.transport.botOpenId,
+        observedBotIds,
       })
       const persist = (): void => {
         if (decision.changed) saveAccess(ctx.accessFile, decision.access)

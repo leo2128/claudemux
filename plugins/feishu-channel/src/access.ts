@@ -35,6 +35,14 @@ export interface GateInput {
   mentions?: Mention[]
   /** open_id of the bot itself, for group mention-gating. */
   botOpenId?: string
+  /**
+   * open_ids of peer bots known via /introduce in this specific chat. Populated
+   * by the caller for group messages only; `undefined` for direct messages.
+   * Entries exist only because an authorized human sender previously ran
+   * /introduce in this same group — trust is transitively established by the
+   * gate that governed that /introduce delivery.
+   */
+  observedBotIds?: ReadonlySet<string>
 }
 
 export type GateResult =
@@ -134,13 +142,18 @@ function gateGroup(input: GateInput, access: Access, changed: boolean): GateResu
 
 /**
  * Decide a group message under the `follow-user` policy: the group itself
- * needs no authorization — the person does. A message is delivered when the
+ * needs no authorization — the sender does. A message is delivered when the
  * bot is @-mentioned (the deliberate "engage the bot" signal, without which
- * the bot would react to every message in the group) and the sender's open_id
- * is on the top-level `allowFrom` allowlist — the same allowlist that
- * authorizes direct messages. A non-mention message, or a mention from a
- * sender who is not allowlisted, is dropped; no pairing code is posted into a
- * group.
+ * the bot would react to every message in the group) AND the sender's open_id
+ * is either on the top-level `allowFrom` allowlist (the same allowlist that
+ * authorizes direct messages) OR is a peer bot known via /introduce in this
+ * chat. A non-mention message, or a mention from an unrecognized sender, is
+ * dropped; no pairing code is posted into a group.
+ *
+ * The observed-bot path is safe because entries only exist because an
+ * authorized human sender (already on `allowFrom`) ran /introduce in this same
+ * group — trust flows transitively through the gate that governed that
+ * delivery, and entries are scoped to the specific chatId.
  */
 function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean): GateResult {
   if (input.botOpenId === undefined) {
@@ -154,7 +167,9 @@ function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean)
   if (!isBotMentioned(input.mentions, input.botOpenId)) {
     return { action: 'drop', access, changed, reason: 'bot not mentioned' }
   }
-  if (!access.allowFrom.includes(input.senderId)) {
+  const onAllowlist = access.allowFrom.includes(input.senderId)
+  const isIntroducedBot = input.observedBotIds?.has(input.senderId) ?? false
+  if (!onAllowlist && !isIntroducedBot) {
     return { action: 'drop', access, changed, reason: 'sender not on allowlist' }
   }
   return { action: 'deliver', access, changed }

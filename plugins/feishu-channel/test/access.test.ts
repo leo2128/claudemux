@@ -301,6 +301,44 @@ describe('gate — groupPolicy follow-user', () => {
     const unknownSender = gate(groupInput({ access: followUser() }))
     expect(unknownSender.action).not.toBe('pair')
   })
+
+  test('delivers a message from a peer bot that is in observedBotIds and @-mentions the bot', () => {
+    const r = gate(
+      groupInput({
+        access: followUser(),
+        senderId: 'ou_peer_bot',
+        observedBotIds: new Set(['ou_peer_bot']),
+      }),
+    )
+    expect(r.action).toBe('deliver')
+  })
+
+  test('observed bot without a mention is still dropped', () => {
+    const r = gate(
+      groupInput({
+        access: followUser(),
+        senderId: 'ou_peer_bot',
+        mentions: [],
+        observedBotIds: new Set(['ou_peer_bot']),
+      }),
+    )
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('bot not mentioned')
+  })
+
+  test('an unrecognized sender not in observedBotIds is still dropped', () => {
+    const r = gate(
+      groupInput({
+        access: followUser(),
+        senderId: 'ou_unknown',
+        observedBotIds: new Set(['ou_other_bot']),
+      }),
+    )
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('sender not on allowlist')
+  })
 })
 
 describe('gate — purity and pruning', () => {

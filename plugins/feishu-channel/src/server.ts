@@ -99,7 +99,7 @@ const CHANNEL_TOOLS: Tool[] = [
   {
     name: 'reply',
     description:
-      'Send a message into a Feishu chat. The text is rendered as Markdown by Feishu — use **bold**, *italic*, `inline code`, fenced ``` code blocks, bulleted and numbered lists, and [links](https://example.com) where they help readability. Pass the chat_id from the <channel> tag of the message you are answering.',
+      'Send a message into a Feishu chat. The text is rendered as Markdown by Feishu — use **bold**, *italic*, `inline code`, fenced ``` code blocks, bulleted and numbered lists, and [links](https://example.com) where they help readability. To @-mention a user inline, write <@open_id> (e.g. "<@ou_abc123> 请帮忙看一下"). Pass the chat_id from the <channel> tag of the message you are answering.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -110,7 +110,7 @@ const CHANNEL_TOOLS: Tool[] = [
         text: {
           type: 'string',
           description:
-            'Message body in Markdown. Supports bold, italic, links, ordered and unordered lists, inline code, and fenced code blocks; plain text renders unchanged.',
+            'Message body in Markdown. Supports bold, italic, links, ordered and unordered lists, inline code, and fenced code blocks. To @-mention a Feishu user inline, write <@open_id> anywhere in the text (e.g. "<@ou_abc123> 任务完成" or "请 <@ou_abc123> 帮忙 review").',
         },
       },
       required: ['chat_id', 'text'],
@@ -137,7 +137,7 @@ const CHANNEL_TOOLS: Tool[] = [
   {
     name: 'edit_message',
     description:
-      'Replace the content of a message this channel previously sent. The new text is rendered as Markdown, same as `reply`.',
+      'Replace the content of a message this channel previously sent. The new text is rendered as Markdown, same as `reply` — including <@open_id> @-mention support.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -147,7 +147,8 @@ const CHANNEL_TOOLS: Tool[] = [
         },
         text: {
           type: 'string',
-          description: 'New message body in Markdown; same formatting rules as `reply`.',
+          description:
+            'New message body in Markdown; same formatting rules and <@open_id> @-mention syntax as `reply`.',
         },
       },
       required: ['message_id', 'text'],
@@ -421,7 +422,9 @@ const CHANNEL_INSTRUCTIONS = [
   'Answer a Feishu user by calling `reply` with the chat_id from the message you are answering.',
   'The `text` you pass to `reply` and `edit_message` is rendered as Markdown by Feishu —',
   'feel free to use **bold**, *italic*, `inline code`, fenced code blocks, lists, and links',
-  'when they make a message clearer.',
+  'when they make a message clearer. To @-mention a user inline, write <@open_id> anywhere',
+  'in the text (e.g. "<@ou_abc123> 任务完成" or "请 <@ou_abc123> 帮忙 review"); the channel',
+  'converts it to a Feishu @-mention that notifies the user.',
   'Use `react` to acknowledge a message with an emoji, and `edit_message` to revise a message',
   'you previously sent.',
   '',

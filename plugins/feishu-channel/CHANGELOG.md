@@ -1,5 +1,9 @@
 # feishu-channel changelog
 
+## 0.11.0 — 2026-05-28
+
+- (minor) add `<@open_id>` @-mention syntax to `reply` and `edit_message` — the render pipeline converts it to a lark_md `<at>` tag that Feishu renders as an inline notification mention
+
 ## 0.10.0 — 2026-05-25
 
 - (patch) Detect an exited parent by stdin EOF instead of polling process.ppid, so an orphaned channel server reliably self-terminates

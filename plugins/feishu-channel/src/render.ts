@@ -162,6 +162,17 @@ const TABLE_DEFAULT_PAGE_SIZE = 10
 export const CELL_MAX_BYTES = 4 * 1024
 
 /**
+ * Convert `<@open_id>` shorthand into the lark_md `<at id="open_id"></at>`
+ * mention tag. The substitution runs before the Markdown lexer so the result
+ * is part of the block's `raw` field and reaches lark_md unmodified. The
+ * transformation is unconditional — content inside fenced code blocks is also
+ * converted, which is the expected behaviour for a chat-reply tool.
+ */
+function preprocessAtMentions(text: string): string {
+  return text.replace(/<@([A-Za-z0-9_-]+)>/g, '<at id="$1"></at>')
+}
+
+/**
  * Render a Markdown source into one or more v2 cards.
  *
  * The output is always non-empty: an empty source produces one card with a
@@ -178,7 +189,7 @@ export const CELL_MAX_BYTES = 4 * 1024
  * one (partial visible state).
  */
 export function renderMarkdownToCards(text: string): RenderedCard[] {
-  const tokens = marked.lexer(text)
+  const tokens = marked.lexer(preprocessAtMentions(text))
   const { header, elements } = tokensToElements(tokens)
   const cards = packIntoCards(elements, header)
   // Final structural check. By construction every card already fits both

@@ -1,7 +1,7 @@
 {
   "name": "feishu-channel",
   "description": "Feishu (飞书) channel for Claude Code — bridge Feishu messages into a running Claude Code session over a long-lived WebSocket connection, with built-in access control.",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "author": {
     "name": "YourWildDad"
   },

@@ -404,3 +404,43 @@ describe('splitMarkdownByBytes', () => {
     expect(pieces.join('')).toBe(oversized)
   })
 })
+
+describe('renderMarkdownToCards — @-mention preprocessing', () => {
+  test('<@open_id> at the start of a message renders as a lark_md <at> mention', () => {
+    const card = single('<@ou_e5d948b63c99858377472dabd78445a0> 任务完成')
+
+    expect(card.body.elements[0]).toEqual({
+      tag: 'markdown',
+      content: '<at id="ou_e5d948b63c99858377472dabd78445a0"></at> 任务完成',
+    })
+  })
+
+  test('<@open_id> mid-sentence is converted inline', () => {
+    const card = single('请 <@ou_abc123> 帮忙 review')
+
+    expect(card.body.elements[0]).toEqual({
+      tag: 'markdown',
+      content: '请 <at id="ou_abc123"></at> 帮忙 review',
+    })
+  })
+
+  test('multiple <@> mentions in one message are all converted', () => {
+    const card = single('<@ou_aaa> and <@ou_bbb> please review')
+
+    expect(card.body.elements[0]).toEqual({
+      tag: 'markdown',
+      content: '<at id="ou_aaa"></at> and <at id="ou_bbb"></at> please review',
+    })
+  })
+
+  test('<@open_id> inside a fenced code block is also converted — documented known behaviour', () => {
+    // The preprocessing runs before the Markdown lexer, so content inside
+    // code fences is not exempt. This is expected for a chat-reply tool.
+    const card = single('```\n<@ou_xxx> example\n```')
+
+    expect(card.body.elements[0]).toMatchObject({
+      tag: 'markdown',
+      content: '```\n<at id="ou_xxx"></at> example\n```',
+    })
+  })
+})

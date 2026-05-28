@@ -40,7 +40,7 @@ When you spawn delegated repo work (`tm spawn`, Agent teammate, or `claude -p`),
 | `repo` | The repo's absolute path (a sibling subdirectory under the dispatcher dir) |
 | `branch` | `git -C <repo> branch --show-current` at spawn time |
 | `teammate` | `teammate-<repo>` for Claude tmux teammates; Codex daemon name for Codex teammates; `<agent_id>@<team>` for Agent Teams teammates; short PID or none for `claude -p` |
-| `sid` | The Claude session id or Codex thread id when available. For Claude tmux teammates, read `/tmp/teammate-<repo>.sid`; Claude continue/resume may update it after SessionStart. For live Codex teammates, read `/tmp/teammate-codex/<name>/thread` after a thread has started; if it is absent, record `(pending)` and fill it after the first `tm send` or explicit resume. For Agent Teams, use `n/a`. This is the id `tm resume <repo-or-name> <id>` consumes in a future dispatcher session. |
+| `sid` | The Claude session id or Codex thread id when available. For Claude tmux teammates, read `/tmp/teammate-<name>.sid`; Claude continue/resume may update it after SessionStart. For live Codex teammates, read `/tmp/teammate-codex/<name>/thread` after a thread has started; if it is absent, record `(pending)` and fill it after the first `tm send` or explicit resume. For Agent Teams, use `n/a`. This is the id `tm resume <name> <id>` consumes in a future dispatcher session. |
 | `intent` | One short line — what the user actually asked for |
 | `artifacts` | URLs to any Dev Task / MR / Feishu doc as they appear (start empty, fill later) |
 | `created` | Timestamp at spawn |

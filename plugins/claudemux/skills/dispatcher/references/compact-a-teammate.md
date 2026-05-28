@@ -4,14 +4,14 @@ Read this when a Claude tmux teammate's context window is filling up and you wan
 
 ## When to compact between phases
 
-A phase boundary is a natural compaction point. When a teammate reports phase N done and phase N+1 is still to come, run `tm compact <repo>` before sending the next phase — then `tm send` the next prompt into the freshly compacted context. The previous phase's exploration, tool output, and dead-end reasoning are mostly noise for the next phase, and compacting at the boundary keeps a mid-task auto-compact from interrupting the teammate's working state later.
+A phase boundary is a natural compaction point. When a teammate reports phase N done and phase N+1 is still to come, run `tm compact <name>` before sending the next phase — then `tm send` the next prompt into the freshly compacted context. The previous phase's exploration, tool output, and dead-end reasoning are mostly noise for the next phase, and compacting at the boundary keeps a mid-task auto-compact from interrupting the teammate's working state later.
 
 A finished phase is reason enough on its own to compact. The teammate is already idle at the boundary, so the compact is safe; just do not overlap it with any other input to the same teammate (see `wait-and-readback.md` §"Don't send extra input during a sync wait").
 
 ## Compact
 
 ```bash
-tm compact <repo> [timeout=1800] [--timeout N]
+tm compact <name> [timeout=1800] [--timeout N]
 ```
 
 Sends `/compact` to the teammate, waits for the **PostCompact** hook to fire, and prints `compacted` on stdout when the idle marker arrives. Default timeout is 1800 s.
@@ -25,7 +25,7 @@ Run `tm compact --help` for the full flag/output contract.
 | Mode | Exit | What to do |
 |---|---|---|
 | `"Not enough messages to compact"` | `1` | The transcript is too short. Treat this as a true refusal; continue without compacting. |
-| PostCompact never fires within `--timeout` | `124` | The teammate may still be compacting. Do not respawn or kill on this code; use `tm status <repo>` to inspect the pane, or keep watching with `tm wait <repo>`. |
+| PostCompact never fires within `--timeout` | `124` | The teammate may still be compacting. Do not respawn or kill on this code; use `tm status <name>` to inspect the pane, or keep watching with `tm wait <name>`. |
 
 ## Verifying compact success
 

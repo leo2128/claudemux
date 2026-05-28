@@ -6,7 +6,7 @@ Skip this when you are answering the user from dispatcher context only (e.g. "wh
 
 ## The verb: `tm mem`
 
-`tm mem <repo>` cats the sibling repo's `MEMORY.md` to stdout. Missing memory (the repo has never run claude, or its project dir was pruned) is a normal case, not an error: stderr gets a one-line notice and the exit status is 0 with empty stdout. Treat empty output as "no sibling memory available — proceed without."
+`tm mem <name>` cats the sibling repo's `MEMORY.md` to stdout. Missing memory (the repo has never run claude, or its project dir was pruned) is a normal case, not an error: stderr gets a one-line notice and the exit status is 0 with empty stdout. Treat empty output as "no sibling memory available — proceed without."
 
 Run `tm mem --help` for the full contract.
 
@@ -14,8 +14,8 @@ Run `tm mem --help` for the full contract.
 
 | Situation | Call `tm mem`? |
 |---|---|
-| About to write `tm spawn <repo> --prompt "..."` that names a feature gate, branch, owner, or in-progress project in `<repo>` | Yes — before composing the prompt |
-| About to write `tm send <repo> --prompt "..."` that references sibling state | Yes — same reason |
+| About to write `tm spawn <path> --prompt "..."` that names a feature gate, branch, owner, or in-progress project in `<path>` | Yes — before composing the prompt |
+| About to write `tm send <name> --prompt "..."` that references sibling state | Yes — same reason |
 | Answering the user from dispatcher context only | No — `tm states` / ledger suffice |
 | Routing to an already-running teammate without quoting sibling state | No |
 
@@ -35,5 +35,5 @@ This is the same verify-before-recommend rule that applies to the dispatcher's o
 
 ## Foot-guns
 
-- **Don't `tm spawn <repo>` just to populate its memory.** Spawning starts a teammate; the memory file is only written when that teammate's AutoMemory hook fires on a turn. If `tm mem <repo>` is empty, that is the data — proceed without sibling context, or pause and ask the user to fill in what you would otherwise have guessed.
+- **Don't `tm spawn <path>` just to populate its memory.** Spawning starts a teammate; the memory file is only written when that teammate's AutoMemory hook fires on a turn. If `tm mem <name>` is empty, that is the data — proceed without sibling context, or pause and ask the user to fill in what you would otherwise have guessed.
 - **Don't paste the sibling MEMORY.md wholesale into a teammate's prompt.** The teammate will load its own auto-memory at session start; quoting the index in the bootstrap is duplicative and locks stale entries into the teammate's context window. Pull the one or two facts you need, verify them, and inline only those.

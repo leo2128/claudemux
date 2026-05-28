@@ -5,7 +5,7 @@ Read this when an external actor (Remote Control web UI, mobile app, or the team
 ## Primary verbs
 
 ```bash
-tm wait <repo> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
+tm wait <name> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 tm wait <codex-name> [timeout=1800] [--timeout N]
 ```
 
@@ -26,7 +26,7 @@ Two on-disk files per Claude teammate power reply readback:
 
 `tm send`, `tm spawn --prompt`, and `tm wait` read `.last` for reply text. `tm compact` is different: it waits for the PostCompact idle marker and prints `compacted`; it does not read `.last`.
 
-`tm send` and `tm spawn --prompt` clear both files plus `<sid>.busy` before sending so the following wait targets this turn. `tm wait --fresh` does the same baseline reset without sending.
+`tm send` and `tm spawn --prompt` clear both files plus `<sid>.busy` before sending so the following wait targets this turn. `tm wait <name> --fresh` does the same baseline reset without sending.
 
 `.last` is the full assistant text as recorded in the jsonl transcript. The verbs read it instead of `tmux capture-pane` because pane scrollback can silently clip long replies.
 
@@ -39,21 +39,21 @@ The Stop hook covers Stop / StopFailure / PostCompact / SessionEnd, so `/compact
 Use `--pane-quiet` only for Claude TUI-only slash commands and dialogs that fire no hook: `/help`, `/effort`, `/agents` opening dialogs, permission prompts. Example:
 
 ```bash
-tm send <repo> --prompt /help --pane-quiet
+tm send <name> --prompt /help --pane-quiet
 ```
 
 It polls the pane and returns when the spinner has been absent for about 4 seconds and at least 3 seconds have passed since the last send. `--fresh` is a no-op under `--pane-quiet`; the send-at timing gate provides freshness. The ctx echo to stderr is skipped on `--pane-quiet` because there is no fresh usage block in jsonl.
 
-Known blind spot: a permission prompt blocks Claude with no spinner. `--pane-quiet` can return "ready" while the teammate is stuck on a y/n decision. If you suspect a prompt, follow with `tm status <repo>` to see the pane.
+Known blind spot: a permission prompt blocks Claude with no spinner. `--pane-quiet` can return "ready" while the teammate is stuck on a y/n decision. If you suspect a prompt, follow with `tm status <name>` to see the pane.
 
 ## Two foot-guns
 
-- **Don't read `/tmp/claude-idle/<sid>` directly to check "done".** `tm send` removes the marker before sending, so an old completed turn is not visible there. Use `tm wait --fresh` or `tm last <repo>`.
+- **Don't read `/tmp/claude-idle/<sid>` directly to check "done".** `tm send` removes the marker before sending, so an old completed turn is not visible there. Use `tm wait <name> --fresh` or `tm last <name>`.
 - **Don't build a custom polling loop with `grep` on prompt-echo words.** Match expected result keywords (`Scheduled`, `Cancelled`, anticipated error codes), never words from the prompt you just sent. The prompt appears in the user turn, so prompt-word grep returns instantly.
 
 ## Don't send extra input during a sync wait
 
-While a `tm spawn --prompt`, `tm send`, or `tm wait` is still tracking a teammate's Stop, do not send that teammate any other input — no second `tm send`, no `/reload-plugins`, no `tm reload <repo>` aimed at it. An extra turn arriving mid-flight breaks `tm`'s Stop-signal capture: `/tmp/claude-idle/<sid>.last` never gets written, the tracking call never returns its reply, and you only learn the work finished by reading the artifact directly. `/reload-plugins` is the sharpest version because it reloads the Stop hook itself while a wait is depending on it.
+While a `tm spawn --prompt`, `tm send`, or `tm wait` is still tracking a teammate's Stop, do not send that teammate any other input — no second `tm send`, no `/reload-plugins`, no `tm reload <name>` aimed at it. An extra turn arriving mid-flight breaks `tm`'s Stop-signal capture: `/tmp/claude-idle/<sid>.last` never gets written, the tracking call never returns its reply, and you only learn the work finished by reading the artifact directly. `/reload-plugins` is the sharpest version because it reloads the Stop hook itself while a wait is depending on it.
 
 Before sending anything to a teammate, check whether a background `tm` call is still tracking it (the ledger entry, the unfinished task notification). If one is, wait for it to return (or read the artifact directly) before the next send.
 

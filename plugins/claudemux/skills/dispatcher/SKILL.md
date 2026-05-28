@@ -43,10 +43,10 @@ Match the user's intent to one row below, then **read the listed reference befor
 | When you're doing this | Read | Primary verb(s) |
 |---|---|---|
 | Pushing work into a repo via Claude tmux teammate | `references/dispatch-task.md` | `tm spawn <path> --prompt "..."` / `tm send <name> --prompt "..."` |
-| Pushing work into a persistent Codex daemon teammate | `references/dispatch-task.md` | `tm spawn <name> --engine codex` / `tm send <name> --prompt "..."` |
+| Pushing work into a persistent Codex daemon teammate | `references/dispatch-task.md` | `tm spawn <path> --engine codex` / `tm send <name> --prompt "..."` |
 | Borrowing an idle Codex daemon for one fresh ephemeral turn | `references/dispatch-task.md` | `tm ask "..."` |
 | Composing a spawn / send prompt that references sibling-repo state | `references/sibling-memory.md` | `tm mem <name>` |
-| Waiting for a turn an external actor drove | `references/wait-and-readback.md` | `tm wait --fresh <name>` / `tm wait <name>` |
+| Waiting for a turn an external actor drove | `references/wait-and-readback.md` | `tm wait <name> --fresh` / `tm wait <name>` |
 | Reading the fleet snapshot | `references/inspect-and-resume.md` | `tm states` |
 | A teammate looks hung mid-turn and needs pane/process ground truth | `references/wait-and-readback.md` | `tm status <name>` |
 | Looking up past sessions or threads / resuming / re-reading a reply | `references/inspect-and-resume.md` | `tm history <name>` / `tm resume <name> <id>` / `tm last <name>` |

@@ -2,16 +2,16 @@
 
 Read this when you need to push work into a sibling repo or Codex teammate: bring up a new teammate, hand follow-up work to an existing one, or borrow the Codex pool for one turn. Skip when you only need to read teammate state (`wait-and-readback.md`) or look up past sessions (`inspect-and-resume.md`).
 
-The dispatcher dir is resolved as `${TM_DISPATCHER_DIR:-$PWD}` (see SKILL.md `tm` overview). For Claude teammates, `<repo>` is the short name of a sibling subdirectory directly under it.
+The dispatcher dir is resolved as `${TM_DISPATCHER_DIR:-$PWD}` (see SKILL.md `tm` overview). `<path>` in all spawn calls is resolved relative to this directory.
 
 ## Choose the execution path
 
 | Situation | Verb |
 |---|---|
-| Fresh Claude tmux teammate and first task in one shot | `tm spawn <repo> --prompt "..."` |
-| Fresh Claude tmux teammate, no task yet | `tm spawn <repo>` |
-| Existing Claude tmux teammate, send a new task and get the reply | `tm send <repo> --prompt "..."` |
-| Fresh persistent Codex daemon teammate and optional first task | `tm spawn <name> --engine codex [--prompt "..."]` |
+| Fresh Claude tmux teammate and first task in one shot | `tm spawn <path> --prompt "..."` |
+| Fresh Claude tmux teammate, no task yet | `tm spawn <path>` |
+| Existing Claude tmux teammate, send a new task and get the reply | `tm send <name> --prompt "..."` |
+| Fresh persistent Codex daemon teammate and optional first task | `tm spawn <path> --engine codex [--prompt "..."]` |
 | Existing persistent Codex daemon teammate, send a new task | `tm send <name> --prompt "..."` |
 | One-shot Codex pool turn on a fresh ephemeral thread | `tm ask "..."` |
 
@@ -55,37 +55,35 @@ Claude sync paths block until the teammate's next Stop hook fires (`--timeout 18
 `tm spawn --prompt`, `tm send`, `tm wait`, and `tm compact` use the same high-level split:
 
 - **`0`** — the reply or completion signal landed within `--timeout`; stdout contains the reply text or verb-specific success line. `tm ask` is the Codex exception that still prints an ephemeral Turn JSON.
-- **`124`** — sync wait expired and the teammate is still running. Do not respawn; the teammate name is still taken. Collect the late result with `tm wait <repo>` for Claude, or retry the relevant Codex wait/send flow after checking state.
+- **`124`** — sync wait expired and the teammate is still running. Do not respawn; the teammate name is still taken. Collect the late result with `tm wait <name>` for Claude, or retry the relevant Codex wait/send flow after checking state.
 - **`1`** — true failure: no teammate, missing sid/thread marker, broken send path, invalid repo/name, or the command was rejected.
 
 Read stderr before deciding the next step; timeout paths name the recovery verb when one applies.
 
 ## Current-state command rules
 
-- For reload fan-out across teammates, use `tm reload --all` or `tm reload <repo>...`.
-- For externally driven Claude turns (Remote Control web UI, mobile, the teammate's own sub-agents), collect the next reply with `tm wait --fresh <repo>`; for Codex daemon turns, use `tm wait <name>`.
-- For stopping a teammate, use `tm kill <repo>`; it clears the matching on-disk state for that engine.
+- For reload fan-out across teammates, use `tm reload --all` or `tm reload <name>...`.
+- For externally driven Claude turns (Remote Control web UI, mobile, the teammate's own sub-agents), collect the next reply with `tm wait <name> --fresh`; for Codex daemon turns, use `tm wait <name>`.
+- For stopping a teammate, use `tm kill <name>`; it clears the matching on-disk state for that engine.
 
 ## Dispatcher-facing details on Claude spawn
 
-- **Remote Control URL.** The teammate's startup banner prints its Remote Control URL; read it from `tm status <repo>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
-- **`--task <slug>`.** Names the conversation `<repo>-<slug>` for the prompt box, `/resume` picker, and terminal title. ASCII letters/digits plus CJK Unified Ideographs are accepted; ASCII letters are lowercased, other runs collapse to `-`, and the slug is capped at 30 code points. Without `--task`, a fresh spawn auto-names `<repo>-<rand4>`.
+- **Remote Control URL.** The teammate's startup banner prints its Remote Control URL; read it from `tm status <name>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
 
 ## Persistent Codex daemon teammates
 
 Spawn persistent Codex explicitly:
 
 ```bash
-tm spawn <name> --engine codex
+tm spawn <path> --engine codex
 ```
 
 Key differences from the Claude path:
 
 - Codex teammates are daemons under `/tmp/teammate-codex/<name>/`, not tmux sessions.
 - The name itself has no engine meaning; `codex-reviewer` is still a Claude teammate unless `--engine codex` is present.
-- `<name>` is interpreted as a path relative to the dispatcher dir. If that path resolves to a directory, the daemon cwd is the directory's realpath, including nested names such as `web-project/flow-web-monorepo`; otherwise cwd falls back to the dispatcher dir.
-- The same `<name>` composes the daemon registry and socket path under `/tmp/teammate-codex/<name>/`.
-- `--task` is rejected on Codex spawn.
+- `<path>` is the spawn positional — the directory the daemon runs in, resolved relative to the dispatcher dir. Nested paths such as `web-project/flow-web-monorepo` are accepted.
+- The flat `<name>` identifier (auto-generated as `<path-leaf>-<rand4>` or set with `--name`) composes the daemon registry and socket path under `/tmp/teammate-codex/<name>/`.
 - `tm send <name> --prompt "..."` writes or resumes the daemon's persistent thread, prints final assistant text on stdout, and reports `sent` / `sid` / `ctx` / `raw` status lines on stderr.
 - `tm kill <name>` reaps the daemon and registry directory instead of killing a tmux session.
 
@@ -97,7 +95,7 @@ Use this path when the user needs a named Codex teammate or resumable Codex thre
 
 Preconditions and failures:
 
-- At least one Codex daemon must already exist (`tm spawn <name> --engine codex`).
+- At least one Codex daemon must already exist (`tm spawn <path> --engine codex`).
 - If every recorded daemon is dead, run `tm doctor` to reap stale state or spawn a new daemon.
 - If every alive daemon is borrowed, retry later or spawn one more daemon.
 
@@ -108,7 +106,7 @@ Preconditions and failures:
 
 ## Resuming a prior task
 
-If the user wants to continue a task whose teammate has died (dispatcher restarted, `tm kill`, Mac reboot), use `tm resume <repo> <sid-or-thread-id>` with the id pulled from the active ledger or `tm history <repo>`. See `inspect-and-resume.md`.
+If the user wants to continue a task whose teammate has died (dispatcher restarted, `tm kill`, Mac reboot), use `tm resume <name> <sid-or-thread-id>` with the id pulled from the active ledger or `tm history <name>`. See `inspect-and-resume.md`.
 
 ## Recording the task in the ledger
 

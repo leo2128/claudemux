@@ -46,7 +46,7 @@ When no explicit id is supplied and both engines have resumable history for the 
 
 Either way fails if a teammate for `<name>` is already alive (Claude tmux session or Codex daemon). `tm kill <name>` first if you intentionally want to replace it.
 
-`--prompt "..."` sends a follow-up after relaunch (atomic, same shape as `tm spawn --prompt`). `--task <slug>` was removed in the schema 2 cut — the resumed teammate keeps its original name.
+`--prompt "..."` sends a follow-up after relaunch (atomic, same shape as `tm spawn --prompt`). The resumed teammate keeps its original name.
 
 ## Picking up "that thing from yesterday"
 

@@ -71,6 +71,7 @@ function makeCtx(transport: FakeTransport, logErrors: string[] = []): HandlerCon
   return {
     transport,
     accessFile: '/unused',
+    baseDir: '/unused',
     now: () => 0,
     generateCode: () => 'unused',
     logError: (message) => {

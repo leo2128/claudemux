@@ -28,6 +28,7 @@ import { createFeishuTransport } from './feishu'
 import { createDocCommentHandler } from './handlers/doc-comment'
 import { createImMessageHandler } from './handlers/im-message'
 import { asString, isRecord } from './json'
+import { listObservedBots } from './observed-bots-store'
 import { generatePairingCode } from './pairing'
 import { accessFile, envFile, lockFile, stateDir } from './paths'
 import { ShutdownCoordinator } from './shutdown'
@@ -60,6 +61,11 @@ export interface ChannelCoreDeps {
   transport: FeishuTransport
   /** Path to access.json, the persisted access-control policy. */
   accessFile: string
+  /**
+   * Root directory for all channel state files. Defaults to `stateDir()`.
+   * Tests point this at a temp directory to avoid touching real state.
+   */
+  baseDir?: string
   /** Delivers a gated inbound event to the Claude session. */
   notify: ChannelNotifier
   /** Injected clock (epoch millis); defaults to `Date.now`. */
@@ -168,10 +174,12 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   const logError = deps.logError ?? defaultLogError
   const logDebug = deps.logDebug ?? defaultLogDebug
   const logInfo = deps.logInfo ?? defaultLogInfo
+  const baseDir = deps.baseDir ?? stateDir()
 
   const ctx: HandlerContext = {
     transport: deps.transport,
     accessFile: deps.accessFile,
+    baseDir,
     now,
     generateCode,
     logError,
@@ -228,7 +236,8 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
 
     logInfo(`${eventType} gated through — delivering (message ${messageId})`)
     try {
-      await deps.notify(delivery.content, delivery.meta)
+      const content = withAvailableBots(delivery.content, delivery.meta, ctx)
+      await deps.notify(content, delivery.meta)
       // The event is now in the session's context — mark the source message
       // as received so the Feishu sender sees it landed. `markReceived`
       // swallows its own failures, so it never reaches the catch below.
@@ -409,6 +418,44 @@ function inboundMessageId(raw: unknown): string {
   return asString(message.message_id) || '(no message_id)'
 }
 
+/**
+ * Append an `<available_bots>` block to the delivery content when the message
+ * arrived in a group and there are known peer bots for that chat.
+ *
+ * Only fires for group messages (p2p has no peer bots), filters out self (this
+ * bot's open_id), and is a no-op when the store is empty or missing.
+ */
+function withAvailableBots(
+  content: string,
+  meta: Record<string, string>,
+  ctx: HandlerContext,
+): string {
+  if (meta.chat_type !== 'group') return content
+  const chatId = meta.chat_id
+  if (!chatId) return content
+
+  const bots = listObservedBots(ctx.baseDir, ctx.transport.appId, chatId)
+  const external = bots.filter((b) => b.openId !== ctx.transport.botOpenId)
+  if (external.length === 0) return content
+
+  const lines = [
+    '<available_bots>',
+    ...external.map((b) => `  <bot name="${escapeXmlAttr(b.name)}" open_id="${escapeXmlAttr(b.openId)}" />`),
+    '</available_bots>',
+  ]
+  return `${content}\n${lines.join('\n')}`
+}
+
+/** Escape the five XML special characters so they are safe inside an attribute value. */
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 /** Guidance injected into Claude's system prompt for this channel. */
 const CHANNEL_INSTRUCTIONS = [
   'This MCP server is a Feishu (Lark) channel. Inbound Feishu events arrive as',
@@ -440,6 +487,16 @@ const CHANNEL_INSTRUCTIONS = [
   'reply to with `reply`.',
   '',
   'Only act on events that arrived through this channel.',
+  '',
+  'Bot collaboration — available_bots:',
+  'When a group message is delivered, an <available_bots> block may appear after the',
+  'message body. It lists peer bots that were introduced in this group via /introduce:',
+  '  <available_bots>',
+  '    <bot name="Bot B" open_id="ou_xxx" />',
+  '  </available_bots>',
+  'To @mention a peer bot in your reply, include <at id="open_id"></at> in the `text`',
+  'you pass to `reply`. Use this only when you need the peer bot to take action;',
+  'do not at-mention bots unnecessarily.',
 ].join('\n')
 
 /** Construct the MCP server with the channel capability declared. */

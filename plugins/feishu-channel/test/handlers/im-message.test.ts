@@ -9,6 +9,7 @@ import {
   createImMessageHandler,
   normalizeInboundEvent,
 } from '../../src/handlers/im-message'
+import { listObservedBots } from '../../src/observed-bots-store'
 import type { Access } from '../../src/types'
 import { FakeTransport } from '../support/fake-transport'
 
@@ -137,11 +138,12 @@ afterEach(() => {
 /** Build a HandlerContext wired to the temp access file and the given fakes. */
 function makeCtx(
   transport: FakeTransport,
-  opts: { logErrors?: string[]; debugLogs?: string[]; generateCode?: () => string } = {},
+  opts: { logErrors?: string[]; debugLogs?: string[]; generateCode?: () => string; baseDir?: string } = {},
 ): HandlerContext {
   return {
     transport,
     accessFile,
+    baseDir: opts.baseDir ?? dir,
     now: () => NOW,
     generateCode: opts.generateCode ?? (() => 'abc123'),
     logError: (message) => {
@@ -400,5 +402,139 @@ describe('createImMessageHandler — pairing send failure', () => {
     // The send failed, so nothing is persisted — the sender's next message
     // starts a fresh pairing rather than finding a code they never received.
     expect(loadAccess(accessFile).access.pending).toEqual({})
+  })
+})
+
+// ── /introduce collaboration handshake ──────────────────────────────────────
+
+/** A group event mentioning two bots plus a sender, for /introduce tests. */
+function introduceEvent(text: string, chatId = 'oc_grp'): Record<string, unknown> {
+  return {
+    sender: { sender_id: { open_id: 'ou_sender' }, sender_type: 'user' },
+    message: {
+      message_id: 'om_intro',
+      chat_id: chatId,
+      chat_type: 'group',
+      message_type: 'text',
+      content: JSON.stringify({ text }),
+      create_time: '1700000000000',
+      mentions: [
+        { key: '@_user_1', id: { open_id: 'ou_self' }, name: 'BotSelf' },
+        { key: '@_user_2', id: { open_id: 'ou_peer' }, name: 'BotPeer' },
+      ],
+    },
+  }
+}
+
+describe('createImMessageHandler — /introduce command', () => {
+  test('bare /introduce is consumed (returns null) and persists bots', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    const bots = listObservedBots(dir, transport.appId, 'oc_grp')
+    expect(bots.map((b) => b.openId)).toContain('ou_peer')
+  })
+
+  test('/introduce with leading @mentions is matched', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    // After applyMentions replaces keys, text becomes "@BotSelf @BotPeer /introduce"
+    const event = introduceEvent('@_user_1 @_user_2 /introduce')
+    const delivery = await handler.handle(event, makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    const bots = listObservedBots(dir, transport.appId, 'oc_grp')
+    expect(bots.length).toBeGreaterThan(0)
+  })
+
+  test('/introducer does not match', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(introduceEvent('/introducer'), makeCtx(transport))
+
+    // Falls through to normal delivery, not consumed
+    expect(delivery).not.toBeNull()
+    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+  })
+
+  test('explanatory text before /introduce does not match', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(introduceEvent('please run /introduce'), makeCtx(transport))
+
+    expect(delivery).not.toBeNull()
+  })
+
+  test('unauthorized sender does not write and does not ack', async () => {
+    // group policy allowlist but group not in access.groups → drop
+    writeAccess({ groupPolicy: 'allowlist', groups: {} })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    expect(transport.sent).toHaveLength(0)
+    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+  })
+
+  test('no external bot in mentions → no write, no ack', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    // Only self in mentions
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+    const event = {
+      sender: { sender_id: { open_id: 'ou_sender' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_intro',
+        chat_id: 'oc_grp',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '/introduce' }),
+        create_time: '1700000000000',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_self' }, name: 'BotSelf' }],
+      },
+    }
+
+    await handler.handle(event, makeCtx(transport))
+
+    expect(transport.sent).toHaveLength(0)
+    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+  })
+
+  test('sends an ack when authorized and external bot exists', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    expect(transport.sent).toHaveLength(1)
+    expect(transport.sent[0]?.text).toContain('✅')
+    expect(transport.sent[0]?.chatId).toBe('oc_grp')
+  })
+
+  test('failed ack is logged but store write already succeeded', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    transport.failOn = 'sendText'
+    const logErrors: string[] = []
+    const handler = createImMessageHandler()
+
+    await handler.handle(introduceEvent('/introduce'), makeCtx(transport, { logErrors }))
+
+    expect(logErrors.some((m) => m.includes('/introduce'))).toBe(true)
+    // Store write happened before the ack attempt
+    expect(listObservedBots(dir, transport.appId, 'oc_grp').length).toBeGreaterThan(0)
   })
 })

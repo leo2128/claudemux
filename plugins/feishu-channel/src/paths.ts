@@ -32,3 +32,12 @@ export function envFile(base: string = stateDir()): string {
 export function lockFile(base: string = stateDir()): string {
   return join(base, 'connection.lock')
 }
+
+/**
+ * observed-bots-{appId}-{chatId}.json — bots discovered via /introduce in a
+ * specific group, keyed by the observing app's perspective (open_ids in this
+ * file are valid for this app to use when @-mentioning).
+ */
+export function observedBotsFile(base: string, appId: string, chatId: string): string {
+  return join(base, `observed-bots-${appId}-${chatId}.json`)
+}

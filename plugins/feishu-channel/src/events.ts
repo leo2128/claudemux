@@ -36,6 +36,11 @@ export interface HandlerContext {
   transport: FeishuTransport
   /** Absolute path to access.json, the persisted access-control policy. */
   accessFile: string
+  /**
+   * Root directory for all channel state files (observed-bots-*.json, etc.).
+   * Explicit so tests can point it at a temp directory without touching global state.
+   */
+  baseDir: string
   /** Injected clock (epoch millis). */
   now: () => number
   /** Injected pairing-code generator. */

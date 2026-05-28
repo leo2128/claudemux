@@ -14,6 +14,7 @@ import { loadAccess, saveAccess } from '../access-store'
 import { parseInbound } from '../content'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
 import { asString, isRecord } from '../json'
+import { recordObservedBots } from '../observed-bots-store'
 import type { Mention } from '../types'
 
 /** The Feishu event_type this handler subscribes to. */
@@ -75,6 +76,16 @@ export function createImMessageHandler(): EventHandler {
         if (decision.changed) saveAccess(ctx.accessFile, decision.access)
       }
 
+      // /introduce collaboration handshake — intercept before normal routing.
+      // side effects (write + ack) only fire when the access gate would deliver.
+      if (isIntroduceCommand(parsed.text)) {
+        persist()
+        if (decision.action === 'deliver') {
+          await handleIntroduce(event, ctx)
+        }
+        return null
+      }
+
       switch (decision.action) {
         case 'deliver':
           persist()
@@ -106,6 +117,62 @@ export function createImMessageHandler(): EventHandler {
         }
       }
     },
+  }
+}
+
+// ── /introduce collaboration handshake ─────────────────────────────────────
+//
+// A user sends `@BotA @BotB /introduce` in a group. Each bot receives the
+// same event with mentions[] populated from its own app's perspective — the
+// open_ids in that list are exactly the ids this app must use to @-mention the
+// others. We persist them so `available_bots` can be injected on every later
+// delivery in that group.
+//
+// Feishu has no public API to list bot members of a group; /introduce is the
+// only reliable path to learn a peer bot's open_id.
+
+/** After replacing @mention keys with names, the remaining text starts with /introduce. */
+const INTRODUCE_RE = /^\/introduce(?:\s|$)/i
+
+/**
+ * True when the message text, after stripping leading `@Name` tokens, begins
+ * with `/introduce`. Requires the command to be in the command position — free
+ * text such as "please run /introduce" does not match.
+ */
+function isIntroduceCommand(text: string): boolean {
+  const stripped = text.trim().replace(/^(\s*@\S+\s+)+/, '').trimStart()
+  return INTRODUCE_RE.test(stripped)
+}
+
+/**
+ * Side-effect for an authorized /introduce command: persist observed bots and
+ * send a best-effort ack. Only called when the access gate says deliver.
+ */
+async function handleIntroduce(event: FeishuInboundEvent, ctx: HandlerContext): Promise<void> {
+  const botsToRecord = event.mentions
+    .map((m) => ({ openId: m.id?.open_id ?? '', name: m.name ?? '' }))
+    .filter((b) => b.openId && b.name)
+
+  const hasExternal = botsToRecord.some((b) => b.openId !== ctx.transport.botOpenId)
+  if (!hasExternal) {
+    ctx.logDebug(`/introduce in ${event.chatId}: no external bot in mentions — ignoring`)
+    return
+  }
+
+  try {
+    recordObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId, botsToRecord)
+  } catch (err) {
+    ctx.logError('/introduce: failed to persist observed bots', err)
+  }
+
+  const items = botsToRecord.map((b) => `@${b.name}`).join(' ')
+  try {
+    await ctx.transport.sendText(
+      event.chatId,
+      `✅ 已认识本群 ${botsToRecord.length} 个伙伴：${items}`,
+    )
+  } catch (err) {
+    ctx.logError('/introduce: ack failed', err)
   }
 }
 

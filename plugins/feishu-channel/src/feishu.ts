@@ -261,6 +261,8 @@ export type InboundRoutes = Record<string, (raw: unknown) => void | Promise<void
  * server's inbound and outbound wiring runs without a live Feishu connection.
  */
 export interface FeishuTransport {
+  /** The app id this transport was created with. */
+  readonly appId: string
   /**
    * open_id of the bot itself, for group mention-gating. `undefined` until
    * `start` has resolved it (and stays `undefined` if resolution failed).
@@ -420,6 +422,10 @@ export function createFeishuTransport(
   }
 
   return {
+    get appId(): string {
+      return creds.appId
+    },
+
     get botOpenId(): string | undefined {
       return resolvedBotOpenId
     },

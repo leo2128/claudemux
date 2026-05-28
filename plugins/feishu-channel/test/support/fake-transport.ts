@@ -13,6 +13,7 @@ import type {
 import { renderMarkdownToCards } from '../../src/render'
 
 export class FakeTransport implements FeishuTransport {
+  readonly appId: string
   botOpenId: string | undefined
   readonly sent: { chatId: string; text: string }[] = []
   readonly reactions: { messageId: string; emoji: string }[] = []
@@ -29,8 +30,9 @@ export class FakeTransport implements FeishuTransport {
   /** Canned `fetchDocMeta` result; `null` simulates a failed enrichment. */
   docMeta: FeishuDocMeta | null = null
 
-  constructor(botOpenId?: string) {
+  constructor(botOpenId?: string, appId: string = 'cli_test_app') {
     this.botOpenId = botOpenId
+    this.appId = appId
   }
 
   async start(): Promise<void> {}

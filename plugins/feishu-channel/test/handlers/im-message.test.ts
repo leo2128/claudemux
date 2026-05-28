@@ -650,6 +650,27 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
     expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer_bot')
   })
 
+  test('does NOT record bot not in group allowFrom (allowlist policy with non-empty allowFrom)', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: ['ou_allowed'] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
+
+    // ou_peer_bot is not in allowFrom=['ou_allowed'] → should not be recorded
+    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+  })
+
+  test('records bot in group allowFrom (allowlist policy)', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: ['ou_peer_bot'] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
+
+    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer_bot')
+  })
+
   test('combination: bot sender + @OurBot + @BotB /introduce → ambient records sender, handleIntroduce records BotB, ack for BotB only', async () => {
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')

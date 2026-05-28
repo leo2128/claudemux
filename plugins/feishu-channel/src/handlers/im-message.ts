@@ -75,7 +75,7 @@ export function createImMessageHandler(): EventHandler {
         event.chatType === 'group' &&
         isBotSenderType(event.senderType) &&
         isIntroduce &&
-        isGroupAuthorized(loaded.access, event.chatId)
+        isGroupAuthorized(loaded.access, event.chatId, event.senderId)
       ) {
         const name =
           event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? event.senderId

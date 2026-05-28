@@ -464,4 +464,19 @@ describe('isGroupAuthorized', () => {
   test('allowlist policy — not authorized when group is absent', () => {
     expect(isGroupAuthorized(access({ groupPolicy: 'allowlist' }), 'oc_chat')).toBe(false)
   })
+
+  test('allowlist policy — sender in allowFrom is authorized', () => {
+    const a = access({ groupPolicy: 'allowlist', groups: { oc_chat: { requireMention: false, allowFrom: ['ou_bot'] } } })
+    expect(isGroupAuthorized(a, 'oc_chat', 'ou_bot')).toBe(true)
+  })
+
+  test('allowlist policy — sender not in allowFrom is not authorized', () => {
+    const a = access({ groupPolicy: 'allowlist', groups: { oc_chat: { requireMention: false, allowFrom: ['ou_allowed'] } } })
+    expect(isGroupAuthorized(a, 'oc_chat', 'ou_stranger')).toBe(false)
+  })
+
+  test('allowlist policy — empty allowFrom means no restriction (any sender passes)', () => {
+    const a = access({ groupPolicy: 'allowlist', groups: { oc_chat: { requireMention: false, allowFrom: [] } } })
+    expect(isGroupAuthorized(a, 'oc_chat', 'ou_anyone')).toBe(true)
+  })
 })

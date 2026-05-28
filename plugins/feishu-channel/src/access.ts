@@ -317,10 +317,17 @@ export function isBotSenderType(senderType: string | undefined): boolean {
  *  - `block`       → never authorized; the bot ignores all groups.
  *  - `follow-user` → always authorized; any group can receive messages.
  *  - `allowlist`   → authorized only when the group has been paired and is
- *                    present in `access.groups`.
+ *                    present in `access.groups`. When `senderId` is provided,
+ *                    also checks that the sender passes the group's `allowFrom`
+ *                    filter (empty allowFrom = no restriction).
  */
-export function isGroupAuthorized(access: Access, chatId: string): boolean {
+export function isGroupAuthorized(access: Access, chatId: string, senderId?: string): boolean {
   if (access.groupPolicy === 'block') return false
   if (access.groupPolicy === 'follow-user') return true
-  return access.groups[chatId] !== undefined
+  const policy = access.groups[chatId]
+  if (!policy) return false
+  if (senderId !== undefined && policy.allowFrom.length > 0 && !policy.allowFrom.includes(senderId)) {
+    return false
+  }
+  return true
 }

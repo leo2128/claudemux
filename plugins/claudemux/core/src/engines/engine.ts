@@ -63,6 +63,13 @@ export interface Engine {
   spawn(req: SpawnRequest, ctx: EngineContext): Promise<SpawnResult>
   send(req: SendRequest, ctx: EngineContext): Promise<TurnResult>
   wait(req: WaitRequest, ctx: EngineContext): Promise<TurnResult>
+  /**
+   * Tear down the runtime process / worktree state for `req.name`. The
+   * implementation must leave the live identity JSON
+   * (`/tmp/teammate-<name>.json`) alone — `killVerb` archives + removes
+   * it once the engine returns, so a `tm resume` / `tm history` after
+   * the kill can recover the teammate's launch context.
+   */
   kill(req: KillRequest, ctx: EngineContext): Promise<KillResult>
 
   // Fleet visibility — decision multi-engine-tui-architecture amend §"Fleet-visibility verbs"

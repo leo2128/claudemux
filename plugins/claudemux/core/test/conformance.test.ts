@@ -1604,6 +1604,37 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         },
       },
       {
+        name: 'a Codex schema=2 identity with no daemon → killed, identity archived through to the post-kill recovery path',
+        setup: () => {
+          const name = uniqueName()
+          // The Codex engine routes off the live record's `engine`
+          // field, so writing a parseable schema=2 record is enough
+          // for `tm kill` to dispatch to `CodexEngine.kill`. No
+          // daemon, no codex meta — `reapDaemon` no-ops cleanly,
+          // there is no worktree to reap, the kill returns
+          // `{ kind: 'killed' }`, and `killVerb` then archives +
+          // removes the identity. The archive snapshot is the
+          // recovery source `tm resume <name> <sid>` / `tm history
+          // <name>` consult after the live record is gone.
+          const record = JSON.stringify({
+            schema: TEAMMATE_RECORD_SCHEMA,
+            name,
+            engine: 'codex',
+            repo: `/srv/${name}`,
+            cwd: `/srv/${name}`,
+            worktreeSlug: null,
+            createdAt: 1747900000,
+            displayName: null,
+          })
+          marker(identityFile(name), `${record}\n`)
+          return {
+            args: [name],
+            snapshot: () =>
+              snapshotPaths([identityFile(name), archivedIdentityFile(name)]),
+          }
+        },
+      },
+      {
         name: 'a stale schema=1 identity record with no live engine → cleared, "killed: <name>" reported',
         setup: () => {
           const repo = uniqueName()

@@ -12,7 +12,7 @@
  * exists at the worktree-encoded slug.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
@@ -98,8 +98,11 @@ describe('cwdForName archive fallback', () => {
   })
 
   test('with neither live nor archive, falls back to dispatcherDir', () => {
-    // Pin the documented last-resort behavior.
-    expect(cwdForName('ghost', env())).toBe(dispatcherDir)
+    // Pin the documented last-resort behavior. `cwdForName` runs the
+    // value through `realpathSync`, which on macOS resolves
+    // `/tmp/...` through `/private/tmp/...`; compare against the
+    // resolved form so the test is portable across Linux and macOS.
+    expect(cwdForName('ghost', env())).toBe(realpathSync(dispatcherDir))
   })
 
   test('resumeCwdProbeable is true when only an archive exists', () => {

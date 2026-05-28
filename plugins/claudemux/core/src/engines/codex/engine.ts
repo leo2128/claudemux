@@ -868,7 +868,10 @@ export class CodexEngine implements Engine {
           worktreeNote = `worktree cleanup failed: ${reap.message}\n`
         }
       }
-      removeBaseRecord(req.name)
+      // Per the Engine.kill contract, identity teardown belongs to
+      // `killVerb` — it archives + removes the base record after we
+      // return, so the post-kill recovery path for `tm resume` /
+      // `tm history` sees a snapshot of the launch context.
       if (worktreeNote.length > 0) {
         // We still return `killed` — the teammate is gone, the
         // worktree leftover is communicated separately so a stale

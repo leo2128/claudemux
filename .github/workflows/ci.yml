@@ -9,6 +9,7 @@ jobs:
   claudemux-changeset-status:
     if: >
       github.event_name == 'pull_request' &&
+      github.base_ref != 'main' &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
       !startsWith(github.event.pull_request.head.ref, 'release/claudemux-ga-') &&
       !startsWith(github.event.pull_request.head.ref, 'release/claudemux-next-pre-')

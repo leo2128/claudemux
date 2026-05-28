@@ -28,7 +28,7 @@ Use the dispatcher skill for teammate operations. It owns the operational detail
 
 ## Task ledger
 
-Before delegating any non-trivial work, Read the live ledger `active-dispatcher-tasks.md` in this project's AutoMemory directory. Append an entry at spawn; when the work merges, finishes, or its teammate dies, compress it and move it to `dispatcher-tasks-archive.md`. Full schema and update rules live in the dispatcher skill.
+Before delegating any non-trivial work, Read the live ledger `active-dispatcher-tasks.md` in this dispatcher's Claude Code memory directory (`~/.claude/projects/<encoded-cwd>/memory/`, where `<encoded-cwd>` is this dispatcher's `$PWD` with `/` and `.` replaced by `-`; auto-loaded entries are visible via `MEMORY.md`). Append an entry at spawn; when the work merges, finishes, or its teammate dies, compress it and move it to `dispatcher-tasks-archive.md`. Full schema and update rules live in the dispatcher skill.
 
 ## Ground rules
 

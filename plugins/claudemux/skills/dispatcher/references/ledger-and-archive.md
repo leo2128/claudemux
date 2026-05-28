@@ -4,7 +4,7 @@ Read this when you're appending a new active task to the ledger (at spawn time) 
 
 ## The two ledger files
 
-Both live in the dispatcher's AutoMemory directory (the directory whose absolute path is in your system prompt; auto-loaded entries are visible via `MEMORY.md`). The ledger is **not** in `<dispatcher-dir>/.workspace/`; the workspace holds personalization and ad-hoc artifacts, the ledger is structured state managed by the auto-memory system alongside `MEMORY.md`. Keep them separate.
+Both live in the dispatcher's Claude Code memory directory — `~/.claude/projects/<encoded-cwd>/memory/`, where `<encoded-cwd>` is the dispatcher's `$PWD` with `/` and `.` replaced by `-` (auto-loaded entries are visible via `MEMORY.md`). This is **not** a directory inside the dispatcher repo itself; it is a path under `~/.claude/` managed by Claude Code. The ledger is also **not** in `<dispatcher-dir>/.workspace/`; the workspace holds personalization and ad-hoc artifacts, the ledger is structured state managed by the auto-memory system alongside `MEMORY.md`. Keep them separate.
 
 | File | What it holds | When to read |
 |---|---|---|

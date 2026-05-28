@@ -307,6 +307,7 @@ describe('gate — groupPolicy follow-user', () => {
       groupInput({
         access: followUser(),
         senderId: 'ou_peer_bot',
+        senderType: 'bot',
         observedBotIds: new Set(['ou_peer_bot']),
       }),
     )
@@ -318,6 +319,7 @@ describe('gate — groupPolicy follow-user', () => {
       groupInput({
         access: followUser(),
         senderId: 'ou_peer_bot',
+        senderType: 'bot',
         mentions: [],
         observedBotIds: new Set(['ou_peer_bot']),
       }),
@@ -332,12 +334,40 @@ describe('gate — groupPolicy follow-user', () => {
       groupInput({
         access: followUser(),
         senderId: 'ou_unknown',
+        senderType: 'bot',
         observedBotIds: new Set(['ou_other_bot']),
       }),
     )
     expect(r.action).toBe('drop')
     if (r.action !== 'drop') throw new Error('unreachable')
     expect(r.reason).toBe('sender not on allowlist')
+  })
+
+  test('a human open_id in observedBotIds cannot bypass allowFrom — senderType guard', () => {
+    // Regression: /introduce mentions can include human open_ids. A human whose
+    // open_id ended up in observed-bots must NOT bypass the allowFrom check.
+    const r = gate(
+      groupInput({
+        access: followUser(),
+        senderId: 'ou_human',
+        senderType: 'user',
+        observedBotIds: new Set(['ou_human']),
+      }),
+    )
+    expect(r.action).toBe('drop')
+    if (r.action !== 'drop') throw new Error('unreachable')
+    expect(r.reason).toBe('sender not on allowlist')
+  })
+
+  test('a human on allowFrom is still delivered regardless of senderType check', () => {
+    const r = gate(
+      groupInput({
+        access: followUser({ allowFrom: ['ou_human'] }),
+        senderId: 'ou_human',
+        senderType: 'user',
+      }),
+    )
+    expect(r.action).toBe('deliver')
   })
 })
 

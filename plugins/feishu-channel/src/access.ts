@@ -21,6 +21,8 @@ export const PAIRING_TTL_MS = 60 * 60 * 1000
 export interface GateInput {
   /** open_id of the message sender. */
   senderId: string
+  /** Feishu sender_type — `'user'` for a human, `'bot'` for an app/bot. */
+  senderType?: string
   /** chat_id the message arrived in. */
   chatId: string
   /** Feishu chat_type — `p2p` or `group`. */
@@ -168,7 +170,8 @@ function gateGroupFollowUser(input: GateInput, access: Access, changed: boolean)
     return { action: 'drop', access, changed, reason: 'bot not mentioned' }
   }
   const onAllowlist = access.allowFrom.includes(input.senderId)
-  const isIntroducedBot = input.observedBotIds?.has(input.senderId) ?? false
+  const isIntroducedBot =
+    input.senderType === 'bot' && (input.observedBotIds?.has(input.senderId) ?? false)
   if (!onAllowlist && !isIntroducedBot) {
     return { action: 'drop', access, changed, reason: 'sender not on allowlist' }
   }

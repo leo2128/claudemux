@@ -30,6 +30,8 @@ export interface FeishuInboundEvent {
   chatType: string
   /** open_id of the sender — the identity access control gates on. */
   senderId: string
+  /** Feishu sender_type — `'user'` for a human, `'bot'` for an app/bot. */
+  senderType: string
   /** Feishu message_type — `text`, `post`, `image`, `file`, ... */
   messageType: string
   /** JSON-encoded content string, exactly as Feishu delivered it. */
@@ -71,6 +73,7 @@ export function createImMessageHandler(): EventHandler {
 
       const decision = gate({
         senderId: event.senderId,
+        senderType: event.senderType,
         chatId: event.chatId,
         chatType: event.chatType,
         access: loaded.access,
@@ -281,6 +284,7 @@ export function normalizeInboundEvent(raw: unknown): FeishuInboundEvent | null {
     chatId,
     chatType: asString(message.chat_type),
     senderId: openId,
+    senderType: asString(sender.sender_type),
     messageType: asString(message.message_type) || 'unknown',
     content: asString(message.content),
     mentions: normalizeMentions(message.mentions),

@@ -42,11 +42,34 @@ describe('normalizeInboundEvent — happy path', () => {
       chatId: 'oc_chat',
       chatType: 'p2p',
       senderId: 'ou_sender',
+      senderType: 'user',
       messageType: 'text',
       content: '{"text":"hello there"}',
       mentions: [],
       createTime: '1700000000000',
     })
+  })
+
+  test('captures sender_type=bot for a bot sender', () => {
+    const event = normalizeInboundEvent(
+      rawEvent({}, { open_id: 'ou_bot', union_id: 'on_b', user_id: 'u_b' }),
+    )
+    // rawEvent passes sender_type via the second arg only if we override
+    // — use a raw object to test bot type directly
+    const botRaw = {
+      sender: { sender_id: { open_id: 'ou_bot' }, sender_type: 'bot' },
+      message: {
+        message_id: 'om_msg',
+        chat_id: 'oc_chat',
+        chat_type: 'group',
+        message_type: 'text',
+        content: '{"text":"hi"}',
+        create_time: '1700000000000',
+        mentions: [],
+      },
+    }
+    expect(normalizeInboundEvent(botRaw)?.senderType).toBe('bot')
+    void event
   })
 
   test('unwraps a full {event: ...} envelope', () => {
@@ -379,6 +402,34 @@ describe('createImMessageHandler — observed-bot delivery (follow-user policy)'
           chat_type: 'group',
           message_type: 'text',
           content: '{"text":"cross-group attempt"}',
+          create_time: '1700000000000',
+          mentions: [{ key: '@_user_1', id: { open_id: 'ou_self' } }],
+        },
+      },
+      makeCtx(transport),
+    )
+
+    expect(delivery).toBeNull()
+  })
+
+  test('a human open_id in observed-bots with sender_type=user cannot bypass allowFrom', async () => {
+    // Regression: /introduce mentions can include human open_ids. A human whose
+    // open_id ended up in observed-bots must NOT be delivered unless they are
+    // also on allowFrom.
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
+    const transport = new FakeTransport('ou_self')
+    recordObservedBots(dir, transport.appId, 'oc_group', [{ openId: 'ou_human', name: 'Alice' }])
+    const handler = createImMessageHandler()
+
+    const delivery = await handler.handle(
+      {
+        sender: { sender_id: { open_id: 'ou_human' }, sender_type: 'user' },
+        message: {
+          message_id: 'om_human_msg',
+          chat_id: 'oc_group',
+          chat_type: 'group',
+          message_type: 'text',
+          content: '{"text":"bypass attempt"}',
           create_time: '1700000000000',
           mentions: [{ key: '@_user_1', id: { open_id: 'ou_self' } }],
         },

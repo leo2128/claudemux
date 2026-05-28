@@ -90,7 +90,7 @@ Two local hooks run via Husky (installed by `pnpm install`):
 
 Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
 
-To enable all hooks on a fresh clone: `pnpm install` (the `prepare` script sets `core.hooksPath=.husky` automatically).
+To enable all hooks on a fresh clone: `pnpm install` (the `prepare` script sets `core.hooksPath=.husky/_` automatically).
 
 ## Commit Author
 

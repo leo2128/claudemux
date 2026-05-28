@@ -1,1 +1,8 @@
+# Unset git push-injected env vars so changesets' internal `git` calls
+# resolve to the worktree root rather than the pushed branch's GIT_DIR.
+# Without this, `changeset status` runs from the worktree's gitdir, fails
+# to see the .changeset/*.md fragments living in the working tree, and
+# reports false-positive "no changesets found" errors.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_QUARANTINE_PATH
+
 pnpm changeset status --since=origin/next

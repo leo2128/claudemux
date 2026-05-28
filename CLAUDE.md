@@ -83,6 +83,26 @@ The local pre-commit hook at `.githooks/pre-commit` checks only the commit autho
 
 To enable the hook on a fresh clone, run once: `git config core.hooksPath .githooks`.
 
+### feishu-channel versioning
+
+`plugins/feishu-channel` (`claude-channel-feishu`) is versioned independently from claudemux. Every PR that touches `plugins/feishu-channel/src/` or `plugins/feishu-channel/skills/` must include a changeset fragment. Write the file directly — do not use the interactive CLI:
+
+```
+plugins/claudemux/.changeset/<adjective-noun-verb>.md
+```
+
+```markdown
+---
+"claude-channel-feishu": patch   # or minor / major
+---
+
+<one-paragraph description of what changed and why>
+```
+
+Bump level follows the same rules as claudemux: `patch` for bug fixes, `minor` for new features, `major` for breaking contract changes. The fragment lives alongside the claudemux fragments so a single `changeset version` run covers both packages when feishu-channel is added to the workspace.
+
+CI does not yet enforce the feishu-channel changeset check (feishu-channel is not in the claudemux pnpm workspace), so this is a process requirement enforced by review, not automation.
+
 ## Commit Author
 
 Commit author email must be a real, well-formed address — not a machine-default identity (git's `whoami@hostname` guess, e.g. `dyzhu@MacBook.local`, which git fabricates when `user.email` is unset). Any valid public email passes; there is no per-person whitelist.

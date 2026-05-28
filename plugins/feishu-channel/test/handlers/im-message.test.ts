@@ -439,18 +439,47 @@ describe('createImMessageHandler — /introduce command', () => {
     expect(bots.map((b) => b.openId)).toContain('ou_peer')
   })
 
-  test('/introduce with leading @mentions is matched', async () => {
+  test('/introduce with leading mention keys is matched', async () => {
     writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
     const transport = new FakeTransport('ou_self')
     const handler = createImMessageHandler()
 
-    // After applyMentions replaces keys, text becomes "@BotSelf @BotPeer /introduce"
+    // Content has raw Feishu placeholders; isIntroduceCommand strips them by key.
     const event = introduceEvent('@_user_1 @_user_2 /introduce')
     const delivery = await handler.handle(event, makeCtx(transport))
 
     expect(delivery).toBeNull()
     const bots = listObservedBots(dir, transport.appId, 'oc_grp')
     expect(bots.length).toBeGreaterThan(0)
+  })
+
+  test('leading mentions with display names containing spaces are stripped correctly', async () => {
+    // Regression: old word-boundary regex stopped at the space inside "Claude Code",
+    // leaving "Code @Bot B /introduce" which did not match.
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    // Simulate bots whose display names contain spaces.
+    const event = {
+      sender: { sender_id: { open_id: 'ou_sender' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_intro',
+        chat_id: 'oc_grp',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '@_user_1 @_user_2 /introduce' }),
+        create_time: '1700000000000',
+        mentions: [
+          { key: '@_user_1', id: { open_id: 'ou_self' }, name: 'Claude Code' },
+          { key: '@_user_2', id: { open_id: 'ou_peer' }, name: 'Bot B' },
+        ],
+      },
+    }
+    const delivery = await handler.handle(event, makeCtx(transport))
+
+    expect(delivery).toBeNull()
+    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer')
   })
 
   test('/introducer does not match', async () => {
@@ -476,7 +505,7 @@ describe('createImMessageHandler — /introduce command', () => {
   })
 
   test('unauthorized sender does not write and does not ack', async () => {
-    // group policy allowlist but group not in access.groups → drop
+    // group policy allowlist but group not in access.groups → gate returns 'pair'
     writeAccess({ groupPolicy: 'allowlist', groups: {} })
     const transport = new FakeTransport('ou_self')
     const handler = createImMessageHandler()
@@ -486,6 +515,21 @@ describe('createImMessageHandler — /introduce command', () => {
     expect(delivery).toBeNull()
     expect(transport.sent).toHaveLength(0)
     expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+  })
+
+  test('/introduce on an unconfigured group does not persist a phantom pairing code', async () => {
+    // Regression: the old code called persist() unconditionally before checking
+    // action, causing gate()'s 'pair' decision to be saved without ever sending
+    // the code — subsequent @-mentions then hit "group pairing already pending".
+    writeAccess({ groupPolicy: 'allowlist', groups: {} })
+    const transport = new FakeTransport('ou_self')
+    const handler = createImMessageHandler()
+
+    await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    // No pending pairing code should have been written
+    const { access } = loadAccess(accessFile)
+    expect(Object.keys(access.pending)).toHaveLength(0)
   })
 
   test('no external bot in mentions → no write, no ack', async () => {

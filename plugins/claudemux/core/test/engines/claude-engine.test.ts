@@ -221,7 +221,11 @@ describe('ClaudeEngine.kill — graceful exit via idle-marker signal', () => {
         // A graceful exit does not set the SIGHUP-fallback note.
         expect(result.note).toBeUndefined()
       }
-      expect(killSessionCalled).toBe(false)
+      // The marker hook touches the idle file *before* tmux reaps the
+      // pane, so on a marker-signaled exit the kill path still has to
+      // tear the session down — otherwise the shell that hosted Claude
+      // keeps the tmux session alive as a bare prompt.
+      expect(killSessionCalled).toBe(true)
     } finally {
       if (savedGrace === undefined) delete process.env['CLAUDEMUX_KILL_GRACE_MS']
       else process.env['CLAUDEMUX_KILL_GRACE_MS'] = savedGrace

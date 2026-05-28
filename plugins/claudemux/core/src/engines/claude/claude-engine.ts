@@ -432,6 +432,12 @@ export class ClaudeEngine implements Engine {
    * means a clean kill returns in ~one tick instead of paying the
    * full process-teardown wall-clock.
    *
+   * After a marker-signaled clean exit, the pane still hosts the
+   * shell that launched Claude — without an explicit `kill-session`
+   * the tmux session lives on as a bare prompt and the teammate
+   * shows up as `unknown` in `tm ls`. The kill-session call after
+   * each graceful branch handles that teardown.
+   *
    * Budgets default to 15s + 5s in production. The conformance
    * harness sets `CLAUDEMUX_KILL_GRACE_MS` to a short value so the
    * fake tmux (which never reports a pane gone after send-keys, and
@@ -459,6 +465,7 @@ export class ClaudeEngine implements Engine {
       return 'absent'
     }
     if (await this.waitForExitSignal(sessionName, sid, markerBaseline, exitWait)) {
+      await this.tryKillTmuxSession(sessionName)
       return 'graceful'
     }
     try {
@@ -467,14 +474,30 @@ export class ClaudeEngine implements Engine {
       // best-effort; keep going to the SIGHUP fallback.
     }
     if (await this.waitForExitSignal(sessionName, sid, markerBaseline, keepWait)) {
+      await this.tryKillTmuxSession(sessionName)
       return 'graceful'
     }
+    await this.tryKillTmuxSession(sessionName)
+    return 'forced'
+  }
+
+  /**
+   * Best-effort `tmux kill-session`. Wrapped in try/catch because:
+   *   - in the forced path the call is the SIGHUP fallback and a
+   *     failure means tmux already lost the session, which is the
+   *     same outcome we wanted;
+   *   - in the graceful path the marker mtime advance means the
+   *     SessionEnd hook fired, but Claude's REPL teardown plus tmux
+   *     pane reap finish later — without this call the shell that
+   *     replaces Claude in the pane keeps the tmux session alive
+   *     indefinitely as a bare prompt.
+   */
+  private async tryKillTmuxSession(sessionName: string): Promise<void> {
     try {
       await this.env.runTmux(['kill-session', '-t', `=${sessionName}`])
     } catch {
-      // ignore — caller treats this as a forced kill regardless.
+      // ignore — best-effort.
     }
-    return 'forced'
   }
 
   /**

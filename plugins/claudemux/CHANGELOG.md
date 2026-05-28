@@ -1,5 +1,11 @@
 # claudemux
 
+## 1.0.0-beta.17
+
+### Patch Changes
+
+- cebbfa7: sync-plugin-version now mirrors the feishu-channel plugin manifest version as well, so `plugins/feishu-channel/.claude-plugin/plugin.json` stays in lockstep with its package.json after `changeset version` instead of drifting.
+
 ## 1.0.0-beta.16
 
 ### Patch Changes

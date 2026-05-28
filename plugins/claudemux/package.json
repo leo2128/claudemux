@@ -1,6 +1,6 @@
 {
   "name": "claudemux",
-  "version": "1.0.0-beta.16",
+  "version": "1.0.0-beta.17",
   "description": "Multi-repo Claude Code orchestrator — `tm` CLI plus the dispatcher skill, hooks, and templates the plugin ships.",
   "private": true,
   "type": "module",

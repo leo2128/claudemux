@@ -9,6 +9,7 @@ jobs:
   claudemux-changeset-status:
     if: >
       github.event_name == 'pull_request' &&
+      github.base_ref != 'main' &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
       !startsWith(github.event.pull_request.head.ref, 'release/claudemux-ga-') &&
       !startsWith(github.event.pull_request.head.ref, 'release/claudemux-next-pre-')
@@ -165,7 +166,7 @@ jobs:
   # binaries (`tm states` / `tm history` pipe through `column`; `tm history`'s
   # detail view formats a timestamp with BSD `date -r`, so its detail-mode
   # scenarios are macOS-gated in the harness).
-  claudemux-node:
+  claudemux-core:
     strategy:
       fail-fast: false
       matrix:

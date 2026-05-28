@@ -16,6 +16,7 @@
     "dispatcher-prompt-and-parallel-rules",
     "fix-codex-ipc-broadcast-version",
     "fix-cron-host-rule",
+    "fix-feishu-manifest-version-sync",
     "fix-kill-grace-and-resume-after-kill",
     "fix-kill-tmux-session-leak-on-graceful",
     "fix-prerelease-workflow-consumption",

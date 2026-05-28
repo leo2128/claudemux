@@ -173,6 +173,32 @@ describe('parseInbound — interactive', () => {
     const c = card(undefined, [{ tag: 'hr' }, { tag: 'table' }])
     expect(parseInbound(message('interactive', c)).text).toBe('(interactive card)')
   })
+
+  test('null element in body.elements does not crash', () => {
+    const c = card(undefined, [null, { tag: 'markdown', content: 'ok' }, null])
+    expect(parseInbound(message('interactive', c)).text).toBe('ok')
+  })
+
+  test('null entry in div.fields does not crash', () => {
+    const c = card(undefined, [
+      { tag: 'div', fields: [null, { text: { tag: 'lark_md', content: 'field' } }, null] },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('field')
+  })
+
+  test('null entry in column_set.columns does not crash', () => {
+    const c = card(undefined, [
+      {
+        tag: 'column_set',
+        columns: [
+          null,
+          { elements: [{ tag: 'markdown', content: 'col text' }] },
+          null,
+        ],
+      },
+    ])
+    expect(parseInbound(message('interactive', c)).text).toBe('col text')
+  })
 })
 
 describe('applyMentions', () => {

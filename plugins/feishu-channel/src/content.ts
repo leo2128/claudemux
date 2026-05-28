@@ -100,54 +100,56 @@ function extractInteractiveText(card: Record<string, unknown>): string {
     ? (body as Record<string, unknown>).elements
     : c.elements
   if (Array.isArray(elements)) {
-    for (const el of elements) extractCardElementText(el as Record<string, unknown>, parts)
+    for (const el of elements) extractCardElementText(el, parts)
   }
 
   return parts.join('\n') || '(interactive card)'
 }
 
 /** Recursively extract readable text from a v2 card element. */
-function extractCardElementText(el: Record<string, unknown>, parts: string[]): void {
-  const tag = el.tag as string | undefined
+function extractCardElementText(el: unknown, parts: string[]): void {
+  if (!el || typeof el !== 'object' || Array.isArray(el)) return
+  const e = el as Record<string, unknown>
+  const tag = e.tag as string | undefined
 
   if (tag === 'markdown' || tag === 'plain_text' || tag === 'div') {
     // `content` is a direct string in feishu-channel cards;
     // `text.content` is used when the text is a nested object (other bots).
-    const textObj = el.text
+    const textObj = e.text
     const text =
       textObj && typeof textObj === 'object'
         ? (textObj as Record<string, unknown>).content
-        : el.content
+        : e.content
     if (typeof text === 'string' && text.trim()) parts.push(text)
 
     // div.fields[] — lark_md cells in field-layout cards from other bots.
-    if (Array.isArray(el.fields)) {
-      for (const f of el.fields as Record<string, unknown>[]) {
+    if (Array.isArray(e.fields)) {
+      for (const f of e.fields) {
+        if (!f || typeof f !== 'object') continue
+        const fo = f as Record<string, unknown>
         const ft =
-          f.text && typeof f.text === 'object'
-            ? (f.text as Record<string, unknown>).content
-            : f.content
-        if (typeof ft === 'string' && ft.trim()) parts.push(ft as string)
+          fo.text && typeof fo.text === 'object'
+            ? (fo.text as Record<string, unknown>).content
+            : fo.content
+        if (typeof ft === 'string' && ft.trim()) parts.push(ft)
       }
     }
   }
 
   // column_set → columns[].elements[]
-  if (Array.isArray(el.columns)) {
-    for (const col of el.columns as Record<string, unknown>[]) {
-      if (Array.isArray(col.elements)) {
-        for (const child of col.elements as Record<string, unknown>[]) {
-          extractCardElementText(child, parts)
-        }
+  if (Array.isArray(e.columns)) {
+    for (const col of e.columns) {
+      if (!col || typeof col !== 'object') continue
+      const co = col as Record<string, unknown>
+      if (Array.isArray(co.elements)) {
+        for (const child of co.elements) extractCardElementText(child, parts)
       }
     }
   }
 
   // Generic child elements (action blocks, nested containers)
-  if (Array.isArray(el.elements)) {
-    for (const child of el.elements as Record<string, unknown>[]) {
-      extractCardElementText(child, parts)
-    }
+  if (Array.isArray(e.elements)) {
+    for (const child of e.elements) extractCardElementText(child, parts)
   }
 }
 

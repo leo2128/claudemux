@@ -13,9 +13,9 @@ codex prefix > SessionStart hook > MCP > anything else.
   `codex-` to decide engine. The user named this as the load-bearing
   redesign of this iteration.
 - **Evidence.** `isCodexTarget` is defined at
-  [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts) and
+  [`plugins/claudemux/src/engines/codex/verbs.ts`](/plugins/claudemux/src/engines/codex/verbs.ts) and
   used at four sites in `native.ts` (`1149`, `2051`, `2310`, `2445`) plus
-  the `codexAsk` pool filter in `plugins/claudemux/core/src/engines/codex/verbs.ts`.
+  the `codexAsk` pool filter in `plugins/claudemux/src/engines/codex/verbs.ts`.
 - **Root cause.** [Decision codex-driver §1](/.agents/decisions/codex-driver.md)
   committed to the prefix as a one-helper-four-call-sites stage-4
   shortcut. The shortcut is now load-bearing surface contract — the cost
@@ -45,7 +45,7 @@ codex prefix > SessionStart hook > MCP > anything else.
     by `tm spawn`).
   - `/tmp/teammate-claudemux-doc.ready` mtime `2026-05-23 21:17:20`.
     Only the hook touches this file (`tm spawn` only `rm`s it — see
-    [`engines/claude/spawn.ts`](/plugins/claudemux/core/src/engines/claude/spawn.ts)
+    [`engines/claude/spawn.ts`](/plugins/claudemux/src/engines/claude/spawn.ts)
     and
     [`hooks/on-session-start.sh:90`](/plugins/claudemux/hooks/on-session-start.sh)),
     so its 19-second-later mtime is direct evidence of the hook running.
@@ -54,7 +54,7 @@ codex prefix > SessionStart hook > MCP > anything else.
     loaded cleanly (the bundle is "all or nothing"; the same JSON wires
     SessionStart and Stop).
 - **Root cause.** `pollReady` in
-  [`engines/claude/spawn.ts`](/plugins/claudemux/core/src/engines/claude/spawn.ts)
+  [`engines/claude/spawn.ts`](/plugins/claudemux/src/engines/claude/spawn.ts)
   loops 60 × 300 ms = **18 s**. Booting Opus 4.7 on a 1 M context window with a stack of
   user-scope plugins consistently takes ~19 s on this machine, so the
   poll loses by a single iteration. The WARN copy then misleads by
@@ -133,7 +133,7 @@ codex prefix > SessionStart hook > MCP > anything else.
   warning channel is stderr, alongside the existing `spawned: …` /
   `ready: …` lines — no new conventions needed.
 - **`isCodexTarget` is exported.** It's used externally (`native.ts`
-  imports it from `plugins/claudemux/core/src/engines/codex/verbs.ts`). When item A lands, the export goes
+  imports it from `plugins/claudemux/src/engines/codex/verbs.ts`). When item A lands, the export goes
   away and the resolver in `paths.ts` takes its place. Caught here so
   the implementer doesn't preserve a backwards-compat re-export by
   habit.

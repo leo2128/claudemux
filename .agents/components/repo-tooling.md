@@ -8,8 +8,7 @@ workflow.
 
 | Path | Role |
 |---|---|
-| [`/bin/check-author`](/bin/check-author) | Validate one git author email — the single source of truth for the author rule |
-| [`/bin/test-tm-mem`](/bin/test-tm-mem), `/bin/test-tm-prompt-splat` | Standalone `tm` behavior test runners |
+| [`/scripts/check-author`](/scripts/check-author) | Validate one git author email — the single source of truth for the author rule |
 | [`/package.json`](/package.json) | pnpm workspace root — declares `packageManager`, root devDeps (`@changesets/cli`, `husky`), and the `prepare` script that installs hooks |
 | [`/pnpm-workspace.yaml`](/pnpm-workspace.yaml) | Workspace package list: `plugins/claudemux`, `plugins/feishu-channel`, `packages/tm` |
 | [`/.changeset/config.json`](/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, release-surface globs for claudemux and feishu-channel |
@@ -19,7 +18,7 @@ workflow.
 | [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — delegates to `.githooks/pre-commit` |
 | [`/.husky/pre-push`](/.husky/pre-push) | Husky hook — runs `pnpm changeset status --since=origin/next` before push |
 | [`/.github/workflows/ci.yml`](/.github/workflows/ci.yml) | CI — shellcheck + bats on an Ubuntu/macOS matrix |
-| [`/tests/`](/tests) | bats tests — `cli/` covers repo tooling and hook regressions; TypeScript core conformance lives under `plugins/claudemux/core/test/` |
+| [`/tests/`](/tests) | bats tests — `cli/` covers repo tooling and hook regressions; TypeScript core conformance lives under `plugins/claudemux/test/` |
 
 ## Versioning — official Changesets
 
@@ -59,11 +58,10 @@ What counts as feature-class is per-plugin, because the plugins differ in
 shape. The release surface is declared in `/.changeset/config.json` under
 `changedFilePatterns`:
 
-- `claudemux` (Bash) — `bin/`, `hooks/`, `scripts/`, `templates/`, and any
-  `skills/*/SKILL.md`; plus `core/src/*`, `core/package.json`,
-  `core/resolver.mjs`, `core/resolver-register.mjs`, and
-  `core/third_party/*`.
-- `claude-channel-feishu` (TypeScript) — `src/**`.
+- `claudemux` — `bin/`, `hooks/`, `scripts/`, `templates/`, any
+  `skills/*/SKILL.md`, `src/**`, `third_party/**`, `resolver.mjs`,
+  `resolver-register.mjs`, and `package.json`.
+- `claude-channel-feishu` — `src/**`.
 
 Pure-docs commits (README, `CLAUDE.md`, KB files, any `*.md` that is not a
 `SKILL.md`), CI/test changes, and manifest description/keyword edits are
@@ -76,7 +74,7 @@ The repo uses Husky (`/.husky/`) for local git hooks, installed automatically
 when `pnpm install` runs the `prepare` script. Two hooks are active:
 
 - **`.husky/pre-commit`** — delegates to [`.githooks/pre-commit`](/.githooks/pre-commit),
-  which runs `bin/check-author` to validate the commit author email.
+  which runs `scripts/check-author` to validate the commit author email.
 - **`.husky/pre-push`** — runs `pnpm changeset status --since=origin/next` to
   catch missing changeset fragments before a push lands in CI.
 
@@ -85,7 +83,7 @@ both hooks automatically. No manual `git config core.hooksPath` is needed.
 
 ## The author-email rule
 
-`bin/check-author` is the **one** definition of a valid author email,
+`scripts/check-author` is the **one** definition of a valid author email,
 shared by two callers: the `pre-commit` hook checks the identity the next
 commit *would* use; `ci.yml` checks every commit a push or PR introduces. It
 rejects an unparseable address or an mDNS/LAN suffix (`.local`,
@@ -105,7 +103,7 @@ jobs:
 - **`check`** — the claudemux plugin, on an `ubuntu-latest` +
   `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
   install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on `tm`, the hooks,
-  the scripts, `bin/check-author`, and `.githooks/pre-commit` →
+  the scripts, `scripts/check-author`, and `.githooks/pre-commit` →
   `bats tests/cli/` (repo-tooling and hook regression tests).
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.

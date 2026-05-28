@@ -13,12 +13,11 @@
     "scripts/*",
     "templates/*",
     "skills/*/SKILL.md",
-    "core/src/*",
-    "core/package.json",
-    "core/resolver.mjs",
-    "core/resolver-register.mjs",
-    "core/third_party/*",
-    "src/**"
+    "src/**",
+    "third_party/**",
+    "resolver.mjs",
+    "resolver-register.mjs",
+    "package.json"
   ],
   "privatePackages": {
     "version": true,

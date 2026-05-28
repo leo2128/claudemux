@@ -36,7 +36,7 @@ Treat `tm` and the hooks as production code and put guardrails under them.
 - **Named path builders for the idle-dir protocol.** Every
   `/tmp/claude-idle/<sid>.*` path is built by `idle_marker_for` /
   `busy_marker_for` / `last_file_for`, mirrored inline in the hooks.
-- **Commit-author lint.** `bin/check-author` is the single definition of a
+- **Commit-author lint.** `scripts/check-author` is the single definition of a
   valid author email, shared by the `pre-commit` hook (checks the next
   commit's identity) and CI (checks every commit a push or PR introduces).
   It rejects unparseable addresses and mDNS/LAN suffixes — the
@@ -63,6 +63,6 @@ Treat `tm` and the hooks as production code and put guardrails under them.
   (0.5.5 — single project-dir encoder), `13724c0` (0.6.0 — idle-dir path
   builders), `6c3a035` (author check in pre-commit), `3ac230d` (relax the
   author check to format + machine-identity blacklist), `46b5151` (enforce
-  the author check in CI via `bin/check-author`).
+  the author check in CI via `scripts/check-author`).
 - [components/repo-tooling.md](/.agents/components/repo-tooling.md),
   [components/tm.md](/.agents/components/tm.md).

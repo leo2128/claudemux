@@ -27,7 +27,7 @@ Before finishing any non-trivial task, run a knowledge-delta review:
 
 The last row matters: the KB is the *narrative* layer. Binding rules belong
 in `CLAUDE.md` (always loaded) or, where the rule can be mechanically
-enforced, in an executable contract (a hook, `bin/check-author`,
+enforced, in an executable contract (a hook, `scripts/check-author`,
 CI workflow, or release script). The KB explains and routes; it does not
 legislate.
 

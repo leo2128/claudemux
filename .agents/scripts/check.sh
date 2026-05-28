@@ -198,7 +198,7 @@ nnnn_hits=""
 while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
-        plugins/claudemux/core/dist/*) continue ;;
+        plugins/claudemux/dist/*) continue ;;
     esac
     case "$f" in
         *.md|*.ts|*.tsx|*.js|*.mjs|*.sh|*.bats) ;;

@@ -23,21 +23,21 @@ daemon per teammate.
 
 The path is:
 
-- `/plugins/claudemux/core/src/verbs/spawn.ts:34` routes `spawn` to the selected
+- `/plugins/claudemux/src/verbs/spawn.ts:34` routes `spawn` to the selected
   engine.
-- `/plugins/claudemux/core/src/engines/codex/engine.ts:390` reserves the
+- `/plugins/claudemux/src/engines/codex/engine.ts:390` reserves the
   teammate record and calls `spawnDaemon`.
-- `/plugins/claudemux/core/src/engines/codex/supervisor.ts:322` starts a
+- `/plugins/claudemux/src/engines/codex/supervisor.ts:322` starts a
   detached app-server process.
-- `/plugins/claudemux/core/src/engines/codex/supervisor.ts:368` builds the
+- `/plugins/claudemux/src/engines/codex/supervisor.ts:368` builds the
   command as `codex app-server --listen unix://<socketPath>`.
-- `/plugins/claudemux/core/src/engines/codex/persistence.ts:46` stores the
+- `/plugins/claudemux/src/engines/codex/persistence.ts:46` stores the
   Codex registry under `/tmp/teammate-codex` by default.
-- `/plugins/claudemux/core/src/engines/codex/persistence.ts:62` builds each
+- `/plugins/claudemux/src/engines/codex/persistence.ts:62` builds each
   teammate socket as `/tmp/teammate-codex/<name>/socket`.
-- `/plugins/claudemux/core/src/engines/codex/rpc.ts:126` connects to that Unix
+- `/plugins/claudemux/src/engines/codex/rpc.ts:126` connects to that Unix
   socket using WebSocket-over-Unix (`ws+unix://...`).
-- `/plugins/claudemux/core/src/engines/codex/engine.ts:929` initializes the
+- `/plugins/claudemux/src/engines/codex/engine.ts:929` initializes the
   app-server connection with `clientInfo.name = "claudemux"`.
 
 The transport is not stdio. claudemux already uses Codex's Unix-socket
@@ -273,7 +273,7 @@ Implementation path:
 - Add a Codex engine mode that discovers
   `$CODEX_HOME/app-server-control/app-server-control.sock`.
 - If the socket is live, use the existing
-  `/plugins/claudemux/core/src/engines/codex/rpc.ts` WebSocket-over-Unix
+  `/plugins/claudemux/src/engines/codex/rpc.ts` WebSocket-over-Unix
   client against that socket.
 - If the socket is absent, either:
   - fail with a clear diagnostic, or
@@ -463,7 +463,7 @@ Why:
 - It uses the upstream multi-client app-server behavior directly instead of
   adding a fanout layer.
 - It has the smallest claudemux transport change because
-  `/plugins/claudemux/core/src/engines/codex/rpc.ts` already speaks
+  `/plugins/claudemux/src/engines/codex/rpc.ts` already speaks
   WebSocket-over-Unix.
 - It tests the exact user goal: joining the existing Desktop/VS Code network.
 - It can preserve the current per-teammate daemon mode as a stable fallback.
@@ -519,7 +519,7 @@ The first implementation should be narrow and reversible:
 - Discover the official socket from Codex home using the upstream default:
   `$CODEX_HOME/app-server-control/app-server-control.sock`.
 - Reuse the existing
-  `/plugins/claudemux/core/src/engines/codex/rpc.ts` client against that
+  `/plugins/claudemux/src/engines/codex/rpc.ts` client against that
   socket.
 - Store per-teammate thread IDs and metadata, but mark the daemon as external
   so `tm kill <name>` does not kill the shared app-server.

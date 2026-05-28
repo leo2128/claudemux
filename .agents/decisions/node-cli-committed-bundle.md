@@ -2,7 +2,7 @@
 
 - **Status:** Superseded by [zero-install-type-stripping](./zero-install-type-stripping.md)
 - **Date:** 2026-05-23
-- **Affects:** the **`next`** line's production install path — [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm), `plugins/claudemux/core/dist/cli.mjs`, the `claudemux-core` CI job. Made when stage 3c retired the bash `bin/tm` ([roadmap](/.agents/domains/node-cli-orchestrator.md) §8).
+- **Affects:** the **`next`** line's production install path — [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm), `plugins/claudemux/dist/cli.mjs`, the `claudemux-core` CI job. Made when stage 3c retired the bash `bin/tm` ([roadmap](/.agents/domains/node-cli-orchestrator.md) §8).
 
 ## Context
 

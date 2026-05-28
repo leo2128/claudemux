@@ -1,6 +1,6 @@
 # Multi-engine `tm` architecture (claude-side draft)
 
-A target shape for `claudemux/plugins/claudemux/core/` once `tm` is no
+A target shape for `claudemux/plugins/claudemux/` once `tm` is no
 longer a single monoblob. This draft answers the user's brief: where
 the seams should live, what the directory tree should look like to its
 last file, and what shape `Engine` must hold so a third or fourth TUI
@@ -177,7 +177,7 @@ one engine. **No layer above the engine impl says the word "tmux" or
 ## Target directory tree, to its last file
 
 ```text
-claudemux/plugins/claudemux/core/
+claudemux/plugins/claudemux/
 ├── bin/
 │   └── tm                                   # dev launcher, runs main.ts under tsx (unchanged from today)
 ├── package.json

@@ -9,18 +9,18 @@ a Claude Code session.
 
 On the `next` line `tm` is a small bash launcher at
 [`/plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) that `exec`s `node`
-against [`/plugins/claudemux/core/src/main.ts`](/plugins/claudemux/core/src/main.ts)
+against [`/plugins/claudemux/src/main.ts`](/plugins/claudemux/src/main.ts)
 through `--experimental-transform-types`, with a tiny resolve hook
-([`core/resolver-register.mjs`](/plugins/claudemux/core/resolver-register.mjs)
-+ [`core/resolver.mjs`](/plugins/claudemux/core/resolver.mjs)) so the
+([`resolver-register.mjs`](/plugins/claudemux/resolver-register.mjs)
++ [`resolver.mjs`](/plugins/claudemux/resolver.mjs)) so the
 type-stripper accepts the tree's extension-less and `.js` import
 specifiers. There is no build step and no `node_modules/` lookup — the one
 runtime npm dependency, `ws`, is vendored under
-[`core/third_party/ws/`](/plugins/claudemux/core/third_party/ws/) and
-consumed via the `#ws` subpath in the core `package.json` `imports` map.
+[`third_party/ws/`](/plugins/claudemux/third_party/ws/) and
+consumed via the `#ws` subpath in the plugin's `package.json` `imports` map.
 
 The TypeScript source lives under
-[`/plugins/claudemux/core/src/`](/plugins/claudemux/core/src); see
+[`/plugins/claudemux/src/`](/plugins/claudemux/src); see
 [components/claudemux-core.md](/.agents/components/claudemux-core.md) for the
 module layout. The full rationale (including which alternatives lost) is in
 [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md),
@@ -34,7 +34,7 @@ The historical Bash `bin/tm` was retired in stage 3c — see
 
 `tm --help` is the verb index; `tm <verb> --help` is the per-verb flag and
 output contract. The help text lives in
-[`core/src/help.ts`](/plugins/claudemux/core/src/help.ts) — one
+[`src/help.ts`](/plugins/claudemux/src/help.ts) — one
 `HELP_TEXTS[verb]` entry per verb plus `OVERVIEW_HELP`. Reviewers see help
 changes as `help.ts` diffs in the same commit that changes the verb's
 behavior. The shipped help is authoritative; never reconstruct a verb's
@@ -62,7 +62,7 @@ protocol. Each has its own decision record — see
 - **Never concatenate a protocol path by hand.** Every `/tmp/teammate-*`,
   `/tmp/claude-idle/*`, or `~/.claude/projects/<encoded>/...` path is built
   by a named builder in
-  [`core/src/persistence/paths.ts`](/plugins/claudemux/core/src/persistence/paths.ts)
+  [`src/persistence/paths.ts`](/plugins/claudemux/src/persistence/paths.ts)
   (the matching bash hooks mirror the builder inline). Add a builder rather
   than inlining a string.
 - **Cross-platform binaries.** The remaining bash surface (hooks, the launcher,
@@ -71,7 +71,7 @@ protocol. Each has its own decision record — see
   and `grep` rather than reimplementing them — those binaries' platform
   behavior is the contract the migration preserves.
 - **One source of truth for the project-dir encoding** —
-  `encodeProjectDir` in `core/src/persistence/paths.ts` folds every
+  `encodeProjectDir` in `src/persistence/paths.ts` folds every
   non-`[A-Za-z0-9-]` character to `-`, matching Claude Code's real rule.
   The hooks reproduce the same rule inline (a `tr` invocation); never extend
   either site without updating the other.

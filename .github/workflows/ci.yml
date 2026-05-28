@@ -63,7 +63,7 @@ jobs:
           while IFS= read -r c; do
             [ -z "$c" ] && continue
             email=$(git log -1 --format='%ae' "$c")
-            bin/check-author "$email" || { echo "  ^ in commit $c" >&2; fail=1; }
+            scripts/check-author "$email" || { echo "  ^ in commit $c" >&2; fail=1; }
           done <<< "$commits"
           [ "$fail" = 0 ] || { echo "::error::commit author email check failed"; exit 1; }
 
@@ -88,11 +88,10 @@ jobs:
         run: |
           shellcheck \
             plugins/claudemux/bin/tm \
-            plugins/claudemux/core/test/fixtures/fake-tmux-bin/tmux \
-            plugins/claudemux/core/scripts/*.sh \
+            plugins/claudemux/test/fixtures/fake-tmux-bin/tmux \
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
-            bin/check-author \
+            scripts/check-author \
             .githooks/pre-commit \
             .agents/scripts/check.sh
 
@@ -160,14 +159,13 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: pnpm exec vitest run --config vitest.live.config.ts
 
-  # The orchestration core (the `next` line, 1.0.0-beta.0) is a Node/TypeScript
-  # project with its own unit suite. Like feishu-channel it runs in a separate
-  # job so its toolchain stays off the bats + shellcheck lane above. It runs
-  # on both OSes because the native verbs themselves still shell out to
-  # platform-sensitive binaries (`tm states` / `tm history` pipe through
-  # `column`; `tm history`'s detail view formats a timestamp with BSD `date
-  # -r`, so its detail-mode scenarios are macOS-gated in the harness).
-  claudemux-core:
+  # The claudemux plugin's TypeScript suite. Runs in a separate job from the
+  # bats + shellcheck lane above so the Node toolchain stays off that lane.
+  # Both OSes because the native verbs still shell out to platform-sensitive
+  # binaries (`tm states` / `tm history` pipe through `column`; `tm history`'s
+  # detail view formats a timestamp with BSD `date -r`, so its detail-mode
+  # scenarios are macOS-gated in the harness).
+  claudemux-node:
     strategy:
       fail-fast: false
       matrix:
@@ -179,16 +177,18 @@ jobs:
         # actually upgrade to.
         node-version: ['22.7.0', '22']
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: plugins/claudemux/core
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
 
       - name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: pnpm
 
       # Native `tm states` and `tm history` pipe through the real `column`
       # binary, and `tm ctx` / `tm history` parse jsonl transcripts as JSON.
@@ -199,20 +199,22 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq bsdextrautils
 
       # The runtime has no npm dependencies (`ws` is vendored under
-      # `third_party/ws/`); `npm ci` here only installs dev tooling
-      # (typescript, vitest, @types/*) so typecheck and the unit suite can
-      # run. The launcher itself never reads `node_modules/`.
+      # `third_party/ws/`); this install only fetches dev tooling (typescript,
+      # vitest, @types/*) so typecheck and the unit suite can run. The
+      # launcher itself never reads `node_modules/`.
       - name: Install dev dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Versions
         run: node --version
 
       - name: Type-check
-        run: npm run typecheck
+        working-directory: plugins/claudemux
+        run: pnpm run typecheck
 
       - name: Dead-code lint
-        run: npm run lint:dead-code
+        working-directory: plugins/claudemux
+        run: pnpm run lint:dead-code
 
       # The codex app-server protocol bindings under `src/codex-protocol/`
       # are emitted by `codex app-server generate-ts --experimental`. They
@@ -233,12 +235,14 @@ jobs:
         # `--experimental` matches how the directory was generated; without
         # it the experimental methods (turn/*, thread/*, etc) would drop
         # out of the output and the diff would always be red.
+        working-directory: plugins/claudemux
         run: |
           codex app-server generate-ts --experimental --out src/codex-protocol/
           git diff --exit-code -- src/codex-protocol/
 
       - name: Unit tests
-        run: npm test
+        working-directory: plugins/claudemux
+        run: pnpm test
 
       # Smoke-test the user-facing launcher itself: it must boot through
       # Node's type-transform pipeline against the vendored sources without
@@ -246,9 +250,10 @@ jobs:
       # so a regression that quietly resolves `ws` instead of `#ws` is
       # caught here rather than at install time on a real user's machine.
       - name: tm launcher boots without runtime deps
+        working-directory: plugins/claudemux
         run: |
           mv node_modules .node_modules_hidden
-          if ! ../bin/tm --help >/dev/null; then
+          if ! ./bin/tm --help >/dev/null; then
             mv .node_modules_hidden node_modules
             exit 1
           fi

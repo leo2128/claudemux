@@ -8,9 +8,9 @@
  * The path the "tm executable" section reports is the
  * `<plugin-root>/bin/tm` launcher. The caller passes the resolved
  * paths in (`tmWrapper`, `pluginJson`) because the relative-`../..`
- * computation has to be done from a `core/src/*.ts` file at depth two
- * inside `core/` — engines/claude/doctor.ts sits two directories deeper,
- * so the math does not work from here.
+ * computation has to be done from a `src/*.ts` file at depth one
+ * inside the plugin root — engines/claude/doctor.ts sits three
+ * directories deeper, so the math does not work from here.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'

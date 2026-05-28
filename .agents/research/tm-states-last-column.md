@@ -1,7 +1,7 @@
 # `tm states` LAST column audit
 
 Date: 2026-05-25
-Scope: `plugins/claudemux/core/src/verbs/states.ts`, Claude engine listing
+Scope: `plugins/claudemux/src/verbs/states.ts`, Claude engine listing
 extras, Codex rollout-backed listing extras.
 Status: audited and implemented option B in this branch.
 
@@ -11,10 +11,10 @@ Status: audited and implemented option B in this branch.
 engine's `list(ctx.engineContext)` and renders five columns from each
 `TeammateListing.extras` map:
 
-- `plugins/claudemux/core/src/verbs/states.ts:35` to
-  `plugins/claudemux/core/src/verbs/states.ts:37` collect all engine listings.
-- `plugins/claudemux/core/src/verbs/states.ts:41` to
-  `plugins/claudemux/core/src/verbs/states.ts:49` render `REPO SID BUSY LAST
+- `plugins/claudemux/src/verbs/states.ts:35` to
+  `plugins/claudemux/src/verbs/states.ts:37` collect all engine listings.
+- `plugins/claudemux/src/verbs/states.ts:41` to
+  `plugins/claudemux/src/verbs/states.ts:49` render `REPO SID BUSY LAST
   PREVIEW`, with `LAST` coming from `extras['last']`.
 
 That means the LAST column's cross-engine semantics are owned by each engine's
@@ -27,14 +27,14 @@ Claude LAST means "byte size and age of the current session's non-empty
 
 Construction path:
 
-- `plugins/claudemux/core/src/engines/claude/claude-engine.ts:210` to
-  `plugins/claudemux/core/src/engines/claude/claude-engine.ts:220` samples one
+- `plugins/claudemux/src/engines/claude/claude-engine.ts:210` to
+  `plugins/claudemux/src/engines/claude/claude-engine.ts:220` samples one
   `now` value per `ClaudeEngine.list()` call.
-- `plugins/claudemux/core/src/engines/claude/claude-engine.ts:231` to
-  `plugins/claudemux/core/src/engines/claude/claude-engine.ts:243` delegates to
+- `plugins/claudemux/src/engines/claude/claude-engine.ts:231` to
+  `plugins/claudemux/src/engines/claude/claude-engine.ts:243` delegates to
   `listingExtras(name, now)` and copies `extras.last` into the row.
-- `plugins/claudemux/core/src/engines/claude/state.ts:103` to
-  `plugins/claudemux/core/src/engines/claude/state.ts:120` reads the teammate's
+- `plugins/claudemux/src/engines/claude/state.ts:103` to
+  `plugins/claudemux/src/engines/claude/state.ts:120` reads the teammate's
   sid, stats `<sid>.last`, renders `${stat.size}B/${fmtAge(now - mtime)}`, and
   derives PREVIEW from the same file.
 - The hook writer is `plugins/claudemux/hooks/on-stop.sh:233` to
@@ -51,26 +51,26 @@ assistant-visible text in the rollout JSONL."
 
 Construction path after this branch:
 
-- `plugins/claudemux/core/src/engines/codex/engine.ts:716` to
-  `plugins/claudemux/core/src/engines/codex/engine.ts:725` reads the current
+- `plugins/claudemux/src/engines/codex/engine.ts:716` to
+  `plugins/claudemux/src/engines/codex/engine.ts:725` reads the current
   daemon thread id and its rollout snapshot.
-- `plugins/claudemux/core/src/engines/codex/rollout.ts:214` to
-  `plugins/claudemux/core/src/engines/codex/rollout.ts:237` accepts
+- `plugins/claudemux/src/engines/codex/rollout.ts:214` to
+  `plugins/claudemux/src/engines/codex/rollout.ts:237` accepts
   assistant-visible rollout entries: snake `agent_message`, camel
   `agentMessage`, assistant `message` response items, and nested
   `payload.item.agentMessage`, limited to `final_answer` or `commentary`.
-- `plugins/claudemux/core/src/engines/codex/rollout.ts:240` to
-  `plugins/claudemux/core/src/engines/codex/rollout.ts:245` parses the matching
+- `plugins/claudemux/src/engines/codex/rollout.ts:240` to
+  `plugins/claudemux/src/engines/codex/rollout.ts:245` parses the matching
   entry's `timestamp`.
-- `plugins/claudemux/core/src/engines/codex/rollout.ts:315` to
-  `plugins/claudemux/core/src/engines/codex/rollout.ts:334` keeps the latest
+- `plugins/claudemux/src/engines/codex/rollout.ts:315` to
+  `plugins/claudemux/src/engines/codex/rollout.ts:334` keeps the latest
   matching assistant text plus that exact entry timestamp.
-- `plugins/claudemux/core/src/engines/codex/engine.ts:368` to
-  `plugins/claudemux/core/src/engines/codex/engine.ts:377` renders LAST from
+- `plugins/claudemux/src/engines/codex/engine.ts:368` to
+  `plugins/claudemux/src/engines/codex/engine.ts:377` renders LAST from
   the text byte length and the assistant timestamp age, falling back to rollout
   file mtime only when the assistant entry has no parseable timestamp.
-- `plugins/claudemux/core/src/engines/codex/engine.ts:381` to
-  `plugins/claudemux/core/src/engines/codex/engine.ts:400` places those cells
+- `plugins/claudemux/src/engines/codex/engine.ts:381` to
+  `plugins/claudemux/src/engines/codex/engine.ts:400` places those cells
   into `extras.last` and `extras.preview`.
 
 Before this branch, the Codex LAST size and PREVIEW were already based on the
@@ -123,8 +123,8 @@ Option C: redefine LAST as "last engine activity" for both engines.
 
 Choose option B. The table already labels the adjacent column PREVIEW, and the
 help text describes LAST as "size + age of the last assistant reply"
-(`plugins/claudemux/core/src/help.ts:65` to
-`plugins/claudemux/core/src/help.ts:71`). Keeping LAST tied to the same
+(`plugins/claudemux/src/help.ts:65` to
+`plugins/claudemux/src/help.ts:71`). Keeping LAST tied to the same
 assistant-visible text gives users one cross-engine mental model:
 
 `LAST = bytes and age of the reply shown in PREVIEW; "-" means no current-thread

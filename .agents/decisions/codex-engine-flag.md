@@ -11,10 +11,10 @@
 
 [Decision codex-driver §1](/.agents/decisions/codex-driver.md) chose a **name
 prefix** as the fork: a teammate whose first positional matches `^codex-`
-routes into [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts);
+routes into [`plugins/claudemux/src/engines/codex/verbs.ts`](/plugins/claudemux/src/engines/codex/verbs.ts);
 every other name stays on the tmux + hooks path. The contract is enforced by
 `isCodexTarget(name)` and read at four sites in the dispatcher (then in
-`core/src/native.ts`; today in [`core/src/cli.ts`](/plugins/claudemux/core/src/cli.ts)
+`core/src/native.ts`; today in [`core/src/cli.ts`](/plugins/claudemux/src/cli.ts)
 at the heads of `spawn`, `send`, `wait`, `kill`) and in `codexAsk`'s pool
 filter.
 
@@ -76,7 +76,7 @@ The persistence does not need a new file:
   teammate's presence is observable as "any of those three exists".
 - **Codex teammates** already write `/tmp/teammate-codex/<name>/`
   (see
-  [`engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts)
+  [`engines/codex/persistence.ts`](/plugins/claudemux/src/engines/codex/persistence.ts)
   for the registry-directory builders). A codex teammate's presence is
   observable as "that directory exists".
 
@@ -85,7 +85,7 @@ roots. Engine identity falls out of "which registry holds the name", with
 no new state to add and no synchronisation between two stores to defend.
 
 To codify the mapping, a single resolver function in
-[`identity/router.ts`](/plugins/claudemux/core/src/identity/router.ts) replaces the four
+[`identity/router.ts`](/plugins/claudemux/src/identity/router.ts) replaces the four
 `isCodexTarget(name)` call sites:
 
 ```ts
@@ -162,7 +162,7 @@ This rule is enforced by §2's resolver returning non-null.
 
 ### 5. `tm ask` selects by engine, not by name prefix
 
-`codexAsk` ([`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts))
+`codexAsk` ([`plugins/claudemux/src/engines/codex/verbs.ts`](/plugins/claudemux/src/engines/codex/verbs.ts))
 filters `listDaemons()` with `isCodexTarget`. Under §2, every entry that
 `listDaemons()` returns lives under `codexTeammateDir(name)`, so the filter
 is **vacuous** — every entry is already engine=codex. The filter is deleted

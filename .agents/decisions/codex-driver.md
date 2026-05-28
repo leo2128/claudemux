@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-05-23
 - **Affects:** the `next` line (`1.0.0-beta.0`) — the `tm` CLI, the new
-  `codex-*` modules under [`core/src/`](/plugins/claudemux/core/), the new
+  `codex-*` modules under [`core/src/`](/plugins/claudemux/), the new
   `codex-protocol/` vendored bindings, the `live-codex.itest.ts` suite, the
   doctor verb, the (re-introduced) `tm ask` verb.
 
@@ -42,7 +42,7 @@ explicit record.
 
 `tm spawn`, `tm send`, `tm wait`, and `tm kill` grow a one-line guard at the
 head: if the first positional matches `^codex-`, the verb delegates to
-[`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts); otherwise the
+[`plugins/claudemux/src/engines/codex/verbs.ts`](/plugins/claudemux/src/engines/codex/verbs.ts); otherwise the
 tmux path runs unchanged. Flags that are tmux-bound (`--pane-quiet`,
 `--timeout`, the `tm send --no-wait` semantics) are rejected explicitly on
 the codex side rather than silently accepted, because silent acceptance
@@ -58,13 +58,13 @@ The codex CLI ships its protocol bindings as an *official* TypeScript
 emit:
 
 ```
-codex app-server generate-ts --experimental --out plugins/claudemux/core/src/codex-protocol/
+codex app-server generate-ts --experimental --out plugins/claudemux/src/codex-protocol/
 ```
 
 That output — 587 files, ~2.4 MB, marked `linguist-generated=true` so GitHub
 diffs collapse it by default — is committed to the repo as ground truth.
 The schema test
-([`codex-schema.test.ts`](/plugins/claudemux/core/test/codex-schema.test.ts))
+([`codex-schema.test.ts`](/plugins/claudemux/test/codex-schema.test.ts))
 pins the *envelope* shape (the `{ id, result }` / `{ method, params }` shapes,
 the absence of the JSON-RPC `jsonrpc` field) against a captured fixture; the
 *field* shape is pinned by the vendored types themselves through tsc.
@@ -149,8 +149,8 @@ report-only character of doctor is preserved for everything else.
   level — does the wire shape still match `codex-schema.test.ts`'s
   fixture? — before deeper layers.
 - **Daemon supervision is an explicit, on-disk protocol.** Decision node-cli-orchestrator's intent (no in-memory registry) is realized in
-  [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts)'s named builders
-  and [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts).
+  [`plugins/claudemux/src/engines/codex/persistence.ts`](/plugins/claudemux/src/engines/codex/persistence.ts)'s named builders
+  and [`plugins/claudemux/src/engines/codex/supervisor.ts`](/plugins/claudemux/src/engines/codex/supervisor.ts).
   A spawn that fails its readiness probe rolls the entry back; a process
   crash before unwind leaves a dead-pid orphan, and doctor reaps it on
   the next pass. There is no "in-flight half-spawned" state to handle
@@ -162,7 +162,7 @@ report-only character of doctor is preserved for everything else.
 - **The integration suite is the production verifier.** Both the smoke
   slice (no model spend) and the turn-spending slice (opt-in via
   `CLAUDEMUX_CODEX_SPEND_TOKENS=1`) live under
-  [`test/integration/codex.itest.ts`](/plugins/claudemux/core/test/integration/codex.itest.ts).
+  [`test/integration/codex.itest.ts`](/plugins/claudemux/test/integration/codex.itest.ts).
   CI cannot run either — no codex install, no auth — so the merge bar
   for codex-touching PRs is **CI green + a reported live run**, matching
   the live-claude pattern already established by

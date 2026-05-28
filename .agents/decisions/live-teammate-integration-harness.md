@@ -2,11 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-23
-- **Affects:** the **`next`** line's test surface — [`core/test/integration/`](/plugins/claudemux/core/test/integration), [`core/vitest.integration.config.ts`](/plugins/claudemux/core/vitest.integration.config.ts). This is the harness the hot-path verb migration ([roadmap](/.agents/domains/node-cli-orchestrator.md) stage 3) is gated on; it lands first, ahead of that migration.
+- **Affects:** the **`next`** line's test surface — [`core/test/integration/`](/plugins/claudemux/test/integration), [`core/vitest.integration.config.ts`](/plugins/claudemux/vitest.integration.config.ts). This is the harness the hot-path verb migration ([roadmap](/.agents/domains/node-cli-orchestrator.md) stage 3) is gated on; it lands first, ahead of that migration.
 
 ## Context
 
-The conformance harness ([`core/test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts))
+The conformance harness ([`core/test/conformance.test.ts`](/plugins/claudemux/test/conformance.test.ts))
 pins the migrated verbs to `tm`'s behavior with a *faked* tmux and no `claude`
 process. It cannot reach the racy hot path — `spawn`, `send`, `wait`,
 `compact`, `resume` — whose correctness is the interaction of `tmux send-keys`,
@@ -37,8 +37,8 @@ Standing up a real teammate surfaced two non-obvious facts, found empirically:
 ## Decision
 
 Live-teammate integration tests live in
-[`core/test/integration/`](/plugins/claudemux/core/test/integration), run under
-a dedicated [`vitest.integration.config.ts`](/plugins/claudemux/core/vitest.integration.config.ts),
+[`core/test/integration/`](/plugins/claudemux/test/integration), run under
+a dedicated [`vitest.integration.config.ts`](/plugins/claudemux/vitest.integration.config.ts),
 and are named `*.itest.ts` so the default `npm test` (and CI) never discover
 them. The suite is test-only — it adds no production code.
 
@@ -81,7 +81,7 @@ them. The suite is test-only — it adds no production code.
   rather than red on a machine that cannot host it.
 - **Enforcement.** The harness's `~/.claude.json` transforms — the part that
   mutates a shared user file — are pure functions unit-tested in
-  [`harness.test.ts`](/plugins/claudemux/core/test/integration/harness.test.ts),
+  [`harness.test.ts`](/plugins/claudemux/test/integration/harness.test.ts),
   which `npm test` and CI do run. The live suite itself is the regression net
   for the hot-path verbs the conformance harness cannot reach.
 
@@ -90,4 +90,4 @@ them. The suite is test-only — it adds no production code.
 - [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) — the migration roadmap; the hot-path verbs are stage 3, gated on this harness.
 - [components/claudemux-core.md](/.agents/components/claudemux-core.md) — the `core/` package and its two test surfaces (conformance and live-teammate).
 - [decision node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) — the Node-CLI pivot whose stage-3 verb migration this harness exists to gate.
-- [`core/test/integration/README.md`](/plugins/claudemux/core/test/integration/README.md) — how to run the suite and its prerequisites.
+- [`core/test/integration/README.md`](/plugins/claudemux/test/integration/README.md) — how to run the suite and its prerequisites.

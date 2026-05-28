@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-23
-- **Affects:** the **`next`** line (version line `1.0.0-beta.0`) — [`bin/tm`](/plugins/claudemux/bin/tm), the [`core/`](/plugins/claudemux/core) TypeScript package, the runtime (Bun → Node), and the Codex teammate integration. **Supersedes [decision mcp-native-orchestration-core](/.agents/decisions/mcp-native-orchestration-core.md).**
+- **Affects:** the **`next`** line (version line `1.0.0-beta.0`) — [`bin/tm`](/plugins/claudemux/bin/tm), the TypeScript orchestration code under [`src/`](/plugins/claudemux/src), the runtime (Bun → Node), and the Codex teammate integration. **Supersedes [decision mcp-native-orchestration-core](/.agents/decisions/mcp-native-orchestration-core.md).**
 
 ## Context
 
@@ -11,7 +11,7 @@ a resident, **MCP-native orchestration core** to replace `tm`, with per-agent
 teammate drivers. Its strangler migration was under way and had reached Phase
 B: 11 of 17 `tm` verbs were reimplemented as native TypeScript inside the core
 (then in `core/src/native.ts`; now split per-engine under
-[`core/src/engines/claude/`](/plugins/claudemux/core/src/engines/claude)).
+[`core/src/engines/claude/`](/plugins/claudemux/src/engines/claude)).
 
 With the implementation in hand and the Codex integration being scoped, two
 properties of the MCP-native shape became load-bearing — and a third, separate,

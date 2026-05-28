@@ -1,13 +1,30 @@
 {
   "name": "claudemux",
   "version": "1.0.0-beta.16",
+  "description": "Multi-repo Claude Code orchestrator — `tm` CLI plus the dispatcher skill, hooks, and templates the plugin ships.",
   "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "imports": {
+    "#ws": "./third_party/ws/wrapper.mjs"
+  },
   "scripts": {
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-plugin-version.mjs",
-    "version-ga": "changeset pre exit && changeset version && node scripts/sync-plugin-version.mjs"
+    "version-ga": "changeset pre exit && changeset version && node scripts/sync-plugin-version.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint:dead-code": "node scripts/check-dead-code.mjs"
   },
   "devDependencies": {
-    "@changesets/cli": "2.31.0"
+    "@changesets/cli": "2.31.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "knip": "5.80.2",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
   }
 }

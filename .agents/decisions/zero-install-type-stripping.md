@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-05-24
 - **Supersedes:** [node-cli-committed-bundle](./node-cli-committed-bundle.md)
-- **Affects:** [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm), [`plugins/claudemux/core/src/`](/plugins/claudemux/core/src/), [`plugins/claudemux/core/third_party/`](/plugins/claudemux/core/third_party/), the `claudemux-core` CI job.
+- **Affects:** [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm), [`plugins/claudemux/src/`](/plugins/claudemux/src/), [`plugins/claudemux/third_party/`](/plugins/claudemux/third_party/), the `claudemux-core` CI job.
 
 ## Context
 
@@ -27,7 +27,7 @@ Two facts shifted what [node-cli-committed-bundle](./node-cli-committed-bundle.m
   parameter properties — which our TypeScript classes such as
   `ProductionTeammateRouter` use.
 - **The orchestration core has one runtime npm dependency: `ws`.** Every
-  other import in [`core/src/`](/plugins/claudemux/core/src/) is either
+  other import in [`core/src/`](/plugins/claudemux/src/) is either
   a `node:` built-in or a relative path. Vendoring one package is a
   one-time cost; vendoring an open-ended dependency graph would not be.
 
@@ -41,13 +41,13 @@ Two facts shifted what [node-cli-committed-bundle](./node-cli-committed-bundle.m
   `--no-warnings` suppresses the per-launch `ExperimentalWarning` Node
   prints for the transform flag; nothing else relies on Node warnings, so
   the trade is clean.
-- [`plugins/claudemux/core/resolver.mjs`](/plugins/claudemux/core/resolver.mjs)
-  + [`resolver-register.mjs`](/plugins/claudemux/core/resolver-register.mjs)
+- [`plugins/claudemux/resolver.mjs`](/plugins/claudemux/resolver.mjs)
+  + [`resolver-register.mjs`](/plugins/claudemux/resolver-register.mjs)
   — a ~50-line ESM resolve hook that lets Node's TypeScript pipeline
   accept the extension-less and `.js` import specifiers already present in
   the tree. The hook is mounted only by the launcher; vitest's own
   resolver handles the same shapes for the test suite.
-- [`plugins/claudemux/core/third_party/ws/`](/plugins/claudemux/core/third_party/ws/)
+- [`plugins/claudemux/third_party/ws/`](/plugins/claudemux/third_party/ws/)
   — the upstream `ws@8.21.0` runtime files (MIT), committed verbatim with
   `LICENSE` and an `UPSTREAM.md` describing the update procedure.
 - The core `package.json` declares `"imports": { "#ws": "./third_party/ws/wrapper.mjs" }`;

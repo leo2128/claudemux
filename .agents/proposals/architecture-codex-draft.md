@@ -18,7 +18,7 @@ business layer.
 
 ```mermaid
 flowchart TD
-  Main["claudemux/plugins/claudemux/core/src/main.ts"]
+  Main["claudemux/plugins/claudemux/src/main.ts"]
   Cli["CLI parser and help"]
   Verb["Verb layer"]
   Router["Engine router"]
@@ -280,7 +280,7 @@ Persistence is split by ownership:
 | `~/.claude/projects/<encoded>/...` | Claude Code | Claude history, ctx, memory |
 
 All paths above should be built by named functions under persistence modules.
-The current `claudemux/plugins/claudemux/core/src/paths.ts` mixes Claude hook
+The current `claudemux/plugins/claudemux/src/paths.ts` mixes Claude hook
 paths, Codex daemon paths, and project-dir encoding in one file; the better
 shape keeps the path-builder rule but splits it by store owner.
 
@@ -295,7 +295,7 @@ The core should stop using one `native.ts` as the place where every behavior
 lands. The proposed hand-authored tree is file-level and engine-extensible:
 
 ```text
-claudemux/plugins/claudemux/core/src/
+claudemux/plugins/claudemux/src/
   main.ts                         process entrypoint; argv/stdin to CLI result
   cli/dispatch.ts                 top-level CLI routing and help pre-scan
   cli/help.ts                     user-facing help strings for every verb
@@ -370,13 +370,13 @@ claudemux/plugins/claudemux/core/src/
   support/tm-binary.ts            resolve installed tm for integration harnesses
 ```
 
-`claudemux/plugins/claudemux/core/src/engines/codex/protocol/` is generated
+`claudemux/plugins/claudemux/src/engines/codex/protocol/` is generated
 from `codex app-server generate-ts --experimental`. Its leaf files are not
 hand-authored architecture surfaces; every file in that directory is an
 upstream app-server type binding and should be regenerated, not edited. The
 only hand-authored file that imports it directly is the Codex engine family,
-starting at `claudemux/plugins/claudemux/core/src/engines/codex/codex-json-rpc.ts`
-and `claudemux/plugins/claudemux/core/src/engines/codex/codex-threads.ts`.
+starting at `claudemux/plugins/claudemux/src/engines/codex/codex-json-rpc.ts`
+and `claudemux/plugins/claudemux/src/engines/codex/codex-threads.ts`.
 
 The production shell launcher remains
 `claudemux/plugins/claudemux/bin/tm`. It should stay a shim that resolves the
@@ -417,12 +417,12 @@ or infer engines from names.
 
 Adding `gemini` or `cursor` should require:
 
-- one new directory under `claudemux/plugins/claudemux/core/src/engines/<engine>/`
+- one new directory under `claudemux/plugins/claudemux/src/engines/<engine>/`
   with `<engine>-engine.ts`, transport, event, liveness, and persistence files;
 - one `EngineId` entry in
-  `claudemux/plugins/claudemux/core/src/identity/engine-id.ts`;
+  `claudemux/plugins/claudemux/src/identity/engine-id.ts`;
 - one registration in
-  `claudemux/plugins/claudemux/core/src/engines/registry.ts`;
+  `claudemux/plugins/claudemux/src/engines/registry.ts`;
 - help text that lists the new value for `tm spawn <name> --engine <engine>`.
 
 It should not require new verb files, new CLI grammar outside `spawn`, a new

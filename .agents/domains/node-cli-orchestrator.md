@@ -13,7 +13,7 @@
 > **Versioning:** installed plugin metadata comes from
 > [`plugins/claudemux/.claude-plugin/plugin.json`](/plugins/claudemux/.claude-plugin/plugin.json);
 > core package metadata comes from
-> [`plugins/claudemux/core/package.json`](/plugins/claudemux/core/package.json).
+> [`plugins/claudemux/package.json`](/plugins/claudemux/package.json).
 > Feature-class changes still carry changeset fragments as described in
 > [decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
 
@@ -237,10 +237,10 @@ Stage 3 landed in three sub-stages:
   then, after the build/install gap surfaced for `git pull`-driven users,
   against the TypeScript sources directly through
   `--experimental-transform-types` with the vendored `ws` runtime under
-  [`core/third_party/`](/plugins/claudemux/core/third_party/) — see
+  [`core/third_party/`](/plugins/claudemux/third_party/) — see
   [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md).
   The conformance harness's bash oracle is replaced by per-scenario golden
-  JSON files under [`core/test/goldens/`](/plugins/claudemux/core/test/goldens),
+  JSON files under [`core/test/goldens/`](/plugins/claudemux/test/goldens),
   regenerated with `UPDATE_GOLDENS=1`.
 
 After stage 4 lands, this roadmap section is pruned in the same change.

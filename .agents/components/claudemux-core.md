@@ -1,9 +1,11 @@
 # Component: the orchestration core (the `next` line)
 
-The `core/` directory holds the TypeScript codebase of claudemux's **`next`**
-line — the `1.0.0` line developed in parallel with `main`'s 0.x. It
-lives at [`/plugins/claudemux/core/`](/plugins/claudemux/core), alongside the
-Bash plugin, and runs on **Node** (the test suite uses `vitest`).
+The TypeScript orchestration code for claudemux's **`next`** line — the
+`1.0.0` line developed in parallel with `main`'s 0.x — lives directly under
+[`/plugins/claudemux/`](/plugins/claudemux), in the plugin root alongside
+`bin/`, `hooks/`, `skills/`, `templates/`, and the `.claude-plugin/` manifest.
+The TypeScript sources are under [`src/`](/plugins/claudemux/src) and tests
+under [`test/`](/plugins/claudemux/test); the suite uses **vitest**.
 
 [Decision node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) set the
 shape: the `next` line's orchestrator is a **pure Node CLI** — `tm` rewritten
@@ -11,33 +13,33 @@ from the Bash script into TypeScript, invoked once per command, with no
 resident process and no MCP server. The architecture and the migration roadmap
 are the domain spec,
 [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md);
-this document is the **component** view — what the `core/` modules are and what
-contracts they hold.
+this document is the **component** view — what the orchestration modules are
+and what contracts they hold.
 
 > **Status — Phase 2a-3 routes teammate verbs through the Engine layer.**
 > All 18 `tm` verbs are implemented in TypeScript and dispatched by
-> [`cli/dispatch.ts`](/plugins/claudemux/core/src/cli/dispatch.ts); help text lives in
-> [`help.ts`](/plugins/claudemux/core/src/help.ts). The user-installed
+> [`cli/dispatch.ts`](/plugins/claudemux/src/cli/dispatch.ts); help text lives in
+> [`help.ts`](/plugins/claudemux/src/help.ts). The user-installed
 > [`bin/tm`](/plugins/claudemux/bin/tm) is a small bash launcher that
 > `exec`s `node` directly against
-> [`core/src/main.ts`](/plugins/claudemux/core/src/main.ts) under
+> [`src/main.ts`](/plugins/claudemux/src/main.ts) under
 > `--experimental-transform-types`; there is no build step and no
 > `npm install`. The vendored `ws` runtime under
-> [`core/third_party/ws/`](/plugins/claudemux/core/third_party/ws/) is the
-> only runtime dependency, reached through the `#ws` subpath in the core
-> `package.json` `imports` map. The conformance harness compares native
-> output to committed golden JSON files under
-> [`core/test/goldens/`](/plugins/claudemux/core/test/goldens).
+> [`third_party/ws/`](/plugins/claudemux/third_party/ws/) is the
+> only runtime dependency, reached through the `#ws` subpath in the
+> plugin's `package.json` `imports` map. The conformance harness compares
+> native output to committed golden JSON files under
+> [`test/goldens/`](/plugins/claudemux/test/goldens).
 >
 > [Decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md)
 > shapes the core around an `Engine` interface, a single `TeammateRecord`
 > JSON keyed by name, and a verb layer that fans out across engines. The
 > load-bearing infrastructure is shared persistence + identity modules
-> ([`persistence/`](/plugins/claudemux/core/src/persistence) and
-> [`identity/`](/plugins/claudemux/core/src/identity)), the `Engine` contract
-> ([`engines/`](/plugins/claudemux/core/src/engines)), concrete
+> ([`persistence/`](/plugins/claudemux/src/persistence) and
+> [`identity/`](/plugins/claudemux/src/identity)), the `Engine` contract
+> ([`engines/`](/plugins/claudemux/src/engines)), concrete
 > `ClaudeEngine` and `CodexEngine` implementations, and verb modules under
-> [`verbs/`](/plugins/claudemux/core/src/verbs). Teammate-targeted verbs
+> [`verbs/`](/plugins/claudemux/src/verbs). Teammate-targeted verbs
 > (`ls`, `states`, `status`, `kill`, `spawn`, `send`, `wait`, `compact`,
 > `resume`, `last`, `ctx`, `history`, `mem`, `reload`) route through
 > `verbs/<v>.ts` -> router / `EngineRegistry` -> engine. Dispatcher-only and
@@ -47,7 +49,7 @@ contracts they hold.
 > Codex teammates are driven by `CodexEngine`. `tm spawn <name> --engine codex`,
 > `tm send <name>`, `tm wait <name>`, `tm resume <name> [<thread-id>]`,
 > `tm kill <name>`, and Codex liveness verbs route through the generic verb layer and
-> [`plugins/claudemux/core/src/engines/codex/engine.ts`](/plugins/claudemux/core/src/engines/codex/engine.ts).
+> [`plugins/claudemux/src/engines/codex/engine.ts`](/plugins/claudemux/src/engines/codex/engine.ts).
 > `tm status`, `tm ls`, and `tm states` combine daemon registry health,
 > socket reachability, `thread/read` status when available, and recent
 > rollout writes; `tm states` renders LAST / PREVIEW from the current
@@ -66,29 +68,29 @@ contracts they hold.
 > Codex names with an explicit thread id, `verbs/resume.ts` uses the rollout
 > filename as the durable routing hint.
 > `tm ask "<prompt>"` uses
-> [`plugins/claudemux/core/src/engines/codex/ask.ts`](/plugins/claudemux/core/src/engines/codex/ask.ts).
+> [`plugins/claudemux/src/engines/codex/ask.ts`](/plugins/claudemux/src/engines/codex/ask.ts).
 > Daemon lifecycle lives in
-> [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts),
+> [`plugins/claudemux/src/engines/codex/supervisor.ts`](/plugins/claudemux/src/engines/codex/supervisor.ts),
 > the JSON-RPC client lives in
-> [`plugins/claudemux/core/src/engines/codex/rpc.ts`](/plugins/claudemux/core/src/engines/codex/rpc.ts),
+> [`plugins/claudemux/src/engines/codex/rpc.ts`](/plugins/claudemux/src/engines/codex/rpc.ts),
 > the optional Codex.app / VS Code UI IPC bridge lives in
-> [`plugins/claudemux/core/src/engines/codex/ipc-bridge.ts`](/plugins/claudemux/core/src/engines/codex/ipc-bridge.ts)
+> [`plugins/claudemux/src/engines/codex/ipc-bridge.ts`](/plugins/claudemux/src/engines/codex/ipc-bridge.ts)
 > and
-> [`plugins/claudemux/core/src/engines/codex/ui-ipc.ts`](/plugins/claudemux/core/src/engines/codex/ui-ipc.ts),
+> [`plugins/claudemux/src/engines/codex/ui-ipc.ts`](/plugins/claudemux/src/engines/codex/ui-ipc.ts),
 > event collection lives in
-> [`plugins/claudemux/core/src/engines/codex/events.ts`](/plugins/claudemux/core/src/engines/codex/events.ts),
+> [`plugins/claudemux/src/engines/codex/events.ts`](/plugins/claudemux/src/engines/codex/events.ts),
 > rollout readers live in
-> [`plugins/claudemux/core/src/engines/codex/rollout.ts`](/plugins/claudemux/core/src/engines/codex/rollout.ts),
+> [`plugins/claudemux/src/engines/codex/rollout.ts`](/plugins/claudemux/src/engines/codex/rollout.ts),
 > and Codex persistence paths live in
-> [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts).
+> [`plugins/claudemux/src/engines/codex/persistence.ts`](/plugins/claudemux/src/engines/codex/persistence.ts).
 > The wire schema is vendored as the output of
 > `codex app-server generate-ts --experimental` under
-> [`codex-protocol/`](/plugins/claudemux/core/src/codex-protocol) and pinned
+> [`codex-protocol/`](/plugins/claudemux/src/codex-protocol) and pinned
 > by a CI drift gate; see [decision codex-driver](/.agents/decisions/codex-driver.md).
 
 ## Module layout
 
-Every module under [`core/src/`](/plugins/claudemux/core/src) is small and
+Every module under [`src/`](/plugins/claudemux/src) is small and
 single-purpose; routing, verb code, and process wiring each have their own home.
 
 | Module | Role |
@@ -117,15 +119,15 @@ single-purpose; routing, verb code, and process wiring each have their own home.
 | `tmux.ts` | The `tmux` backend — `runTmux`, used by every verb that queries tmux. |
 | `column.ts` | The `column` backend — `runColumn` pipes tab-separated rows through `column -t` for table-rendering verbs. |
 | `grep.ts` | The `grep` backend — `runGrep` matches input against a regex with `grep -qE` for the `poll` verb. |
-| [`plugins/claudemux/core/src/engines/codex/engine.ts`](/plugins/claudemux/core/src/engines/codex/engine.ts) | `CodexEngine implements Engine`: spawn/send/wait/list/status/kill/resume/last/ctx/history, with `send` / `wait` returning final assistant text on stdout and storing the raw app-server Turn envelope for `tm last --verbose`, `resume` relaunching a daemon by explicit thread id or by Codex `thread/list` latest-thread selection, `history` listing rollout-backed thread ids by cwd, `list` and `status` probing daemon health plus Codex thread status, and structured not-supported results for capabilities Codex does not expose. |
-| [`plugins/claudemux/core/src/engines/codex/verbs.ts`](/plugins/claudemux/core/src/engines/codex/verbs.ts) | Compatibility re-export surface for Codex-specific callers and tests. Implementation lives in `ask.ts`, `verb-lifecycle.ts`, `verb-turns.ts`, `verb-state.ts`, and `verb-common.ts`; the main teammate-targeted CLI dispatch goes through `verbs/<v>.ts` and the Engine registry. |
-| [`plugins/claudemux/core/src/engines/codex/supervisor.ts`](/plugins/claudemux/core/src/engines/codex/supervisor.ts) | Per-teammate daemon lifecycle — `spawnDaemon`, `daemonAlive`, `readDaemonState`, `listDaemons`, `reapDaemon`, and the per-call bookkeeping helpers. Owns spawn-detached, lock-based duplicate-spawn protection, the unix-socket readiness probe, optional UI IPC bridge process launch, and SIGTERM-then-SIGKILL reap. |
-| [`plugins/claudemux/core/src/engines/codex/rpc.ts`](/plugins/claudemux/core/src/engines/codex/rpc.ts) | The WebSocket JSON-RPC client. Routes incoming frames by envelope shape (`method+id+params` is a server-request, `method+params` is a notification, `id+result\|error` is a response), pinned by [`plugins/claudemux/core/test/codex-schema.test.ts`](/plugins/claudemux/core/test/codex-schema.test.ts). |
-| [`plugins/claudemux/core/src/engines/codex/ipc-bridge.ts`](/plugins/claudemux/core/src/engines/codex/ipc-bridge.ts), [`plugins/claudemux/core/src/engines/codex/ui-ipc.ts`](/plugins/claudemux/core/src/engines/codex/ui-ipc.ts) | Optional Codex UI live-sync bridge. It connects to `${TMPDIR}/codex-ipc/ipc-$(id -u).sock` when present, initializes as a UI IPC client, broadcasts `thread-stream-state-changed` snapshots for the teammate's active thread, rebroadcasts on new UI clients, and proxies supported `thread-follower-*` requests back to the teammate app-server. |
-| [`plugins/claudemux/core/src/engines/codex/events.ts`](/plugins/claudemux/core/src/engines/codex/events.ts) | Codex-private event collector. It subscribes to `item/completed`, `thread/tokenUsage/updated`, and `turn/completed`, filters by `threadId`, buckets by `turnId`, and returns a merged turn plus the latest token usage seen for that turn to the engine. |
-| [`plugins/claudemux/core/src/engines/codex/rollout.ts`](/plugins/claudemux/core/src/engines/codex/rollout.ts) | Read-only Codex rollout JSONL helpers. They locate `rollout-<timestamp>-<thread-id>.jsonl`, extract the latest assistant text and token count, and expose a short activity window used when live thread status is unavailable. |
-| [`plugins/claudemux/core/src/engines/codex/history.ts`](/plugins/claudemux/core/src/engines/codex/history.ts) | Codex `tm history` implementation. It scans rollout files by date directory, filters by recorded cwd, marks the live thread from `/tmp/teammate-codex/<name>/thread`, and renders list / detail output with a `tm resume <name> <thread-id>` line. |
-| [`plugins/claudemux/core/src/engines/codex/persistence.ts`](/plugins/claudemux/core/src/engines/codex/persistence.ts) | Codex teammate persistence builders: base-record helpers plus `/tmp/teammate-codex/<name>/pid`, `socket`, `thread`, `started-at`, `last-seen`, `stdout.log`, `stderr.log`, `ipc-bridge.pid`, `ipc-bridge.stdout.log`, `ipc-bridge.stderr.log`, `meta.json`, and atomically overwritten `last-turn.json`. |
+| [`plugins/claudemux/src/engines/codex/engine.ts`](/plugins/claudemux/src/engines/codex/engine.ts) | `CodexEngine implements Engine`: spawn/send/wait/list/status/kill/resume/last/ctx/history, with `send` / `wait` returning final assistant text on stdout and storing the raw app-server Turn envelope for `tm last --verbose`, `resume` relaunching a daemon by explicit thread id or by Codex `thread/list` latest-thread selection, `history` listing rollout-backed thread ids by cwd, `list` and `status` probing daemon health plus Codex thread status, and structured not-supported results for capabilities Codex does not expose. |
+| [`plugins/claudemux/src/engines/codex/verbs.ts`](/plugins/claudemux/src/engines/codex/verbs.ts) | Compatibility re-export surface for Codex-specific callers and tests. Implementation lives in `ask.ts`, `verb-lifecycle.ts`, `verb-turns.ts`, `verb-state.ts`, and `verb-common.ts`; the main teammate-targeted CLI dispatch goes through `verbs/<v>.ts` and the Engine registry. |
+| [`plugins/claudemux/src/engines/codex/supervisor.ts`](/plugins/claudemux/src/engines/codex/supervisor.ts) | Per-teammate daemon lifecycle — `spawnDaemon`, `daemonAlive`, `readDaemonState`, `listDaemons`, `reapDaemon`, and the per-call bookkeeping helpers. Owns spawn-detached, lock-based duplicate-spawn protection, the unix-socket readiness probe, optional UI IPC bridge process launch, and SIGTERM-then-SIGKILL reap. |
+| [`plugins/claudemux/src/engines/codex/rpc.ts`](/plugins/claudemux/src/engines/codex/rpc.ts) | The WebSocket JSON-RPC client. Routes incoming frames by envelope shape (`method+id+params` is a server-request, `method+params` is a notification, `id+result\|error` is a response), pinned by [`plugins/claudemux/test/codex-schema.test.ts`](/plugins/claudemux/test/codex-schema.test.ts). |
+| [`plugins/claudemux/src/engines/codex/ipc-bridge.ts`](/plugins/claudemux/src/engines/codex/ipc-bridge.ts), [`plugins/claudemux/src/engines/codex/ui-ipc.ts`](/plugins/claudemux/src/engines/codex/ui-ipc.ts) | Optional Codex UI live-sync bridge. It connects to `${TMPDIR}/codex-ipc/ipc-$(id -u).sock` when present, initializes as a UI IPC client, broadcasts `thread-stream-state-changed` snapshots for the teammate's active thread, rebroadcasts on new UI clients, and proxies supported `thread-follower-*` requests back to the teammate app-server. |
+| [`plugins/claudemux/src/engines/codex/events.ts`](/plugins/claudemux/src/engines/codex/events.ts) | Codex-private event collector. It subscribes to `item/completed`, `thread/tokenUsage/updated`, and `turn/completed`, filters by `threadId`, buckets by `turnId`, and returns a merged turn plus the latest token usage seen for that turn to the engine. |
+| [`plugins/claudemux/src/engines/codex/rollout.ts`](/plugins/claudemux/src/engines/codex/rollout.ts) | Read-only Codex rollout JSONL helpers. They locate `rollout-<timestamp>-<thread-id>.jsonl`, extract the latest assistant text and token count, and expose a short activity window used when live thread status is unavailable. |
+| [`plugins/claudemux/src/engines/codex/history.ts`](/plugins/claudemux/src/engines/codex/history.ts) | Codex `tm history` implementation. It scans rollout files by date directory, filters by recorded cwd, marks the live thread from `/tmp/teammate-codex/<name>/thread`, and renders list / detail output with a `tm resume <name> <thread-id>` line. |
+| [`plugins/claudemux/src/engines/codex/persistence.ts`](/plugins/claudemux/src/engines/codex/persistence.ts) | Codex teammate persistence builders: base-record helpers plus `/tmp/teammate-codex/<name>/pid`, `socket`, `thread`, `started-at`, `last-seen`, `stdout.log`, `stderr.log`, `ipc-bridge.pid`, `ipc-bridge.stdout.log`, `ipc-bridge.stderr.log`, `meta.json`, and atomically overwritten `last-turn.json`. |
 | `codex-protocol/` | Generated by `codex app-server generate-ts --experimental`. Treat as vendored ground truth; the CI drift gate (`Install codex CLI` + `codex-protocol not stale`) regenerates it on every push and asserts the diff is empty. |
 
 `tm` holds no state between invocations — a verb is one short-lived process.
@@ -136,8 +138,8 @@ marker protocol, and `~/.claude/projects`. See
 
 ## Verb dispatch
 
-`runCli` ([`cli/dispatch.ts`](/plugins/claudemux/core/src/cli/dispatch.ts),
-re-exported by [`cli.ts`](/plugins/claudemux/core/src/cli.ts)) is the one
+`runCli` ([`cli/dispatch.ts`](/plugins/claudemux/src/cli/dispatch.ts),
+re-exported by [`cli.ts`](/plugins/claudemux/src/cli.ts)) is the one
 place that routes one CLI invocation. The order:
 
 1. Bare `tm` → `OVERVIEW_HELP`, exit 0.
@@ -165,44 +167,44 @@ place that routes one CLI invocation. The order:
 6. Unknown verb → stderr line plus overview, exit 1.
 
 Every path produces the same `{code, stdout, stderr}` `TmResult`. The process
-entry in [`main.ts`](/plugins/claudemux/core/src/main.ts) writes that result
+entry in [`main.ts`](/plugins/claudemux/src/main.ts) writes that result
 to `process.stdout` / `process.stderr` and exits with its code.
 
 An engine method keeps its *logic* in the core but may still shell out to a
 session, presentation, or matching backend: Claude's tmux-querying methods
-reach `tmux` through [`tmux.ts`](/plugins/claudemux/core/src/tmux.ts); `states`
+reach `tmux` through [`tmux.ts`](/plugins/claudemux/src/tmux.ts); `states`
 pipes rows through the real `column -t`
-([`column.ts`](/plugins/claudemux/core/src/column.ts)); `poll` delegates its
-regex match to the real `grep -qE` ([`grep.ts`](/plugins/claudemux/core/src/grep.ts)).
+([`column.ts`](/plugins/claudemux/src/column.ts)); `poll` delegates its
+regex match to the real `grep -qE` ([`grep.ts`](/plugins/claudemux/src/grep.ts)).
 `column` and `grep` are not reimplemented in TypeScript — how `column` measures
 a field's width and what `grep -E`'s POSIX dialect matches are implementation-
 and platform-dependent, and the migration must preserve the installed binary's
 exact behavior. Process-launch shell-outs go through `spawnCapture`
-([`proc.ts`](/plugins/claudemux/core/src/proc.ts)), the one
+([`proc.ts`](/plugins/claudemux/src/proc.ts)), the one
 `node:child_process` primitive.
 
 ## The launcher
 
 [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) is a thin bash
 launcher that `exec`s `node --experimental-transform-types --no-warnings`
-directly against [`core/src/main.ts`](/plugins/claudemux/core/src/main.ts),
-with [`core/resolver-register.mjs`](/plugins/claudemux/core/resolver-register.mjs)
+directly against [`src/main.ts`](/plugins/claudemux/src/main.ts),
+with [`resolver-register.mjs`](/plugins/claudemux/resolver-register.mjs)
 mounting a small ESM resolve hook so the type-stripper accepts the tree's
 extension-less and `.js` import specifiers. There is no build step and no
 `node_modules/` lookup; the one runtime npm dependency, `ws`, is vendored
-under [`core/third_party/ws/`](/plugins/claudemux/core/third_party/ws/)
-and reached through the `#ws` subpath in the core `package.json` `imports`
-map. Source edits take effect on the next `tm` invocation. See
+under [`third_party/ws/`](/plugins/claudemux/third_party/ws/)
+and reached through the `#ws` subpath in the plugin's `package.json`
+`imports` map. Source edits take effect on the next `tm` invocation. See
 [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md)
 for the alternatives and the reasoning behind this shape.
 
 ## Native verbs and the conformance harness
 
 The **conformance harness**
-([`test/conformance.test.ts`](/plugins/claudemux/core/test/conformance.test.ts))
+([`test/conformance.test.ts`](/plugins/claudemux/test/conformance.test.ts))
 pins each native verb's behavior against a committed **golden** JSON file
 per scenario at
-[`test/goldens/<verb>/<slug>.json`](/plugins/claudemux/core/test/goldens). For
+[`test/goldens/<verb>/<slug>.json`](/plugins/claudemux/test/goldens). For
 each scenario the harness runs the native handler once and asserts its
 `{code, stdout, stderr}` matches the golden; a mutating verb (`kill`,
 `archive`, `reload`) additionally pins its post-state to a sibling
@@ -234,7 +236,7 @@ REPL, and the fake `tmux` does not model `send-keys` / `load-buffer` /
 *before* the tmux send path: argument parsing, validation errors, the
 `require_session` / `repo not found` paths, and other pre-send guardrails. The
 full round-trip is the
-[live-teammate suite's](/plugins/claudemux/core/test/integration) job.
+[live-teammate suite's](/plugins/claudemux/test/integration) job.
 
 `doctor` is migrated but not in the conformance harness: it reports the path
 to the *current* `tm` binary, which differs between the production launcher
@@ -243,7 +245,7 @@ verb's output structure.
 
 Help text and removed-verb migration messages are pinned by `cli.test.ts`'s
 assertions against `HELP_TEXTS` / `OVERVIEW_HELP` / `REMOVED_VERB_MESSAGES`
-in [`help.ts`](/plugins/claudemux/core/src/help.ts) — that module is itself
+in [`help.ts`](/plugins/claudemux/src/help.ts) — that module is itself
 the golden. A reviewer sees help changes as `help.ts` diffs in the same
 commit that changes the verb.
 
@@ -253,14 +255,14 @@ The conformance harness fakes tmux and runs no `claude`, so it cannot reach the
 racy hot path — `spawn`, `send`, `wait`, `compact`, `resume` — whose behavior
 is the interaction of `tmux send-keys`, a real REPL, the claudemux hooks, and
 the `/tmp/claude-idle` turn signal. The **live-teammate integration harness**
-([`test/integration/`](/plugins/claudemux/core/test/integration)) covers that
+([`test/integration/`](/plugins/claudemux/test/integration)) covers that
 gap: it spawns real `claude` teammates through `tm` and asserts the round-trips
 complete.
 
 It is opt-in — slow, and it needs a working Claude Code install — so it runs
-under its own [`vitest.integration.config.ts`](/plugins/claudemux/core/vitest.integration.config.ts)
+under its own [`vitest.integration.config.ts`](/plugins/claudemux/vitest.integration.config.ts)
 and its files are named `*.itest.ts`, never discovered by `npm test` or CI.
-[`harness.ts`](/plugins/claudemux/core/test/integration/harness.ts) is the
+[`harness.ts`](/plugins/claudemux/test/integration/harness.ts) is the
 framework: a temp-dispatcher fixture, a `tm` runner, the `~/.claude.json`
 directory-trust seeding a teammate needs to boot past the workspace-trust
 dialog, and a precondition probe that *skips* the suite — rather than failing
@@ -278,7 +280,7 @@ npx vitest run --config vitest.integration.config.ts
 Why trust is seeded by a targeted write rather than an isolated config dir
 is [decision live-teammate-integration-harness](/.agents/decisions/live-teammate-integration-harness.md);
 the run instructions are the suite's own
-[README](/plugins/claudemux/core/test/integration/README.md).
+[README](/plugins/claudemux/test/integration/README.md).
 
 ## See also
 

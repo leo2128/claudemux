@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # pre-commit — commit author email must be a real, well-formed address, not a
 # machine-default identity (git's whoami@hostname guess). The rule lives in
-# bin/check-author and is shared with the CI workflow.
+# scripts/check-author and is shared with the CI workflow.
 #
 # Enable per clone:  git config core.hooksPath .githooks
 
 set -euo pipefail
 
-# Delegate the rule to bin/check-author so this hook and the CI workflow
+# Delegate the rule to scripts/check-author so this hook and the CI workflow
 # share one definition of a valid author email.
 author_email=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
-if ! "$(git rev-parse --show-toplevel)/bin/check-author" "$author_email"; then
+if ! "$(git rev-parse --show-toplevel)/scripts/check-author" "$author_email"; then
   echo "Fix:    git config user.email you@example.com" >&2
   exit 1
 fi

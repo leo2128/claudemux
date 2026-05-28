@@ -2,14 +2,14 @@
 # tm — the dispatcher's CLI: tmux teammate manager, plus task-ledger and
 # context-usage helpers for dispatcher bookkeeping.
 #
-# This launcher runs the TypeScript orchestration core (`../core/src/`)
-# directly through Node 22's experimental type-transform pipeline. There is
-# no build step and no `npm install`: the only runtime npm dependency, `ws`,
-# is vendored under `../core/third_party/ws/` and consumed via the `#ws`
-# subpath in `../core/package.json`'s `imports` map. A small ESM resolve
-# hook (`../core/resolver-register.mjs`) lets the type-stripper accept the
-# tree's extension-less and `.js` import specifiers (the codex-protocol
-# bindings are generator output we do not rewrite).
+# This launcher runs the TypeScript sources under `../src/` directly through
+# Node 22's experimental type-transform pipeline. There is no build step and
+# no `npm install`: the only runtime npm dependency, `ws`, is vendored under
+# `../third_party/ws/` and consumed via the `#ws` subpath in
+# `../package.json`'s `imports` map. A small ESM resolve hook
+# (`../resolver-register.mjs`) lets the type-stripper accept the tree's
+# extension-less and `.js` import specifiers (the codex-protocol bindings
+# are generator output we do not rewrite).
 #
 # Requirements: Node 22.7 or newer (`--experimental-transform-types` ships
 # in 22.7, and the vendored `ws` consumes its CJS lib files via the upstream
@@ -35,9 +35,9 @@ while [[ -L "$SCRIPT" ]]; do
     fi
 done
 HERE="$(cd "$(dirname "$SCRIPT")" && pwd -P)"
-CORE="$HERE/../core"
-ENTRY="$CORE/src/main.ts"
-REGISTER="$CORE/resolver-register.mjs"
+ROOT="$HERE/.."
+ENTRY="$ROOT/src/main.ts"
+REGISTER="$ROOT/resolver-register.mjs"
 
 if ! command -v node >/dev/null 2>&1; then
     echo "tm: node not found on PATH. Install Node 22.7+ (https://nodejs.org/) and try again." >&2
@@ -60,12 +60,12 @@ if [[ "$NODE_MAJOR" -lt 22 ]] || { [[ "$NODE_MAJOR" -eq 22 ]] && [[ "$NODE_MINOR
 fi
 
 if [[ ! -f "$ENTRY" ]]; then
-    echo "tm: orchestration core missing at $ENTRY — expected the plugin's core/ tree alongside this launcher." >&2
+    echo "tm: orchestration entry missing at $ENTRY — expected the plugin's src/ tree alongside this launcher." >&2
     exit 1
 fi
 
 if [[ ! -f "$REGISTER" ]]; then
-    echo "tm: resolver hook missing at $REGISTER — expected alongside the orchestration core." >&2
+    echo "tm: resolver hook missing at $REGISTER — expected at the plugin root." >&2
     exit 1
 fi
 

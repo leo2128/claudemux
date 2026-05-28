@@ -26,16 +26,15 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: plugins/claudemux/pnpm-lock.yaml
 
-      - name: Install claudemux release tooling
-        run: pnpm --dir plugins/claudemux install --frozen-lockfile
+      - name: Install workspace tooling
+        run: pnpm install --frozen-lockfile
 
       - name: Fetch PR base
         run: git fetch origin "${{ github.base_ref }}" --depth=1
 
       - name: Changeset declaration check
-        run: pnpm --dir plugins/claudemux changeset status --since="origin/${{ github.base_ref }}"
+        run: pnpm changeset status --since="origin/${{ github.base_ref }}"
 
   check:
     strategy:
@@ -123,28 +122,30 @@ jobs:
   # is enough coverage.
   feishu-channel:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: plugins/feishu-channel
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
 
       - name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Versions
         run: node --version
 
       - name: Type-check
-        run: npm run typecheck
+        run: pnpm --filter claude-channel-feishu run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: pnpm --filter claude-channel-feishu run test
 
       # A live check against the real Feishu Open Platform: the credentials
       # mint a tenant_access_token and a WSClient opens the long-lived
@@ -153,10 +154,11 @@ jobs:
       # credentials from repository secrets. When the secrets are absent (a
       # fork pull request), the test skips itself rather than failing.
       - name: Live Feishu integration test
+        working-directory: plugins/feishu-channel
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-        run: npx vitest run --config vitest.live.config.ts
+        run: pnpm exec vitest run --config vitest.live.config.ts
 
   # The orchestration core (the `next` line, 1.0.0-beta.0) is a Node/TypeScript
   # project with its own unit suite. Like feishu-channel it runs in a separate

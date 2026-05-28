@@ -33,17 +33,16 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: plugins/claudemux/pnpm-lock.yaml
 
-      - name: Install claudemux release tooling
-        run: pnpm --dir plugins/claudemux install --frozen-lockfile
+      - name: Install workspace tooling
+        run: pnpm install --frozen-lockfile
 
       - name: Require beta release first
         run: |
-          count=$(find plugins/claudemux/.changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l)
+          count=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l)
           if [ "$count" -gt 0 ]; then
             echo "::error::pending claudemux changesets found; ship the beta first via release-next PR before promoting"
-            find plugins/claudemux/.changeset -maxdepth 1 -name '*.md' ! -name 'README.md' -print
+            find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' -print
             exit 1
           fi
 

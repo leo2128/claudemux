@@ -17,7 +17,8 @@
     "core/package.json",
     "core/resolver.mjs",
     "core/resolver-register.mjs",
-    "core/third_party/*"
+    "core/third_party/*",
+    "src/**"
   ],
   "privatePackages": {
     "version": true,

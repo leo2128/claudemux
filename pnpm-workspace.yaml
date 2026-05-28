@@ -1,0 +1,4 @@
+packages:
+  - plugins/claudemux
+  - plugins/feishu-channel
+  - packages/tm

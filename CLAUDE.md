@@ -58,13 +58,17 @@ These rules cover the shared surfaces between `bin/tm`, the hooks, and the host 
 
 This repo ships more than one plugin under `plugins/`. Each plugin has its own manifest (`plugins/<name>/.claude-plugin/plugin.json`) and its own version number — the plugins are versioned independently.
 
-For claudemux, a feature commit does **not** edit the `version` field. It declares the change with an official Changesets fragment:
+For claudemux, a feature commit does **not** edit the `version` field. It declares the change with a Changesets fragment written directly to `.changeset/<slug>.md` at the repo root — do not use the interactive CLI:
 
-```bash
-pnpm --dir plugins/claudemux changeset
+```markdown
+---
+"claudemux": patch
+---
+
+<one-paragraph description>
 ```
 
-Commit the generated `plugins/claudemux/.changeset/*.md` file alongside the change. The level you pick is what that change warrants on its own:
+Commit the fragment alongside the change. The level you pick is what that change warrants on its own:
 
 - `patch` — bug fix, no behavior change visible to users
 - `minor` — new feature, backward-compatible
@@ -72,16 +76,16 @@ Commit the generated `plugins/claudemux/.changeset/*.md` file alongside the chan
 
 The version is bumped only by the release pipeline. Official Changesets consumes pending fragments, updates `plugins/claudemux/package.json`, writes `plugins/claudemux/CHANGELOG.md`, and deletes consumed fragments. The `version-packages` script then mirrors that package version into `plugins/claudemux/.claude-plugin/plugin.json`. Because each feature commit adds a new fragment instead of editing the shared `version` line, parallel feature branches do not collide on versioning. See [decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
 
-For claudemux, release-surface paths are declared in `plugins/claudemux/.changeset/config.json` under `changedFilePatterns`:
+Release-surface paths are declared in `.changeset/config.json` under `changedFilePatterns`:
 
-- `bin/*`, `hooks/*`, `scripts/*`, `templates/*`
-- `skills/*/SKILL.md`
-- `core/src/*`, `core/package.json`
-- `core/resolver.mjs`, `core/resolver-register.mjs`, `core/third_party/*`
+- `bin/*`, `hooks/*`, `scripts/*`, `templates/*` (claudemux)
+- `skills/*/SKILL.md` (claudemux)
+- `core/src/*`, `core/package.json`, `core/resolver.mjs`, `core/resolver-register.mjs`, `core/third_party/*` (claudemux core)
+- `src/**` (feishu-channel — use package name `"claude-channel-feishu"`)
 
-The local pre-commit hook at `.githooks/pre-commit` checks only the commit author email. Changeset enforcement belongs in CI, not in the local hook. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from claudemux release intent.
+The pre-commit hook at `.githooks/pre-commit` checks only the commit author email. The `.husky/pre-push` hook runs `pnpm changeset status --since=origin/next` to catch missing fragments before push. Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
 
-To enable the hook on a fresh clone, run once: `git config core.hooksPath .githooks`.
+To enable all hooks on a fresh clone: `git config core.hooksPath .githooks && pnpm install` (husky installs the pre-push hook via the `prepare` script).
 
 ## Commit Author
 

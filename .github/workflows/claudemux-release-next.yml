@@ -35,10 +35,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: plugins/claudemux/pnpm-lock.yaml
 
-      - name: Install claudemux release tooling
-        run: pnpm --dir plugins/claudemux install --frozen-lockfile
+      - name: Install workspace tooling
+        run: pnpm install --frozen-lockfile
 
       - name: Version and push if changesets exist
         env:
@@ -46,7 +45,6 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_SHA: ${{ github.sha }}
         run: |
-          cd plugins/claudemux
           changed_changesets="$(
             git diff --name-only --diff-filter=A "$PUSH_BEFORE" "$PUSH_SHA" -- '.changeset/*.md' \
               | grep -v '/README.md$' || true
@@ -56,10 +54,10 @@ jobs:
             exit 0
           fi
 
-          node scripts/prepare-prerelease-changesets.mjs $changed_changesets
+          node plugins/claudemux/scripts/prepare-prerelease-changesets.mjs $changed_changesets
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git config user.name 'github-actions[bot]'
-          pnpm version-packages
+          pnpm --dir plugins/claudemux version-packages
           git add -A
           git diff --staged --quiet && echo 'Nothing to commit.' && exit 0
           git commit -m 'chore(release): claudemux beta'

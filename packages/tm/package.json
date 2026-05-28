@@ -1,0 +1,6 @@
+{
+  "name": "@claudemux/tm",
+  "version": "0.0.0",
+  "description": "tm orchestration CLI — stub reserved for future standalone npm package",
+  "private": true
+}

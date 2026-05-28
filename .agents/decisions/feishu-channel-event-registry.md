@@ -1,8 +1,15 @@
 # Feishu channel: event registry and core design choices
 
-- **Status:** In progress (branch `feishu-channel-plugin`, not yet merged to `main`)
+- **Status:** Accepted
 - **Date:** 2026-05-21
 - **Affects:** `plugins/feishu-channel/`
+
+> **Update 2026-05-29:** The plugin shipped and is merged on `next`. The event
+> registry, `chat_id` routing, and the `ShutdownCoordinator` below are the live
+> design. Two details below are original-snapshot only: the suite runs on
+> **`vitest`** (not `bun test`), and `configure` ships as a slash command while
+> `access` is the skill. Current shape:
+> [components/feishu-channel.md](/.agents/components/feishu-channel.md).
 
 ## Context
 

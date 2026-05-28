@@ -92,9 +92,10 @@ so it unit-tests without a running server or connection.
   plugin installs its own dependencies — including its `tsx` TypeScript runner
   — on first channel launch, through the `start` script `.mcp.json` invokes.
 - The plugin has its **own** `version` in its own `plugin.json`, bumped
-  independently of claudemux. The claudemux Changesets migration does not
-  define feishu-channel release automation; confirm the current release path
-  before changing that plugin's version. See
+  independently of claudemux. Release intent is declared with a Changesets
+  fragment under the package name `claude-channel-feishu` (release surface
+  `src/**` in [`.changeset/config.json`](/.changeset/config.json)); the same
+  release pipeline aggregates it. See
   [components/repo-tooling.md](/.agents/components/repo-tooling.md).
 - `drive.notice.comment_add_v1` is decoded through the Feishu SDK's own
   `normalizeComment` — the authoritative payload reference — and the handler

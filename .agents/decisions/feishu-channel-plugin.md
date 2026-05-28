@@ -1,8 +1,16 @@
 # Feishu channel as a separate TypeScript+Bun plugin
 
-- **Status:** In progress (branch `feishu-channel-plugin`, not yet merged to `main`)
+- **Status:** Accepted
 - **Date:** 2026-05
 - **Affects:** repo layout, `marketplace.json`, the new `plugins/feishu-channel/`
+
+> **Update 2026-05-29:** The plugin shipped and is merged on `next`
+> (`feishu-channel` v0.13.0). It runs on **Node via `tsx`** (not Bun) and its
+> tests run on **`vitest`** (not `bun:test`); CI covers it through the
+> `feishu-channel` and `claudemux-changeset-status` jobs. The Context and
+> Decision below are the original snapshot — the "separate plugin in the same
+> repo" call still holds; the runtime and test-tool details have moved on.
+> Current shape: [components/feishu-channel.md](/.agents/components/feishu-channel.md).
 
 ## Context
 

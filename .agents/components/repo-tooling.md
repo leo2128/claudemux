@@ -18,7 +18,6 @@ workflow.
 | [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — delegates to `.githooks/pre-commit` |
 | [`/.husky/pre-push`](/.husky/pre-push) | Husky hook — runs `pnpm changeset status --since=origin/next` before push |
 | [`/.github/workflows/ci.yml`](/.github/workflows/ci.yml) | CI — shellcheck + bats on an Ubuntu/macOS matrix |
-| [`/tests/`](/tests) | bats tests — `cli/` covers repo tooling and hook regressions; TypeScript core conformance lives under `plugins/claudemux/test/` |
 
 ## Versioning — official Changesets
 
@@ -104,7 +103,7 @@ jobs:
   `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
   install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on `tm`, the hooks,
   the scripts, `scripts/check-author`, and `.githooks/pre-commit` →
-  `bats tests/cli/` (repo-tooling and hook regression tests).
+  `bats plugins/claudemux/test/cli/` (release-tooling and hook regression tests).
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`

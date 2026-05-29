@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
 #
 # Regression tests for hooks/on-stop.sh last-turn extraction. The CI bats lane
-# runs tests/cli/, so this hook coverage lives beside the repo-tooling tests.
+# runs the plugin's test/cli/, alongside the release-tooling regression test.
 
 setup() {
   load "$BATS_TEST_DIRNAME/../test_helper.bash"
-  HOOK="$TESTS_REPO_ROOT/plugins/claudemux/hooks/on-stop.sh"
+  HOOK="$PLUGIN_ROOT/hooks/on-stop.sh"
   WORK="$(mktemp -d)"
 }
 

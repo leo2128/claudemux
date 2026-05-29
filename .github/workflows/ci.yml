@@ -113,8 +113,8 @@ jobs:
         run: bash plugins/claudemux/scripts/test-setup.sh
 
       - name: bats — release tooling
-        if: hashFiles('tests/cli/*.bats') != ''
-        run: bats tests/cli/
+        if: hashFiles('plugins/claudemux/test/cli/*.bats') != ''
+        run: bats plugins/claudemux/test/cli/
 
   # The feishu-channel plugin is a Node/TypeScript project with its own unit
   # suite. It runs in a separate job so its toolchain stays off the bats +

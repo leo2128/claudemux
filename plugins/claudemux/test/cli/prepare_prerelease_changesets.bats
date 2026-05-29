@@ -2,7 +2,7 @@
 
 setup() {
   load "$BATS_TEST_DIRNAME/../test_helper.bash"
-  SCRIPT="$TESTS_REPO_ROOT/plugins/claudemux/scripts/prepare-prerelease-changesets.mjs"
+  SCRIPT="$PLUGIN_ROOT/scripts/prepare-prerelease-changesets.mjs"
   WORK="$(mktemp -d)"
   mkdir -p "$WORK/.changeset"
 }

@@ -1,5 +1,10 @@
 # Architecture draft: multi-engine TUI core
 
+> **Status — Archived input draft.** One of the two parallel drafts cross-read
+> into [decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md),
+> which is the authoritative converged record. Kept for provenance; not
+> maintained, and superseded by that decision wherever the two differ.
+
 This draft intentionally diverges from one part of decision codex-engine-flag: engine
 identity should not be inferred from "which backing registry happens to
 exist". The stable identity record is an explicit

@@ -63,7 +63,7 @@ phase per fire — `cat` it when investigating a misbehaving turn.
 
 Sid rotation only happens when **both** gates pass:
 
-1. **Env identity gate** — `CLAUDEMUX_TEAMMATE_REPO` must be set. Only
+1. **Env identity gate** — `CLAUDEMUX_TEAMMATE_NAME` must be set. Only
    `tm spawn` launches a tmux session with that env (`tmux new-session -e`),
    and it survives `/clear` / `/resume`. This is what stops the dispatcher
    (whose cwd may byte-equal a sibling repo) from hijacking a teammate's

@@ -1,5 +1,10 @@
 # Multi-engine `tm` architecture (claude-side draft)
 
+> **Status — Archived input draft.** One of the two parallel drafts cross-read
+> into [decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md),
+> which is the authoritative converged record. Kept for provenance; not
+> maintained, and superseded by that decision wherever the two differ.
+
 A target shape for `claudemux/plugins/claudemux/` once `tm` is no
 longer a single monoblob. This draft answers the user's brief: where
 the seams should live, what the directory tree should look like to its

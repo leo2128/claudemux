@@ -85,7 +85,7 @@ protocol. Each has its own decision record — see
   `TM_DISPATCHER_DIR` into the dispatcher's `.claude/settings.json` so it
   survives Bash-tool cwd drift. `tm doctor` reports the resolved value.
 - Spawned teammates are launched with `tmux new-session -e
-  CLAUDEMUX_TEAMMATE_REPO=<repo>`; the SessionStart hook uses that env var
+  CLAUDEMUX_TEAMMATE_NAME=<name>`; the SessionStart hook uses that env var
   as an identity gate. A teammate started by raw `tmux` without that `-e`
   will not get sid rotation.
 - The help pre-scan in `cli.ts` stops at the first non-flag positional or

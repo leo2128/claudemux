@@ -98,16 +98,22 @@ To stop machine-default identities at the root, set once per machine:
 
 ## CI
 
-`ci.yml` runs on every push to `main` and every pull request. It has two
+`ci.yml` runs on every push to `main` and every pull request. It has four
 jobs:
 
-- **`check`** — the claudemux plugin, on an `ubuntu-latest` +
-  `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
-  install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on `tm`, the hooks,
-  the scripts, `scripts/check-author`, and the husky hooks →
-  `bats plugins/claudemux/test/cli/` (release-tooling and hook regression tests).
-  The matrix is what makes the cross-platform invariant enforceable rather
-  than aspirational.
+- **`claudemux-changeset-status`** (pull requests only) — installs the pnpm
+  workspace, fetches the PR base, and runs
+  `pnpm changeset status --since=origin/<base>` so a feature-class change that
+  ships without a changeset fragment fails in CI rather than after merge. It
+  skips itself on the release branches.
+- **`check`** — the Bash surface of the claudemux plugin, on an
+  `ubuntu-latest` + `macos-latest` matrix (`fail-fast: false`). Steps: commit
+  author check → install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on
+  `tm`, the hooks, the scripts, `scripts/check-author`, and the husky hooks →
+  the `.agents/` KB structural check (`.agents/scripts/check.sh`) → a
+  `setup.sh` conformance check → `bats plugins/claudemux/test/cli/`
+  (release-tooling and hook regression tests). The matrix is what makes the
+  cross-platform invariant enforceable rather than aspirational.
 - **`feishu-channel`** — the `feishu-channel` plugin, on `ubuntu-latest`
   only. It installs pnpm at the workspace root and runs typecheck and tests
   via `pnpm --filter claude-channel-feishu run typecheck` /
@@ -116,9 +122,12 @@ jobs:
   off the bats lane. A final step runs `test/feishu-live.ts` against the real
   Feishu platform, using the `FEISHU_APP_ID` / `FEISHU_APP_SECRET` repository
   secrets; that test skips itself when the secrets are absent.
-
-The `feishu-channel` job covers a plugin that is still on a branch — see
-[components/feishu-channel.md](/.agents/components/feishu-channel.md).
+- **`claudemux-core`** — the TypeScript orchestration core, on an
+  `ubuntu-latest` + `macos-latest` matrix across two Node 22 versions. It
+  typechecks, runs a dead-code lint, asserts the vendored Codex protocol
+  bindings are not stale, runs the unit + conformance suite, and smoke-tests
+  that the `tm` launcher boots with no runtime `node_modules/`. Details are in
+  [components/claudemux-core.md](/.agents/components/claudemux-core.md).
 
 ## See also
 

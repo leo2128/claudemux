@@ -1,5 +1,10 @@
 # Phase 1 — Bug audit for the 0.8.1+unreleased local install
 
+> **Status — Resolved snapshot.** A point-in-time bug audit at HEAD `dcc1636`.
+> Its findings drove [decision codex-engine-flag](/.agents/decisions/codex-engine-flag.md)
+> and [decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md);
+> the issues listed here are addressed. Kept for provenance; not maintained.
+
 Snapshot of what's broken (or just *looks* broken) at HEAD `dcc1636` on
 `next`. Each entry is **observation → evidence → root cause → proposed
 fix**, ordered by the priority the user named:

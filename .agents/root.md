@@ -53,9 +53,9 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | Path | What it is |
 |---|---|
 | `plugins/claudemux/` | The claudemux plugin: `bin/tm`, `hooks/`, `skills/`, `templates/`, `commands/`, `test/` |
-| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript + Node/pnpm). **WIP**, currently on branch `feishu-channel-plugin` |
-| `bin/` | Repo-level dev tooling — `check-author`, `tm` test runners |
-| `.github/workflows/ci.yml` | CI — shellcheck + bats for claudemux, plus a pnpm job for feishu-channel |
+| `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript on Node), shipped independently from this repo |
+| `scripts/` | Repo-level governance scripts — `check-author` (the author-email rule, shared with CI) |
+| `.github/workflows/ci.yml` | CI — shellcheck + bats for the Bash surface, plus pnpm/Node jobs for the TypeScript core and feishu-channel |
 | `.claude-plugin/marketplace.json` | Marketplace manifest listing the plugins |
 | `.agents/` | This knowledge base |
 
@@ -69,7 +69,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | The hook scripts — BUSY/idle signal, sid rotation | [components/hooks.md](/.agents/components/hooks.md) |
 | The `dispatcher` skill, its references, the dispatcher template, `/claudemux:setup` | [components/dispatcher-skill.md](/.agents/components/dispatcher-skill.md) |
 | The `optimize` skill — periodic dispatcher self-review | [components/optimize-skill.md](/.agents/components/optimize-skill.md) |
-| The `feishu-channel` plugin (WIP) | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
+| The `feishu-channel` plugin | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
 | The orchestration core that replaces `tm` on the `next` branch — modules, the teammate registry, the resident subscription | [components/claudemux-core.md](/.agents/components/claudemux-core.md) |
 | Repo tooling — versioning, lint, CI, tests | [components/repo-tooling.md](/.agents/components/repo-tooling.md) |
 

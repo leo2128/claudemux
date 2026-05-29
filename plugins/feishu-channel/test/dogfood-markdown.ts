@@ -11,7 +11,7 @@
  * be run manually after a change to the outbound payload.
  *
  * Usage:
- *   tsx scripts/dogfood-markdown.ts <chat_id>
+ *   tsx test/dogfood-markdown.ts <chat_id>
  *
  *   chat_id — the conversation to post into; for a p2p chat with the operator,
  *   reuse the chat_id from any inbound `im.message.receive_v1` event the
@@ -30,7 +30,7 @@ import {
 
 const chatId: string | undefined = process.argv[2]
 if (!chatId) {
-  console.error('usage: tsx scripts/dogfood-markdown.ts <chat_id>')
+  console.error('usage: tsx test/dogfood-markdown.ts <chat_id>')
   process.exit(2)
 }
 const targetChatId: string = chatId

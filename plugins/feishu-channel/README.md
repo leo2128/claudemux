@@ -209,6 +209,16 @@ FEISHU_APP_ID=... FEISHU_APP_SECRET=... npx vitest run ./test/feishu-live.ts
 CI runs it on every commit using repository secrets. With no credentials it
 skips itself.
 
+`test/dogfood-markdown.ts` is a manual tool, not part of `npm test` or CI. It
+drives the production `reply` / `edit_message` path through `handleTool` and
+posts to a real chat, so a human can confirm the card renders correctly in the
+Feishu client — the one thing the unit suite cannot assert. Run it after
+changing the outbound payload:
+
+```bash
+tsx test/dogfood-markdown.ts <chat_id>
+```
+
 ## License
 
 MIT

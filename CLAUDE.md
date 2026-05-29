@@ -80,7 +80,7 @@ Release-surface paths are declared in `.changeset/config.json` under `changedFil
 
 - `bin/*`, `hooks/*`, `scripts/*`, `templates/*` (claudemux)
 - `skills/*/SKILL.md` (claudemux)
-- `src/**`, `third_party/**`, `resolver.mjs`, `resolver-register.mjs`, `package.json` (claudemux core)
+- `src/**`, `third_party/**`, `resolver.mjs`, `resolver-register.mjs`, `package.json` (claudemux)
 - `src/**` (feishu-channel — use package name `"claude-channel-feishu"`)
 
 Two local hooks run via Husky (installed by `pnpm install`):

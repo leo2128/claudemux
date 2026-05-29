@@ -14,8 +14,7 @@ workflow.
 | [`/.changeset/config.json`](/.changeset/config.json) | Changesets config: `next` base branch, private package versioning, release-surface globs for claudemux and feishu-channel |
 | [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Claudemux package manifest — `version-packages` and `version-ga` release scripts |
 | [`/plugins/claudemux/scripts/sync-plugin-version.mjs`](/plugins/claudemux/scripts/sync-plugin-version.mjs) | Mirror `package.json.version` into `.claude-plugin/plugin.json.version` after Changesets versions packages |
-| [`/.githooks/pre-commit`](/.githooks/pre-commit) | Author-email check (source of truth); called by `.husky/pre-commit` |
-| [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — delegates to `.githooks/pre-commit` |
+| [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — checks the commit author email via `scripts/check-author` |
 | [`/.husky/pre-push`](/.husky/pre-push) | Husky hook — runs `pnpm changeset status --since=origin/next` before push |
 | [`/.github/workflows/ci.yml`](/.github/workflows/ci.yml) | CI — changeset-status gate (PRs into `next`) + shellcheck/bats/TypeScript jobs on an Ubuntu/macOS matrix |
 | [`/.github/workflows/claudemux-release-next.yml`](/.github/workflows/claudemux-release-next.yml) | On push to `next`: `changeset version` (beta) + sync, commit, direct push back to `next` |
@@ -75,8 +74,8 @@ need a changeset.
 The repo uses Husky (`/.husky/`) for local git hooks, installed automatically
 when `pnpm install` runs the `prepare` script. Two hooks are active:
 
-- **`.husky/pre-commit`** — delegates to [`.githooks/pre-commit`](/.githooks/pre-commit),
-  which runs `scripts/check-author` to validate the commit author email.
+- **`.husky/pre-commit`** — runs `scripts/check-author` to validate the commit
+  author email.
 - **`.husky/pre-push`** — runs `pnpm changeset status --since=origin/next` to
   catch missing changeset fragments before a push lands in CI.
 
@@ -105,7 +104,7 @@ jobs:
 - **`check`** — the claudemux plugin, on an `ubuntu-latest` +
   `macos-latest` matrix (`fail-fast: false`). Steps: commit author check →
   install `tmux`/`bats`/`shellcheck`/`jq` → `shellcheck` on `tm`, the hooks,
-  the scripts, `scripts/check-author`, and `.githooks/pre-commit` →
+  the scripts, `scripts/check-author`, and the husky hooks →
   `bats plugins/claudemux/test/cli/` (release-tooling and hook regression tests).
   The matrix is what makes the cross-platform invariant enforceable rather
   than aspirational.

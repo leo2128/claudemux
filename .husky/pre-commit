@@ -1,2 +1,8 @@
-# Delegate the commit author check to .githooks/pre-commit (same rule as CI).
-.githooks/pre-commit
+# shellcheck shell=sh
+# Commit author email must be a real, well-formed address — the same rule the
+# CI workflow enforces. scripts/check-author is the single source of truth.
+author_email=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
+if ! "$(git rev-parse --show-toplevel)/scripts/check-author" "$author_email"; then
+  echo "Fix:    git config user.email you@example.com" >&2
+  exit 1
+fi

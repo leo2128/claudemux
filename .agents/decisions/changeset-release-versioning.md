@@ -5,7 +5,7 @@
 - **Amended:** 2026-05-29
 - **Affects:** repo tooling — `/.changeset/`,
   `plugins/claudemux/package.json`, `.github/workflows/ci.yml`,
-  `.githooks/pre-commit`, `CLAUDE.md`
+  `.husky/pre-commit`, `CLAUDE.md`
 
 ## Context
 

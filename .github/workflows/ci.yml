@@ -93,7 +93,8 @@ jobs:
             plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
             scripts/check-author \
-            .githooks/pre-commit \
+            .husky/pre-commit \
+            .husky/pre-push \
             .agents/scripts/check.sh
 
       - name: agents — KB structural check

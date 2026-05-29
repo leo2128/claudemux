@@ -2,7 +2,7 @@
 # check-author — validate one git author email.
 #
 # Single source of truth for the author-identity rule. Two callers share it:
-#   - .githooks/pre-commit       checks the identity the next commit would use.
+#   - .husky/pre-commit          checks the identity the next commit would use.
 #   - .github/workflows/ci.yml   checks every commit a push or PR introduces.
 #
 # Usage:  scripts/check-author <email>

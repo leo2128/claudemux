@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Unset git push-injected env vars so changesets' internal `git` calls
 # resolve to the worktree root rather than the pushed branch's GIT_DIR.
 # Without this, `changeset status` runs from the worktree's gitdir, fails

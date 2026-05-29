@@ -85,7 +85,7 @@ Release-surface paths are declared in `.changeset/config.json` under `changedFil
 
 Two local hooks run via Husky (installed by `pnpm install`):
 
-- `.husky/pre-commit` — delegates to `.githooks/pre-commit`, which checks the commit author email via `scripts/check-author`.
+- `.husky/pre-commit` — checks the commit author email via `scripts/check-author`.
 - `.husky/pre-push` — runs `pnpm changeset status --since=origin/next` to catch missing changeset fragments before push.
 
 Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
@@ -96,6 +96,6 @@ To enable all hooks on a fresh clone: `pnpm install` (the `prepare` script sets 
 
 Commit author email must be a real, well-formed address — not a machine-default identity (git's `whoami@hostname` guess, e.g. `dyzhu@MacBook.local`, which git fabricates when `user.email` is unset). Any valid public email passes; there is no per-person whitelist.
 
-The rule lives in `scripts/check-author` — one source of truth, called from two places: `.githooks/pre-commit` (invoked via `.husky/pre-commit`) checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`).
+The rule lives in `scripts/check-author` — one source of truth, called from two places: the `.husky/pre-commit` hook checks the identity the next commit would use, and the CI workflow checks every commit a push or PR introduces. It rejects an unparseable email or an mDNS/LAN suffix (`.local`, `.localdomain`, `.lan`, `.home`, `.internal`).
 
 To stop machine-default identities at the root, set once per machine: `git config --global user.useConfigOnly true` — git then refuses to commit until `user.email` is explicitly configured, instead of silently guessing.

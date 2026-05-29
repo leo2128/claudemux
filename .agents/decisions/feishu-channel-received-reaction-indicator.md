@@ -32,11 +32,15 @@ receipt, before the gate — would acknowledge messages the channel then drops
 (unpaired senders, gated-out groups), telling a sender their message landed
 when it did not.
 
-### Emoji — `GLANCE`
+### Emoji — a random pick from a "seen, on it" pool
 
-`GLANCE` is Feishu's 👀 emoji. It reads as "seen, being looked at", which is
-exactly the signal the sender wants. It is one fixed constant
-(`RECEIVED_REACTION_EMOJI` in `src/server.ts`).
+One emoji is chosen at random per message from a fixed pool so the
+acknowledgement feels alive rather than canned. Every option reads as "seen,
+being worked on", which is the signal the sender wants: `GLANCE` (👀 看),
+`LGTM` (了解), `Typing` (敲键盘), `GoGoGo` (冲), `OnIt` (在做了). The pool is
+`RECEIVED_REACTION_EMOJIS` in `src/server.ts`; `pickReceivedReactionEmoji()`
+selects one. Removal is keyed by the returned `reaction_id`, so clearing works
+regardless of which emoji was placed.
 
 ### The message_id → reaction_id map is in-memory
 

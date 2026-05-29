@@ -39,14 +39,31 @@ const SERVER_VERSION = '0.1.0'
 const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel'
 
 /**
- * The emoji the channel reacts with to mark an inbound chat message as
- * received into the Claude session. `GLANCE` is Feishu's 👀 emoji — it reads
- * as "seen, being looked at", which is exactly the signal the sender wants:
- * their message landed and Claude is on it. The channel adds this reaction
- * once a message reaches the session and removes it once Claude replies into
- * that chat.
+ * The emojis the channel reacts with to mark an inbound chat message as
+ * received into the Claude session. One is chosen at random per message so the
+ * acknowledgement feels alive rather than canned; every option reads as "seen,
+ * on it", which is the signal the sender wants — their message landed and
+ * Claude is working it:
+ *
+ * - `GLANCE`  — 👀 看
+ * - `LGTM`    — 了解
+ * - `Typing`  — 敲键盘
+ * - `GoGoGo`  — 冲
+ * - `OnIt`    — 在做了
+ *
+ * The channel adds one once a message reaches the session and removes it once
+ * Claude replies into that chat. Removal is keyed by the reaction_id Feishu
+ * returns, so it works regardless of which emoji was picked.
  */
-export const RECEIVED_REACTION_EMOJI = 'GLANCE'
+export const RECEIVED_REACTION_EMOJIS = ['GLANCE', 'LGTM', 'Typing', 'GoGoGo', 'OnIt'] as const
+
+/**
+ * Pick a received-indicator emoji at random from {@link RECEIVED_REACTION_EMOJIS}.
+ */
+export function pickReceivedReactionEmoji(): string {
+  const index = Math.floor(Math.random() * RECEIVED_REACTION_EMOJIS.length)
+  return RECEIVED_REACTION_EMOJIS[index] ?? RECEIVED_REACTION_EMOJIS[0]
+}
 
 /** Pushes one inbound event to the Claude session. */
 export type ChannelNotifier = (
@@ -259,7 +276,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     const chatId = meta.chat_id
     if (!messageId || !chatId) return
     try {
-      const reactionId = await deps.transport.addReaction(messageId, RECEIVED_REACTION_EMOJI)
+      const reactionId = await deps.transport.addReaction(messageId, pickReceivedReactionEmoji())
       if (!reactionId) {
         logError(
           `Feishu returned no reaction_id for the received reaction on message ` +

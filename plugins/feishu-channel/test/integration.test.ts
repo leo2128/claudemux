@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
-import { channelNotification, createChannelCore, RECEIVED_REACTION_EMOJI } from '../src/server'
+import { channelNotification, createChannelCore, RECEIVED_REACTION_EMOJIS } from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
 
@@ -164,9 +164,10 @@ describe('integration — received-reaction indicator', () => {
     // marked as received.
     await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
     expect(server.notifications).toHaveLength(1)
-    expect(transport.reactions).toEqual([
-      { messageId: 'om_msg', emoji: RECEIVED_REACTION_EMOJI },
-    ])
+    expect(transport.reactions).toHaveLength(1)
+    const reaction = transport.reactions[0]!
+    expect(reaction.messageId).toBe('om_msg')
+    expect(RECEIVED_REACTION_EMOJIS as readonly string[]).toContain(reaction.emoji)
 
     // Reply: answering the chat takes the indicator off the message.
     await core.handleTool('reply', { chat_id: 'oc_chat', text: 'answer' })

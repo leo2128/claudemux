@@ -9,7 +9,7 @@ import {
   createChannelCore,
   loadCredentials,
   readEnvFile,
-  RECEIVED_REACTION_EMOJI,
+  RECEIVED_REACTION_EMOJIS,
 } from '../src/server'
 import type { Access } from '../src/types'
 import { FakeTransport } from './support/fake-transport'
@@ -256,9 +256,10 @@ describe('received-reaction indicator', () => {
 
     await core.handleEvent(IM_MESSAGE_EVENT_TYPE, rawImEvent())
 
-    expect(transport.reactions).toEqual([
-      { messageId: 'om_msg', emoji: RECEIVED_REACTION_EMOJI },
-    ])
+    expect(transport.reactions).toHaveLength(1)
+    const reaction = transport.reactions[0]!
+    expect(reaction.messageId).toBe('om_msg')
+    expect(RECEIVED_REACTION_EMOJIS as readonly string[]).toContain(reaction.emoji)
   })
 
   test('a reply clears the received reaction for that chat', async () => {

@@ -25,7 +25,7 @@ One handler module under `src/handlers/` plus one `register(...)` line in `creat
 - **`.mcp.json` clears `HTTP_PROXY` / `HTTPS_PROXY` (upper and lower case).** The channel talks to Feishu directly, not through the session proxy; the empty `env` values are load-bearing — `test/mcp-config.test.ts` fails if they are dropped. → `.agents/decisions/feishu-channel-launch-without-session-proxy.md`.
 - **Replies route by `chat_id`, never `message_id`.** A `message_id` echoed back from some other context cannot redirect a reply into an unrelated chat.
 - **Group access is the `access.json` `groupPolicy` switch:** `block` / `allowlist` (each group authorized by pairing) / `follow-user`. → `.agents/decisions/feishu-channel-group-policy-modes.md`.
-- **An inbound chat message gets a 👀 reaction on arrival, cleared on reply.** The `message_id → reaction_id` map lives in memory in `createChannelCore`, not on disk.
+- **An inbound chat message gets a "received" reaction on arrival, cleared on reply.** The emoji is a random pick from `RECEIVED_REACTION_EMOJIS` (👀 `GLANCE`, `LGTM`, `Typing`, `GoGoGo`, `OnIt`) via `pickReceivedReactionEmoji`. The `message_id → reaction_id` map lives in memory in `createChannelCore`, not on disk; removal keys off the returned `reaction_id`, so it is emoji-agnostic.
 
 ## Requirements / boundaries
 

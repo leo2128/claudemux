@@ -4,8 +4,8 @@
 - **Date:** 2026-05
 - **Affects:** repo layout, `marketplace.json`, the new `plugins/feishu-channel/`
 
-> **Update 2026-05-29:** The plugin shipped and is merged on `next`
-> (`feishu-channel` v0.13.0). It runs on **Node via `tsx`** (not Bun) and its
+> **Update 2026-05-29:** The plugin shipped and is merged on `next`. It runs
+> on **Node via `tsx`** (not Bun) and its
 > tests run on **`vitest`** (not `bun:test`); CI covers it through the
 > `feishu-channel` and `claudemux-changeset-status` jobs. The Context and
 > Decision below are the original snapshot — the "separate plugin in the same

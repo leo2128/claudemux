@@ -23,7 +23,7 @@ never collide on a sequence number.
 | [feishu-channel-group-policy-modes](/.agents/decisions/feishu-channel-group-policy-modes.md) | Feishu group access is a three-mode `groupPolicy` switch — block / allowlist (decision feishu-channel-group-pairing) / follow-user | Accepted |
 | [feishu-channel-launch-without-session-proxy](/.agents/decisions/feishu-channel-launch-without-session-proxy.md) | The Feishu channel's MCP server is launched with the session HTTP proxy cleared | Accepted |
 | [feishu-channel-orphan-detection-by-stdin-eof](/.agents/decisions/feishu-channel-orphan-detection-by-stdin-eof.md) | The Feishu channel detects an exited parent by stdin EOF, not by polling `process.ppid` | Accepted |
-| [feishu-channel-plugin](/.agents/decisions/feishu-channel-plugin.md) | A Feishu channel ships as a separate TypeScript+Bun plugin from this repo | Accepted |
+| [feishu-channel-plugin](/.agents/decisions/feishu-channel-plugin.md) | A Feishu channel ships as a separate TypeScript plugin from this repo | Accepted |
 | [feishu-channel-received-reaction-indicator](/.agents/decisions/feishu-channel-received-reaction-indicator.md) | The Feishu channel marks an inbound chat message with a reaction when it reaches the session, and clears it on reply | Accepted |
 | [feishu-doc-comment-enrichment](/.agents/decisions/feishu-doc-comment-enrichment.md) | The Feishu doc-comment handler decodes via the SDK and enriches the event with fetched text and title | Accepted |
 | [feishu-doc-comment-fetch-via-batch-query](/.agents/decisions/feishu-doc-comment-fetch-via-batch-query.md) | Feishu doc-comment text is fetched with `fileComment.batchQuery`, since `get` does not serve local-selection comments | Accepted |

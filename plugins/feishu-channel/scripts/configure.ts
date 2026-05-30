@@ -18,9 +18,9 @@
 import { chmodSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { GROUP_POLICIES, loadAccess, saveAccess } from '../src/access-store'
-import { isRecord } from '../src/json'
+import { isRecord } from '@excitedjs/feishu-transport'
 import { accessFile, envFile, stateDir } from '../src/paths'
-import type { GroupPolicy } from '../src/types'
+import type { GroupPolicy } from '@excitedjs/feishu-transport'
 
 /** Feishu's open-platform base URL — the default for a mainland self-built app. */
 export const DEFAULT_FEISHU_BASE = 'https://open.feishu.cn'

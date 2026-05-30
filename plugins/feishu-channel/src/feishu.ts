@@ -30,7 +30,7 @@ import {
   acquireInstanceLockWithEviction,
   releaseInstanceLock,
 } from './instance-lock'
-import { cardToContent, renderMarkdownToCards, type RenderedCard } from './render'
+import { cardToContent, renderMarkdownToCards, type RenderedCard } from '@excitedjs/feishu-transport'
 
 /** Cap on a single WebSocket handshake before it is aborted into a retry. */
 const WS_HANDSHAKE_TIMEOUT_MS = 15_000

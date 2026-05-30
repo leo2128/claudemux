@@ -9,7 +9,7 @@ import {
   renderMarkdownToCards,
   splitMarkdownByBytes,
   type RenderedCard,
-} from '../src/render'
+} from '@excitedjs/feishu-transport'
 
 /**
  * Convenience helper — render `md` and require it to fit one card, since

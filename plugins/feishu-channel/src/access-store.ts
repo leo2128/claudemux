@@ -10,7 +10,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Access, DmPolicy, GroupEntry, GroupPolicy, PendingEntry } from './types'
+import type { Access, DmPolicy, GroupEntry, GroupPolicy, PendingEntry } from '@excitedjs/feishu-transport'
 
 const DM_POLICIES: readonly DmPolicy[] = ['pairing', 'allowlist', 'disabled']
 

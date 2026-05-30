@@ -27,8 +27,8 @@ import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu
 import { createFeishuTransport } from './feishu'
 import { createDocCommentHandler } from './handlers/doc-comment'
 import { createImMessageHandler } from './handlers/im-message'
-import { asString, isRecord } from './json'
-import { generatePairingCode } from './pairing'
+import { asString, isRecord } from '@excitedjs/feishu-transport'
+import { generatePairingCode } from '@excitedjs/feishu-transport'
 import { accessFile, envFile, lockFile, stateDir } from './paths'
 import { ShutdownCoordinator } from './shutdown'
 

@@ -11,7 +11,7 @@ import {
   readEnvFile,
   RECEIVED_REACTION_EMOJIS,
 } from '../src/server'
-import type { Access } from '../src/types'
+import type { Access } from '@excitedjs/feishu-transport'
 import { FakeTransport } from './support/fake-transport'
 
 const NOW = 1_700_000_000_000

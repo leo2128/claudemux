@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { applyMentions, extractPostText, parseInbound } from '../src/content'
-import type { InboundMessage } from '../src/content'
-import type { Mention } from '../src/types'
+import { applyMentions, extractPostText, parseInbound } from '@excitedjs/feishu-transport'
+import type { InboundMessage } from '@excitedjs/feishu-transport'
+import type { Mention } from '@excitedjs/feishu-transport'
 
 function message(type: string, content: unknown, mentions?: Mention[]): InboundMessage {
   return { message_type: type, content: JSON.stringify(content), mentions }

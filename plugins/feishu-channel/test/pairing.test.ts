@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import fc from 'fast-check'
-import { generatePairingCode, PAIRING_CODE_LENGTH } from '../src/pairing'
+import { generatePairingCode, PAIRING_CODE_LENGTH } from '@excitedjs/feishu-transport'
 
 describe('pairing', () => {
   test('generated codes have the expected length', () => {

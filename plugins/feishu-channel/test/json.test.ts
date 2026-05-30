@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { asString, isRecord } from '../src/json'
+import { asString, isRecord } from '@excitedjs/feishu-transport'
 
 describe('isRecord', () => {
   test('accepts plain objects and arrays', () => {

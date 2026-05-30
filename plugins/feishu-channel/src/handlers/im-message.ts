@@ -11,11 +11,11 @@
 
 import { gate, isBotSenderType, isGroupAuthorized } from '../access'
 import { loadAccess, saveAccess } from '../access-store'
-import { parseInbound } from '../content'
+import { parseInbound } from '@excitedjs/feishu-transport'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
-import { asString, isRecord } from '../json'
+import { asString, isRecord } from '@excitedjs/feishu-transport'
 import { listObservedBots, recordObservedBots } from '../observed-bots-store'
-import type { Mention } from '../types'
+import type { Mention } from '@excitedjs/feishu-transport'
 
 /** The Feishu event_type this handler subscribes to. */
 export const IM_MESSAGE_EVENT_TYPE = 'im.message.receive_v1'

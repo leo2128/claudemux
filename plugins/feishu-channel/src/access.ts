@@ -9,7 +9,7 @@
  * is true. That makes every branch here exhaustively unit-testable.
  */
 
-import type { Access, Mention, PendingEntry } from './types'
+import type { Access, Mention, PendingEntry } from '@excitedjs/feishu-transport'
 
 /** Cap on simultaneously-pending pairing requests — direct and group share it. */
 export const MAX_PENDING = 10

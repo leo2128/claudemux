@@ -10,7 +10,7 @@ import type {
   FeishuSendResult,
   FeishuTransport,
 } from '../../src/feishu'
-import { renderMarkdownToCards } from '../../src/render'
+import { renderMarkdownToCards } from '@excitedjs/feishu-transport'
 
 export class FakeTransport implements FeishuTransport {
   readonly appId: string

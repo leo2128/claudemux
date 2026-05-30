@@ -23,7 +23,7 @@ import * as lark from '@larksuiteoapi/node-sdk'
 
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
 import type { FeishuDocComment, FeishuDocCommentReply, FeishuDocMeta } from '../feishu'
-import { asString, isRecord } from '../json'
+import { asString, isRecord } from '@excitedjs/feishu-transport'
 
 /** The Feishu event_type this handler subscribes to. */
 export const DOC_COMMENT_EVENT_TYPE = 'drive.notice.comment_add_v1'
